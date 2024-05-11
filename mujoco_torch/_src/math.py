@@ -13,15 +13,37 @@
 # limitations under the License.
 # ==============================================================================
 """Some useful math functions."""
-
+import functools
 from typing import Optional, Tuple, Union
 
-# from torch import numpy as torch
 import torch
+from torch._functorch import vmap as vmap_module
+def matmul_unroll(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+  """Calculates a @ b via explicit cell value operations.
+
+  This is faster than XLA matmul for small matrices (e.g. 3x3, 4x4).
+
+  Args:
+    a: left hand of matmul operand
+    b: right hand of matmul operand
+  Returns:
+    the matrix product of the inputs.
+  """
+  c = []
+  for i in range(a.shape[0]):
+    row = []
+    for j in range(b.shape[1]):
+      s = 0.0
+      for k in range(a.shape[1]):
+        s += a[i, k] * b[k, j]
+      row.append(s)
+    c.append(row)
+
+  return torch.tensor(c)
 
 
 def norm(
-    x: torch.Tensor, axis: Optional[Union[Tuple[int, ...], int]] = None
+    x: torch.Tensor, dim: Optional[Union[Tuple[int, ...], int]] = None
 ) -> torch.Tensor:
   """Calculates a linalg.norm(x) that's safe for gradients at x=0.
 
@@ -29,51 +51,51 @@ def norm(
   https://github.com/google/jax/issues/3058 for details
   Args:
     x: A jnp.array
-    axis: The axis along which to compute the norm
+    dim: The axis along which to compute the norm
 
   Returns:
     Norm of the array x.
   """
   # cannot vmap over torch.allclose
   # is_zero = torch.allclose(x, torch.zeros_like(x))
-  is_zero = abs(x) < torch.finfo(x.dtype).resolution
+  is_zero = (abs(x) < torch.finfo(x.dtype).resolution).all()
   # temporarily swap x with ones if is_zero, then swap back
   x = torch.where(is_zero, torch.ones_like(x), x)
-  n = torch.linalg.norm(x, axis=axis)
+  n = torch.linalg.norm(x, dim=dim)
   n = torch.where(is_zero, 0.0, n)
   return n
 
 
 def normalize_with_norm(
-    x: torch.Tensor, axis: Optional[Union[Tuple[int, ...], int]] = None
+    x: torch.Tensor, dim: Optional[Union[Tuple[int, ...], int]] = None
 ) -> Tuple[torch.Tensor, torch.Tensor]:
   """Normalizes an array.
 
   Args:
     x: A jnp.array
-    axis: The axis along which to compute the norm
+    dim: The axis along which to compute the norm
 
   Returns:
     A tuple of (normalized array x, the norm).
   """
-  n = norm(x, axis=axis)
+  n = norm(x, dim=dim)
   x = x / (n + 1e-6 * (n == 0.0))
   return x, n
 
 
 def normalize(
-    x: torch.Tensor, axis: Optional[Union[Tuple[int, ...], int]] = None
+    x: torch.Tensor, dim: Optional[Union[Tuple[int, ...], int]] = None
 ) -> torch.Tensor:
   """Normalizes an array.
 
   Args:
     x: A jnp.array
-    axis: The axis along which to compute the norm
+    dim: The axis along which to compute the norm
 
   Returns:
     normalized array x
   """
-  return normalize_with_norm(x, axis=axis)[0]
+  return normalize_with_norm(x, dim=dim)[0]
 
 
 def rotate(vec: torch.Tensor, quat: torch.Tensor) -> torch.Tensor:
@@ -131,12 +153,12 @@ def quat_mul(u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
   ])
 
 
-def quat_mul_axis(q: torch.Tensor, axis: torch.Tensor) -> torch.Tensor:
+def quat_mul_axis(q: torch.Tensor, dim: torch.Tensor) -> torch.Tensor:
   """Multiplies a quaternion and an axis.
 
   Args:
     q: (4,) quaternion (w,x,y,z)
-    axis: (3,) axis (x,y,z)
+    dim: (3,) axis (x,y,z)
 
   Returns:
     A quaternion q * axis
@@ -177,11 +199,11 @@ def quat_to_axis_angle(q: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
   return axis, angle
 
 
-def axis_angle_to_quat(axis: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
+def axis_angle_to_quat(dim: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
   """Provides a quaternion that describes rotating around axis by angle.
 
   Args:
-    axis: (3,) axis (x,y,z)
+    dim: (3,) axis (x,y,z)
     angle: () float angle to rotate by
 
   Returns:
@@ -217,6 +239,11 @@ def inert_mul(i: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
   ang = torch.vmap(torch.dot, (0, None))(inr, v[:3]) + torch.dot(pos, v[3:])
   vel = mass * v[3:] - torch.linalg.cross(pos, v[:3])
   return torch.cat((ang, vel))
+
+
+def sign(x: torch.Tensor) -> torch.Tensor:
+  """Returns the sign of x in the set {-1, 1}."""
+  return x.sign()
 
 
 def transform_motion(vel: torch.Tensor, offset: torch.Tensor, rotmat: torch.Tensor):
@@ -292,7 +319,7 @@ def closest_segment_point(
 ) -> torch.Tensor:
   """Returns the closest point on the a-b line segment to a point pt."""
   ab = b - a
-  t = torch.dot(pt - a, ab) / (torch.dot(ab, ab) + 1e-6)
+  t = (pt - a).dot(ab) / (ab.dot(ab) + 1e-6)
   return a + torch.clamp(t, 0.0, 1.0) * ab
 
 
@@ -355,4 +382,55 @@ def closest_segment_to_segment_points(
 
 def concatenate(data):
   """Equivalent of jax.concatenate for PyTorch."""
-  return torch.cat([x.reshape(-1) for x in data])
+  if isinstance(data, torch.Tensor):
+    return data.flatten(0, 1)
+  return torch.cat(data)
+
+def repeat(a, repeats, dim=None):
+  return torch.repeat_interleave(a, repeats, dim=dim)
+def tile(A, reps):
+  if isinstance(reps, int):
+    reps = (reps,) * A.ndim
+  return torch.tile(A, reps)
+def pad(*args, **kwargs):
+  return torch.nn.functional.pad(*args, **kwargs)
+
+def append(arr, values, dim=None):
+  values = torch.as_tensor(values)
+  if dim is None:
+    return torch.cat([arr, values.reshape(-1)], dim=0)
+  return torch.cat([arr, values], dim=dim)
+
+def hstack_single(tensor):
+  if tensor.ndim <= 1:
+    return tensor
+  if tensor.ndim == 2:
+    return tensor.flatten(0, 1)
+  return tensor.transpose(0, 1).flatten(1, 2)
+
+def take(tensor, indices, dim=None):
+  if dim is None:
+    dim = 0
+    tensor = tensor.reshape(-1)
+  return torch.gather(tensor, dim, indices)
+def hstack(tensors):
+  if isinstance(tensors, torch.Tensor):
+    return hstack_single(tensors)
+  if tensors[0].ndim == 1:
+    return torch.cat(tensors)
+  return torch.cat(tensors, 1)
+
+class _remove_batch_dim_decorator:
+  def __init__(self):
+    ...
+  def __call__(self, func):
+    @functools.wraps(func)
+    def new_func(*args, **kwargs):
+      args, kwargs = vmap_module._unwrap_batched((args, kwargs), out_dims=0, vmap_level=1, batch_size=0, func=lambda x: x)
+      out = func(*args, **kwargs)
+      out_flat, out_spec = torch.utils._pytree.tree_flatten(out)
+      out = vmap_module._create_batched_inputs(
+            flat_in_dims=0, flat_args=out_flat, vmap_level=1, args_spec=out_spec
+        )
+      return out
+    return new_func

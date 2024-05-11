@@ -13,97 +13,116 @@
 # limitations under the License.
 # ==============================================================================
 """Scan across data ordered by body joint types and kinematic tree order."""
-
+import functools
 from typing import Any, Callable, TypeVar
 
-# pylint: enable=g-importing-member
-import numpy as np
-import torch
-# from torch import numpy as torch
+import functorch.dim
+from functorch.dim import dims
+
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import JointType
 from mujoco_torch._src.types import Model
-from mujoco_torch._src.types import TrnType
-from mujoco_torch._src.math import concatenate
+from mujoco_torch._src.types import TrnType, is_leaf_vmap
+# pylint: enable=g-importing-member
+import numpy as np
+
+import torch
+from mujoco_torch._src.math import concatenate, append, repeat, hstack_single, take, hstack
 from torch.utils._pytree import tree_map
 from torch._C._functorch import is_batchedtensor
+
 Y = TypeVar('Y')
 
 
 # TODO(erikfrey): re-check if this really helps perf
 def _take(obj: Y, idx: torch.Tensor) -> Y:
-  """Takes idxs on any pytree given to it.
-
-  XLA executes x[torch.tensor([1, 2, 3])] slower than x[1:4], so we detect when
-  take indices are contiguous, and convert them to slices.
-
-  Args:
-    obj: an input pytree
-    idx: indices to take
-
-  Returns:
-    obj pytree with leaves taken by idxs
-  """
-
-  idx = torch.as_tensor(idx)
-
-  if isinstance(obj, np.ndarray):
-    print('idx', idx)
-    print('obj', obj.shape)
-    if isinstance(obj, torch.Tensor):
-      print(is_batchedtensor(obj))
-    else:
-      print(obj)
+  idx = idx.to(torch.int64)
+  if isinstance(obj, (torch.Tensor, functorch.dim.Tensor)):
     return obj[idx]
+  # why use vmap?
+  return obj[:, idx]
 
-  def take(x):
-    # TODO(erikfrey): if this helps perf, add support for striding too
-    if (
-        len(idx.shape) == 1
-        and idx.numel() > 0
-        and (idx == torch.arange(idx[0], idx[0] + idx.numel(), device=idx.device)).all()
-        and (idx > 0).all()
-    ):
-      x = x[idx[0] : idx[-1] + 1]
-    else:
-      print('idx', idx)
-      print('x', x.shape)
-      x = x[idx]
-      print('x.shape', x.shape)
-      # x = x.take(torch.tensor(idx), axis=0, mode='wrap')
-    return x
-
-  return tree_map(take, obj)
+  # def take(x):
+  #   # TODO(erikfrey): if this helps perf, add support for striding too
+  #   if (
+  #       len(idx.shape) == 1
+  #       and idx.numel() > 0
+  #       and (idx == torch.arange(idx[0], idx[0] + idx.numel(), device=idx.device)).all()
+  #       and (idx > 0).all()
+  #   ):
+  #     x = x[idx[0] : idx[-1] + 1]
+  #   else:
+  #     x = x[idx]
+  #     # x = x.take(torch.tensor(idx), axis=0, mode='wrap')
+  #   return x
+  #
+  # return tree_map(take, obj)
 
 
-def _q_bodyid(m: Model) -> np.ndarray:
+def _q_bodyid(m: Model) -> torch.Tensor:
   """Returns the bodyid for each qpos adress."""
-  q_bodyids = [np.array([], dtype=np.int32)]
+  q_bodyids = [torch.tensor([], dtype=torch.int64)]
   for jnt_type, jnt_bodyid in zip(m.jnt_type, m.jnt_bodyid):
     width = {JointType.FREE: 7, JointType.BALL: 4}.get(jnt_type, 1)
-    q_bodyids.append(np.repeat(jnt_bodyid, width))
-  return np.concatenate(q_bodyids)
+    q_bodyids.append(repeat(jnt_bodyid, width))
+  return concatenate(q_bodyids)
 
 
-def _q_jointid(m: Model) -> np.ndarray:
+def _q_jointid(m: Model) -> torch.Tensor:
   """Returns the jointid for each qpos adress."""
-  q_jointid = [np.array([], dtype=np.int32)]
+  q_jointid = [torch.tensor([], dtype=torch.int64)]
   for i, jnt_type in enumerate(m.jnt_type):
     width = {JointType.FREE: 7, JointType.BALL: 4}.get(jnt_type, 1)
-    q_jointid.append(np.repeat(i, width))
-  return np.concatenate(q_jointid)
+    q_jointid.append(torch.full((width,), i))
+  return concatenate(q_jointid)
 
 
-def _index(haystack: np.ndarray, needle: np.ndarray) -> np.ndarray:
+def _index(haystack: torch.Tensor, needle: torch.Tensor) -> torch.Tensor:
   """Returns indexes in haystack for elements in needle."""
-  idx = np.argsort(haystack)
+  idx = torch.argsort(haystack)
   sorted_haystack = haystack[idx]
-  sorted_idx = np.searchsorted(sorted_haystack, needle)
-  idx = np.take(idx, sorted_idx, mode='clip')
+  # sorted_idx = np.searchsorted(sorted_haystack.numpy(), needle.numpy())
+  sorted_idx = torch.searchsorted(sorted_haystack, needle)
+  idx = take(idx, indices=sorted_idx) # mode='clip')
   idx[haystack[idx] != needle] = -1
 
   return idx
 
+
+def _generic_vmap(f: Callable[..., Y], *args, is_leaf=is_leaf_vmap, take_first_elt: bool=True) -> Y:
+  """A vmap that accepts any leaf type."""
+
+  # split out numpy and jax args
+  if take_first_elt:
+    # d0 = dims(1)
+    # return f(*(arg[d0] for arg in args))
+    def convert(arg):
+      if not is_leaf(arg):
+        if isinstance(arg, torch.Tensor):
+          # TODO: optimize this
+          if arg.unique().numel() > 1:
+            return None, torch.Tensor(arg)
+          else:
+            return torch.Tensor(arg[0]), None
+        # put the arg in the non-vmappable group
+        return arg, None
+      return None, arg
+    non_vmap_args, args = zip(*(convert(arg) for arg in args), strict=True)
+  else:
+    non_vmap_args, args = zip(*((torch.tensor(a), None) if not is_leaf(a) else (None, a) for a in args), strict=True)
+
+  # remove empty args that we should not vmap over
+  args = tree_map(lambda vmap_arg: vmap_arg if vmap_arg is not None and vmap_arg.shape[0] else None, args)
+  in_axes = [None if a is None else 0 for a in args]
+
+  def outer_f(*vmap_args, non_vmap_args=non_vmap_args):
+    args = [non_vmap_arg if vmap_arg is None else vmap_arg for vmap_arg, non_vmap_arg in zip(vmap_args, non_vmap_args, strict=True)]
+    return f(*args)
+  if not any(x is not None for x in args):
+    result = outer_f(*args)
+  else:
+    result = torch.vmap(outer_f, tuple(in_axes))(*args)
+  return result
 
 def _nvmap(f: Callable[..., Y], *args) -> Y:
   """A vmap that accepts numpy arrays.
@@ -123,23 +142,39 @@ def _nvmap(f: Callable[..., Y], *args) -> Y:
     RuntimeError: if numpy arg elements do not match
   """
   for arg in args:
-    if isinstance(arg, np.ndarray) and not np.all(arg == arg[0]):
+    if isinstance(arg, np.ndarray) and not all(arg == arg[0]):
       raise RuntimeError(f'numpy arg elements do not match: {arg}')
 
-  # np_args = [a[0] if isinstance(a, np.ndarray) else None for a in args]
-  np_args = [a[0] if isinstance(a, np.ndarray) else None for a in args]
-  args = [a if n is None else None for n, a in zip(np_args, args)]
+  # split out numpy and jax args
+  np_args, args = zip(*((a[0], None) if isinstance(a, np.ndarray) else (None, a) for a in args))
+  # args = [a if n is None else None for n, a in zip(np_args, args)]
+
+  # remove empty args that we should not vmap over
+  args = tree_map(lambda a: a if a is not None and a.shape[0] else None, args)
   in_axes = [None if a is None else 0 for a in args]
 
   def outer_f(*args, np_args=np_args):
     args = [a if n is None else n for n, a in zip(args, np_args)]
     return f(*args)
-  return torch.vmap(outer_f, tuple(in_axes))(*args)
+  if not any(x is not None for x in args):
+    result = outer_f()
+  else:
+    result = torch.vmap(outer_f, tuple(in_axes))(*args)
+  return result
 
 
 def _check_input(m: Model, args: Any, in_types: str) -> None:
   """Checks that scan input has the right shape."""
-  size = {'b': m.nbody, 'j': m.njnt, 'q': m.nq, 'v': m.nv, 'u': m.nu, 'a': m.na}
+  size = {
+      'b': m.nbody,
+      'j': m.njnt,
+      'q': m.nq,
+      'v': m.nv,
+      'u': m.nu,
+      'a': m.na,
+      's': m.nsite,
+      'c': m.ncam,
+  }
   for idx, (arg, typ) in enumerate(zip(args, in_types)):
     if len(arg) != size[typ]:
       raise IndexError(
@@ -152,7 +187,7 @@ def _check_input(m: Model, args: Any, in_types: str) -> None:
 
 
 def _check_output(
-    y, take_ids: np.ndarray, typ: str, idx: int
+    y: torch.Tensor, take_ids: torch.Tensor, typ: str, idx: int
 ) -> None:
   """Checks that scan output has the right shape."""
   if y.shape[0] != take_ids.shape[0]:
@@ -175,7 +210,7 @@ def flat(
 ) -> Y:
   r"""Scan a function across bodies or actuators.
 
-  Scan group data according to type and batch shape then calls vmap(f) on it.
+  Scan group data according to type and batch shape then calls vmap(f) on it.\
 
   Args:
     m: an mjx model
@@ -192,6 +227,7 @@ def flat(
       'v': split according to degrees of freedom (len(qvel))
       'u': split according to actuators
       'a': split according to actuator activations
+      'c': split according to camera
     out_types: string specifying the types the output dimension matches
     *args: the input arguments corresponding to ``in_types``
     group_by: the type to group by, either joints or actuators
@@ -204,68 +240,90 @@ def flat(
   """
   _check_input(m, args, in_types)
 
-  if group_by not in {'j', 'u'}:
+  if group_by not in {'j', 'u', 'c'}:
     raise NotImplementedError(f'group by type "{group_by}" not implemented.')
 
-  def key_j(ids):
-    if any(t in 'jqv' for t in in_types + out_types):
-      return tuple(m.jnt_type[ids])
-    return ()
 
-  def key_u(ids_u, ids_j):
-    return (
-        m.actuator_biastype[ids_u],
-        m.actuator_gaintype[ids_u],
-        m.actuator_dyntype[ids_u],
-        m.actuator_trntype[ids_u],
-        m.jnt_type[ids_j],
-    )
 
-  def type_ids_j(m, i):
-    return {
+
+  if group_by == "j":
+    def type_ids_fn(m, i):
+      return {
         'b': i,
-        'j': np.nonzero(m.jnt_bodyid == i)[0],
-        'v': np.nonzero(m.dof_bodyid == i)[0],
-        'q': np.nonzero(_q_bodyid(m) == i)[0],
-    }
+        'j': torch.nonzero(m.jnt_bodyid == i)[:, 0],
+        'v': torch.nonzero(m.dof_bodyid == i)[:, 0],
+        'q': torch.nonzero(_q_bodyid(m) == i)[:, 0],
+      }
 
-  def type_ids_u(m, i):
-    typ_ids = {
+    def key_fn(type_ids):
+      if any(t in 'jqv' for t in in_types + out_types):
+        return tuple(m.jnt_type[type_ids['j']].reshape(-1).tolist())
+      return ()
+
+  elif group_by == "u":
+    def type_ids_fn(m, i):
+      typ_ids = {
         'u': i,
         'a': m.actuator_actadr[i],
         'j': (
-            m.actuator_trnid[i]
-            if m.actuator_trntype[i] == TrnType.JOINT
-            else np.array(-1)
+          m.actuator_trnid[i, 0]
+          if m.actuator_trntype[i] == TrnType.JOINT
+          else -1
         ),
-    }
-    # v/q associated with joint transmissions
-    typ_ids.update({
-        'v': np.nonzero(m.dof_jntid == typ_ids['j'])[0],
-        'q': np.nonzero(_q_jointid(m) == typ_ids['j'])[0],
-    })
-    return typ_ids
+        's': (
+          m.actuator_trnid[i]
+          if m.actuator_trntype[i] == TrnType.SITE
+          else torch.tensor([-1, -1])
+        ),
+      }
+      v, q = torch.tensor([-1]), torch.tensor([-1])
+      if m.actuator_trntype[i] == TrnType.JOINT:
+        # v/q are associated with the joint transmissions only
+        v = torch.nonzero(m.dof_jntid == typ_ids['j'])[:, 0]
+        q = torch.nonzero(_q_jointid(m) == typ_ids['j'])[:, 0]
+
+      typ_ids.update({'v': v, 'q': q})
+
+      return typ_ids
+
+    def key_fn(type_ids):
+      ids_u, ids_j = type_ids['u'], type_ids['j']
+      return (
+        m.actuator_biastype[ids_u].item(),
+        m.actuator_gaintype[ids_u].item(),
+        m.actuator_dyntype[ids_u].item(),
+        m.actuator_trntype[ids_u].item(),
+        m.jnt_type[ids_j].item(),
+        (m.actuator_trnid[ids_u, 1] == -1).item(),  # key by refsite being present
+      )
+
+  elif group_by == "c":
+    def type_ids_fn(unused_m, i):
+      return {
+        'c': i,
+      }
+    def key_fn(type_ids):
+      return m.cam_mode[type_ids['c']].item(), (m.cam_targetbodyid[type_ids['c']] >= 0).item()
 
   # build up a grouping of type take-ids in body/actuator order
   key_typ_ids, order = {}, []
   all_types = set(in_types + out_types)
-  n_items = {'j': m.nbody, 'u': m.nu}[group_by]
-  for i in np.arange(n_items, dtype=np.int32):
-    typ_ids = type_ids_j(m, i) if group_by == 'j' else type_ids_u(m, i)
+  n_items = {'j': m.nbody, 'u': m.nu, 'c': m.ncam}[group_by]
+  for i in torch.arange(n_items, dtype=torch.int64):
+    typ_ids = type_ids_fn(m, i)
 
     # create grouping key
-    key = (
-        key_j(typ_ids['j'])
-        if group_by == 'j'
-        else key_u(typ_ids['u'], typ_ids['j'])
-    )
+    key = key_fn(typ_ids)
     order.append((key, typ_ids))
 
     # add ids per type to the corresponding group
     for t in all_types:
       out = key_typ_ids.setdefault(key, {})
-      val = np.expand_dims(typ_ids[t], axis=0)
-      out[t] = np.concatenate((out[t], val)) if t in out else val
+      val = torch.unsqueeze(typ_ids[t], 0)
+      if t in out:
+        out[t] = concatenate((out[t], val))
+      else:
+        out[t] = val
 
   key_typ_ids = list(sorted(key_typ_ids.items()))
 
@@ -273,9 +331,10 @@ def flat(
   ys = []
   for _, typ_ids in key_typ_ids:
     # only execute f if we would actually take something from the result
-    if any(typ_ids[v].size > 0 for v in out_types):
+    if any(typ_ids[v].numel() > 0 for v in out_types):
       f_args = [_take(arg, typ_ids[typ]) for arg, typ in zip(args, in_types)]
-      y = _nvmap(f, *f_args)
+      # y = _nvmap(f, *f_args)
+      y = _generic_vmap(f, *f_args)
       ys.append(y)
     else:
       ys.append(None)
@@ -288,8 +347,14 @@ def flat(
 
   # get the original input order
   order = [[o[t] for o in order] for t in all_types]
+  def order_to_tensor(o):
+    if isinstance(o[0], torch.Tensor):
+      if o[0].shape:
+        return concatenate(o)
+      return torch.stack(o)
+    return torch.as_tensor(0)
   order = [
-      np.concatenate(o) if isinstance(o[0], np.ndarray) else np.array(o)
+      order_to_tensor(o)
       for o in order
   ]
   order = dict(zip(all_types, order))
@@ -297,9 +362,10 @@ def flat(
   # concatenate back to a single tree and drop the grouping dimension
   f_ret_is_seq = isinstance(ys[0], (list, tuple))
   ys = ys if f_ret_is_seq else [[y] for y in ys]
-  flat_ = {'j': 'b', 'u': 'uaj'}[group_by]
+  flat_ = {'j': 'b', 'u': 'uaj', 'c': 'c'}[group_by]
   ys = [
-      [v if typ in flat_ else torch.flatten(v, 0, 1) for v, typ in zip(y, out_types)]
+      [v if typ in flat_ else torch.flatten(v, 0, min(1, v.ndim-1)) for v, typ in zip(y, out_types)]
+      # [v if typ in flat_ else v.reshape(-1) for v, typ in zip(y, out_types)]
       for y in ys
   ]
   ys = tree_map(lambda *x: concatenate(x), *ys)
@@ -308,8 +374,8 @@ def flat(
   reordered_ys = []
   for i, (y, typ) in enumerate(zip(ys, out_types)):
     _check_output(y, order[typ], typ, i)
-    ids = np.concatenate([np.hstack(v[typ]) for _, v in key_typ_ids])
-    input_order = order[typ][np.where(order[typ] != -1)]
+    ids = concatenate([hstack_single(v[typ]) for _, v in key_typ_ids])
+    input_order = order[typ][torch.where(order[typ] != -1)]
     reordered_ys.append(_take(y, _index(ids, input_order)))
   y = reordered_ys if f_ret_is_seq else reordered_ys[0]
 
@@ -362,7 +428,7 @@ def body_tree(
   #      * for 'j' arguments, we group by joint type
   #      * for 'q' arguments, we group by q width
   #      * for 'v' arguments, we group by dof width
-  depths = np.zeros(m.nbody, dtype=np.int32)
+  depths = torch.zeros(m.nbody, dtype=torch.int64)
 
   # map key => body id
   key_body_ids = {}
@@ -380,14 +446,14 @@ def body_tree(
       if t == 'b':
         continue
       elif t == 'j':
-        key += (tuple(m.jnt_type[np.nonzero(m.jnt_bodyid == id_)[0]]))
+        key += (tuple(m.jnt_type[torch.nonzero(m.jnt_bodyid == id_)[:, 0]]))
       elif t == 'v':
-        key += (len(np.nonzero(m.dof_bodyid == id_)[0]),)
+        key += (len(torch.nonzero(m.dof_bodyid == id_))[:, 0],)
       elif t == 'q':
-        key += (len(np.nonzero(_q_bodyid(m) == id_)[0]),)
+        key += (len(torch.nonzero(_q_bodyid(m) == id_))[:, 0],)
 
-    body_ids = key_body_ids.get(key, np.array([], dtype=np.int32))
-    key_body_ids[key] = np.append(body_ids, body_id)
+    body_ids = key_body_ids.get(key, torch.tensor([], dtype=torch.int64))
+    key_body_ids[key] = append(body_ids, body_id)
 
   # find parent keys of each key.  a key may have multiple parents if the
   # carry output keys of distinct parents are the same. e.g.:
@@ -401,7 +467,7 @@ def body_tree(
 
   for key, body_ids in key_body_ids.items():
     body_ids = body_ids[body_ids != 0]  # ignore worldbody, has no parent
-    if body_ids.size == 0:
+    if body_ids.numel() == 0:
       continue
     # find any key which has a body id that is a parent of these body_ids
     pids = m.body_parentid[body_ids]
@@ -415,17 +481,17 @@ def body_tree(
       if typ == 'b':
         ids = body_ids
       elif typ == 'j':
-        ids = np.stack([np.nonzero(m.jnt_bodyid == b)[0] for b in body_ids])
+        ids = torch.stack([torch.nonzero(m.jnt_bodyid == b)[:, 0] for b in body_ids])
       elif typ == 'v':
-        ids = np.stack([np.nonzero(m.dof_bodyid == b)[0] for b in body_ids])
+        ids = torch.stack([torch.nonzero(m.dof_bodyid == b)[:, 0] for b in body_ids])
       elif typ == 'q':
-        ids = np.stack([np.nonzero(_q_bodyid(m) == b)[0] for b in body_ids])
+        ids = torch.stack([torch.nonzero(_q_bodyid(m) == b)[:, 0] for b in body_ids])
       else:
         raise ValueError(f'Unknown in_type: {typ}')
       if i < len(in_types):
         key_in_take.setdefault(key, []).append(ids)
       else:
-        key_y_take.setdefault(key, []).append(np.hstack(ids))
+        key_y_take.setdefault(key, []).append(hstack(ids))
 
   # use this grouping to take the right data subsets and call vmap(f)
   keys = sorted(key_body_ids, reverse=reverse)
@@ -442,23 +508,21 @@ def body_tree(
         parent_ids = m.body_parentid[key_body_ids[child_key]]
         id_map = _index(body_ids, parent_ids)
 
-        def index_sum(x, i=id_map, s=body_ids.size):
+        def index_sum(x, i=id_map, s=body_ids.numel()):
           return segment_sum(x, i, s)
 
         y = tree_map(index_sum, y)
         carry = y if carry is None else tree_map(torch.add, carry, y)
     elif key in key_parents:
       ys = [key_y[p] for p in key_parents[key]]
-      print("concat", *ys)
       y = tree_map(lambda *x: concatenate(x), *ys)
-      print("y", y)
-      body_ids = np.concatenate([key_body_ids[p] for p in key_parents[key]])
+      body_ids = concatenate([key_body_ids[p] for p in key_parents[key]])
       parent_ids = m.body_parentid[key_body_ids[key]]
       take_fn = lambda x, i=_index(body_ids, parent_ids): _take(x, i)
       carry = tree_map(take_fn, y)
-
     f_args = [_take(arg, ids) for arg, ids in zip(args, key_in_take[key])]
-    key_y[key] = _nvmap(f, carry, *f_args)
+    key_y[key] = _generic_vmap(f, carry, *f_args)
+    # key_y[key] = torch.vmap(f)(carry, *f_args)
 
   # slice None results from the final output
   keys = [k for k in keys if key_y[k] is not None]
@@ -470,9 +534,10 @@ def body_tree(
     if len(out_types) > 1:
       y_typ = [y_[i] for y_ in y_typ]
     if typ != 'b':
-      y_typ = tree_map(lambda x: torch.flatten(x, 0, 1), y_typ)
-    y_typ = torch.cat(y_typ)
-    y_take = np.argsort(np.concatenate([key_y_take[key][i] for key in keys]))
+      y_typ = tree_map(concatenate, y_typ)
+    y_typ = tree_map(lambda *x: concatenate(x), *y_typ)
+    y_elts = [key_y_take[key][i] for key in keys]
+    y_take = torch.argsort(concatenate(y_elts))
     _check_output(y_typ, y_take, typ, i)
     y.append(_take(y_typ, y_take))
 
@@ -481,7 +546,7 @@ def body_tree(
   return y
 
 def segment_sum(data, segment_ids, num_segments=None):
-  # lengths = torch.repeat_interleave(torch.arange(segment_ids.shape[0]), segment_ids)
+  # lengths = repeat_interleave(torch.arange(segment_ids.shape[0]), segment_ids)
   if not isinstance(segment_ids, torch.Tensor):
     segment_ids = torch.tensor(segment_ids, device=data.device)
   lengths = segment_ids.unique(return_counts=True)[1]
@@ -491,8 +556,14 @@ def segment_sum(data, segment_ids, num_segments=None):
   #   lengths = lengths.to(torch.int)
   seg = torch.segment_reduce(data, reduce="sum", lengths=lengths, axis=0)
   if num_segments is not None:
-    if num_segments <= seg.shape[0]:
-      return seg[:num_segments]
-    else:
-      return torch.nn.functional.pad(seg, [0] * 2 * (seg.ndim - 1) + [0, num_segments-seg.shape[0]])
+    # if num_segments <= seg.shape[0]:
+    #   return seg[:num_segments]
+    # else:
+    #   return torch.nn.functional.pad(seg, [0] * 2 * (seg.ndim - 1) + [0, num_segments-seg.shape[0]]
+    return torch.cond(
+      num_segments <= seg.shape[0],
+      lambda seg: seg[:num_segments],
+      lambda seg: torch.nn.functional.pad(seg, [0] * 2 * (seg.ndim - 1) + [0, num_segments-seg.shape[0]]),
+      (seg,),
+    )
   return seg

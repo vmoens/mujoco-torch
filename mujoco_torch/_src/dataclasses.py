@@ -16,13 +16,24 @@
 
 import copy
 import dataclasses
-import typing
-from typing import Sequence, TypeVar
 
+import typing
+from typing import Any, Dict, Optional, Sequence, TypeVar, Union
+import jax
 import numpy as np
 import torch
 
 _T = TypeVar('_T')
+
+
+def _jax_in_args(typ) -> bool:
+  if typ is torch.Tensor:
+    return True
+  if dataclasses.is_dataclass(typ):
+    return any(_jax_in_args(f.type) for f in dataclasses.fields(typ))
+  if typing.get_origin(typ) in (list, dict, Union, set):
+    return any(_jax_in_args(t) for t in typing.get_args(typ))
+  return False
 
 
 def dataclass(clz: _T) -> _T:
@@ -41,11 +52,7 @@ def dataclass(clz: _T) -> _T:
   data_clz = dataclasses.dataclass(frozen=True)(clz)
   meta_fields, data_fields = [], []
   for field in dataclasses.fields(data_clz):
-    if any((
-        field.type is torch.Tensor,
-        dataclasses.is_dataclass(field.type),
-        torch.Tensor in typing.get_args(field.type),
-    )):
+    if _jax_in_args(field.type):
       data_fields.append(field)
     else:
       meta_fields.append(field)
@@ -57,41 +64,40 @@ def dataclass(clz: _T) -> _T:
   data_clz.replace = replace
 
   def iterate_clz_with_keys(x):
-    # numpy arrays are not hashable, so convert them to tuples for jit cache
-    to_tup = lambda x: tuple(x) if len(x.shape) == 1 else tuple(map(to_tup, x))
-
     def to_meta(field, obj):
       val = getattr(obj, field.name)
-      return to_tup(val) if isinstance(val, np.ndarray) else val
+      # numpy arrays are not hashable so return raw bytes instead
+      if isinstance(val, np.ndarray):
+        return (val.tobytes(), val.dtype, val.shape)
+      else:
+        return val
 
     def to_data(field, obj):
-      # return (field.name, getattr(obj, field.name))
-      return getattr(obj, field.name)
-      # import torch
-      # return (torch.tree_util.GetAttrKey(field.name), getattr(obj, field.name))
+      return (jax.tree_util.GetAttrKey(field.name), getattr(obj, field.name))
 
     data = tuple(to_data(f, x) for f in data_fields)
     meta = tuple(to_meta(f, x) for f in meta_fields)
     return data, meta
 
-  def clz_from_iterable(data, meta):
+  def clz_from_iterable(meta, data):
+
     def from_meta(field, meta):
       if field.type is np.ndarray:
-        return (field.name, np.array(meta))
+        arr = np.frombuffer(meta[0], dtype=meta[1]).reshape(meta[2])
+        return (field.name, arr)
       else:
         return (field.name, meta)
 
     from_data = lambda field, meta: (field.name, meta)
+
     meta_args = tuple(from_meta(f, m) for f, m in zip(meta_fields, meta))
     data_args = tuple(from_data(f, m) for f, m in zip(data_fields, data))
+
     return data_clz(**dict(meta_args + data_args))
 
-  torch.utils._pytree.register_pytree_node(
-      data_clz, flatten_fn=iterate_clz_with_keys, unflatten_fn=clz_from_iterable
+  jax.tree_util.register_pytree_with_keys(
+      data_clz, iterate_clz_with_keys, clz_from_iterable
   )
-  # torch.utils._pytree.register_pytree_with_keys(
-  #     data_clz, iterate_clz_with_keys, clz_from_iterable
-  # )
 
   return data_clz
 
@@ -116,8 +122,12 @@ class PyTreeNode:
     # stub for pytype
     raise NotImplementedError
 
+  @classmethod
+  def fields(cls) -> tuple[dataclasses.Field[Any], ...]:
+    return dataclasses.fields(cls)
+
   def tree_replace(
-      self, params,
+      self, params: Dict[str, Optional[jax.typing.ArrayLike]]
   ) -> 'PyTreeNode':
     new = self
     for k, v in params.items():
@@ -128,7 +138,7 @@ class PyTreeNode:
 def _tree_replace(
     base: PyTreeNode,
     attr: Sequence[str],
-    val,
+    val: Optional[jax.typing.ArrayLike],
 ) -> PyTreeNode:
   """Sets attributes in a struct.dataclass with values."""
   if not attr:

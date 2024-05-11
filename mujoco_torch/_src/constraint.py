@@ -14,12 +14,10 @@
 # ==============================================================================
 """Core non-smooth constraint functions."""
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import mujoco
-# pylint: enable=g-importing-member
-import numpy as np
-import torch
+from mujoco_torch._src import collision_driver
 from mujoco_torch._src import math
 from mujoco_torch._src import support
 # pylint: disable=g-importing-member
@@ -30,6 +28,9 @@ from mujoco_torch._src.types import DisableBit
 from mujoco_torch._src.types import EqType
 from mujoco_torch._src.types import JointType
 from mujoco_torch._src.types import Model
+# pylint: enable=g-importing-member
+import numpy as np
+import torch
 
 
 class _Efc(PyTreeNode):
@@ -59,9 +60,9 @@ def _kbi(
 
   dmin = torch.clamp(dmin, mujoco.mjMINIMP, mujoco.mjMAXIMP)
   dmax = torch.clamp(dmax, mujoco.mjMINIMP, mujoco.mjMAXIMP)
-  width = torch.maximum(0, width)
+  width = width.clamp_min(0)
   mid = torch.clamp(mid, mujoco.mjMINIMP, mujoco.mjMAXIMP)
-  power = torch.maximum(1, power)
+  power = power.clamp_min(1)
 
   # See https://mujoco.readthedocs.io/en/latest/modeling.html#solver-parameters
   k = 1 / (dmax * dmax * timeconst * timeconst * dampratio * dampratio)
@@ -71,8 +72,8 @@ def _kbi(
   b = torch.where(timeconst <= 0, -timeconst / dmax, b)
 
   imp_x = torch.abs(pos) / width
-  imp_a = (1.0 / torch.power(mid, power - 1)) * torch.power(imp_x, power)
-  imp_b = 1 - (1.0 / torch.power(1 - mid, power - 1)) * torch.power(1 - imp_x, power)
+  imp_a = (1.0 / torch.pow(mid, power - 1)) * torch.pow(imp_x, power)
+  imp_b = 1 - (1.0 / torch.pow(1 - mid, power - 1)) * torch.pow(1 - imp_x, power)
   imp_y = torch.where(imp_x < mid, imp_a, imp_b)
   imp = dmin + imp_y * (dmax - dmin)
   imp = torch.clamp(imp, dmin, dmax)
@@ -84,7 +85,7 @@ def _kbi(
 def _instantiate_equality_connect(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for connect equality constraints."""
 
-  ids = np.nonzero(m.eq_type == EqType.CONNECT)[0]
+  ids = torch.nonzero(m.eq_type == EqType.CONNECT)[0]
 
   if (m.opt.disableflags & DisableBit.EQUALITY) or ids.size == 0:
     return None
@@ -106,14 +107,14 @@ def _instantiate_equality_connect(m: Model, d: Data) -> Optional[_Efc]:
     jacp2, _ = support.jac(m, d, pos2, id2)
     j = (jacp1 - jacp2).T
 
-    return j, cpos, torch.repeat(math.norm(cpos), 3)
+    return j, cpos, torch_repeat(math.norm(cpos), 3)
 
   # concatenate to drop connect grouping dimension
-  j, pos, pos_norm = torch.utils._pytree.tree_map(torch.cat, fn(data, id1, id2))
+  j, pos, pos_norm = torch.utils._pytree.tree_map(concatenate, fn(data, id1, id2))
   invweight = m.body_invweight0[id1, 0] + m.body_invweight0[id2, 0]
-  invweight = torch.repeat(invweight, 3)
-  solref = torch.tile(m.eq_solref[ids], (3, 1))
-  solimp = torch.tile(m.eq_solimp[ids], (3, 1))
+  invweight = torch_repeat(invweight, 3)
+  solref = torch_tile(m.eq_solref[ids], (3, 1))
+  solimp = torch_tile(m.eq_solimp[ids], (3, 1))
   frictionloss = torch.zeros_like(pos_norm)
 
   return _Efc(j, pos, pos_norm, invweight, solref, solimp, frictionloss)
@@ -122,7 +123,7 @@ def _instantiate_equality_connect(m: Model, d: Data) -> Optional[_Efc]:
 def _instantiate_equality_weld(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for weld equality constraints."""
 
-  ids = np.nonzero(m.eq_type == EqType.WELD)[0]
+  ids = torch.nonzero(m.eq_type == EqType.WELD)[0]
 
   if (m.opt.disableflags & DisableBit.EQUALITY) or ids.size == 0:
     return None
@@ -156,17 +157,17 @@ def _instantiate_equality_weld(m: Model, d: Data) -> Optional[_Efc]:
     jac_fn = lambda j: math.quat_mul(math.quat_mul_axis(quat1, j), quat)[1:]
     jacdifr = 0.5 * torch.vmap(jac_fn)(jacdifr)
 
-    j = torch.cat((jacdifp.T, jacdifr.T))
-    pos = torch.cat((cpos, crot * torquescale))
+    j = concatenate((jacdifp.T, jacdifr.T))
+    pos = concatenate((cpos, crot * torquescale))
 
-    return j, pos, torch.repeat(math.norm(pos), 6)
+    return j, pos, torch_repeat(math.norm(pos), 6)
 
   # concatenate to drop weld grouping dimension
-  j, pos, pos_norm = torch.utils._pytree.tree_map(torch.cat, fn(data, id1, id2))
+  j, pos, pos_norm = torch.utils._pytree.tree_map(concatenate, fn(data, id1, id2))
   invweight = m.body_invweight0[id1] + m.body_invweight0[id2]
-  invweight = torch.repeat(invweight, 3)
-  solref = torch.tile(m.eq_solref[ids], (6, 1))
-  solimp = torch.tile(m.eq_solimp[ids], (6, 1))
+  invweight = torch_repeat(invweight, 3)
+  solref = torch_tile(m.eq_solref[ids], (6, 1))
+  solimp = torch_tile(m.eq_solimp[ids], (6, 1))
   frictionloss = torch.zeros_like(pos_norm)
 
   return _Efc(j, pos, pos_norm, invweight, solref, solimp, frictionloss)
@@ -175,7 +176,7 @@ def _instantiate_equality_weld(m: Model, d: Data) -> Optional[_Efc]:
 def _instantiate_equality_joint(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for joint equality constraints."""
 
-  ids = np.nonzero(m.eq_type == EqType.JOINT)[0]
+  ids = torch.nonzero(m.eq_type == EqType.JOINT)[0]
 
   if (m.opt.disableflags & DisableBit.EQUALITY) or ids.size == 0:
     return None
@@ -191,7 +192,7 @@ def _instantiate_equality_joint(m: Model, d: Data) -> Optional[_Efc]:
     pos2, ref2 = pos2 * (id2 > -1), ref2 * (id2 > -1)
 
     dif = pos2 - ref2
-    dif_power = torch.power(dif, torch.arange(0, 5))
+    dif_power = torch.pow(dif, torch.arange(0, 5))
 
     deriv = torch.dot(data[1:5], dif_power[:4] * torch.arange(1, 5))
     j = torch.zeros((m.nv)).at[dofadr1].set(1.0).at[dofadr2].set(-deriv)
@@ -215,7 +216,7 @@ def _instantiate_friction(m: Model, d: Data) -> Optional[_Efc]:
 def _instantiate_limit_ball(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for ball joint limits."""
 
-  ids = np.nonzero((m.jnt_type == JointType.BALL) & m.jnt_limited)[0]
+  ids = torch.nonzero((m.jnt_type == JointType.BALL) & m.jnt_limited)[0]
 
   if (m.opt.disableflags & DisableBit.LIMIT) or ids.size == 0:
     return None
@@ -245,7 +246,7 @@ def _instantiate_limit_slide_hinge(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for slide and hinge joint limits."""
 
   slide_hinge = np.isin(m.jnt_type, (JointType.SLIDE, JointType.HINGE))
-  ids = np.nonzero(slide_hinge & m.jnt_limited)[0]
+  ids = torch.nonzero(slide_hinge & m.jnt_limited)[0]
 
   if (m.opt.disableflags & DisableBit.LIMIT) or ids.size == 0:
     return None
@@ -275,7 +276,7 @@ def _instantiate_limit_slide_hinge(m: Model, d: Data) -> Optional[_Efc]:
 def _instantiate_contact(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for contacts."""
 
-  if (m.opt.disableflags & DisableBit.CONTACT) or d.ncon == 0:
+  if collision_driver.ncon(m) == 0:
     return None
 
   @torch.vmap
@@ -295,24 +296,26 @@ def _instantiate_contact(m: Model, d: Data) -> Optional[_Efc]:
     for diff_tan, friction in zip(diff_con[1:], c.friction[:2]):
       for f in (friction, -friction):
         js.append(diff_con[0] + diff_tan * f)
-        invweights.append((t + f * f * t) * 2 * f * f)
+        invweights.append((t + f * f * t) * 2 * f * f / m.opt.impratio)
 
     active = dist < 0
     j, invweight = torch.stack(js) * active, torch.stack(invweights)
-    pos = torch.repeat(dist, 4) * active
-    solref, solimp = torch.tile(c.solref, (4, 1)), torch.tile(c.solimp, (4, 1))
+    pos = torch_repeat(dist, 4) * active
+    solref, solimp = torch_tile(c.solref, (4, 1)), torch_tile(c.solimp, (4, 1))
 
     return j, invweight, pos, solref, solimp
 
   res = fn(d.contact)
   # remove contact grouping dimension:
-  j, invweight, pos, solref, solimp = torch.utils._pytree.tree_map(torch.cat, res)
+  j, invweight, pos, solref, solimp = torch.utils._pytree.tree_map(concatenate, res)
   frictionloss = torch.zeros_like(pos)
 
   return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
 
 
-def count_constraints(m: Model, d: Data) -> Tuple[int, int, int, int]:
+def count_constraints(
+    m: Union[Model, mujoco.MjModel], d: Optional[Data] = None
+) -> Tuple[int, int, int, int]:
   """Returns equality, friction, limit, and contact constraint counts."""
   if m.opt.disableflags & DisableBit.CONSTRAINT:
     return 0, 0, 0, 0
@@ -332,20 +335,16 @@ def count_constraints(m: Model, d: Data) -> Tuple[int, int, int, int]:
   else:
     nl = int(m.jnt_limited.sum())
 
-  if m.opt.disableflags & DisableBit.CONTACT:
-    nc = 0
+  if d is None:
+    nc = collision_driver.ncon(m) * 4
   else:
-    nc = d.ncon * 4
+    nc = d.efc_J.shape[-2] - ne - nf - nl
 
   return ne, nf, nl, nc
 
 
 def make_constraint(m: Model, d: Data) -> Data:
   """Creates constraint jacobians and other supporting data."""
-
-  ns = sum(count_constraints(m, d)[:-1])
-  # TODO(robotics-simulation): make device_put set nefc/efc_address instead
-  d = d.tree_replace({'contact.efc_address': np.arange(ns, ns + d.ncon * 4, 4)})
 
   if m.opt.disableflags & DisableBit.CONSTRAINT:
     efcs = ()
@@ -363,20 +362,20 @@ def make_constraint(m: Model, d: Data) -> Data:
   if not efcs:
     z = torch.empty(0)
     d = d.replace(efc_J=torch.empty((0, m.nv)))
-    d = d.replace(efc_D=z, efc_aref=z, efc_frictionloss=z, nefc=0)
+    d = d.replace(efc_D=z, efc_aref=z, efc_frictionloss=z)
     return d
 
-  efc = torch.utils._pytree.tree_map(lambda *x: mujoco_torch._src.math.contatenate(x), *efcs)
+  efc = torch.utils._pytree.tree_map(lambda *x: concatenate(x), *efcs)
 
   @torch.vmap
   def fn(efc):
     k, b, imp = _kbi(m, efc.solref, efc.solimp, efc.pos_norm)
-    r = torch.maximum(efc.invweight * (1 - imp) / imp, mujoco.mjMINVAL)
+    r = (efc.invweight * (1 - imp) / imp).clamp_min(mujoco.mjMINVAL)
     aref = -b * (efc.J @ d.qvel) - k * imp * efc.pos
     return aref, r
 
   aref, r = fn(efc)
   d = d.replace(efc_J=efc.J, efc_D=1 / r, efc_aref=aref)
-  d = d.replace(efc_frictionloss=efc.frictionloss, nefc=r.shape[0])
+  d = d.replace(efc_frictionloss=efc.frictionloss)
 
   return d

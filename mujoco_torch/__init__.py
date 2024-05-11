@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Public API for MJX."""
+"""Public API for mujoco_torch."""
 
 # pylint:disable=g-importing-member
 from mujoco_torch._src.collision_driver import collision
@@ -20,15 +20,15 @@ from mujoco_torch._src.constraint import make_constraint
 from mujoco_torch._src.device import device_get_into
 from mujoco_torch._src.device import device_put
 from mujoco_torch._src.forward import forward
-from mujoco_torch._src.forward import step
-from mujoco_torch._src.io import make_data
+from mujoco_torch._src.forward import step, fwd_actuation, fwd_acceleration, euler
+from mujoco_torch._src.io import make_data, put_model, put_data
 from mujoco_torch._src.passive import passive
 from mujoco_torch._src.smooth import com_pos
 from mujoco_torch._src.smooth import com_vel
 from mujoco_torch._src.smooth import crb
 from mujoco_torch._src.smooth import factor_m
 from mujoco_torch._src.smooth import kinematics
-from mujoco_torch._src.smooth import mul_m
+from mujoco_torch._src.support import mul_m
 from mujoco_torch._src.smooth import rne
 from mujoco_torch._src.smooth import transmission
 from mujoco_torch._src.types import *

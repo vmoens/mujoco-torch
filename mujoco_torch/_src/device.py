@@ -16,16 +16,16 @@
 
 import copy
 import dataclasses
-import warnings
 from typing import Any, Dict, Iterable, List, Union, overload
+import warnings
 
-# from torch import numpy as torch
 import mujoco
-import numpy as np
-import torch
 from mujoco_torch._src import collision_driver
 from mujoco_torch._src import mesh
 from mujoco_torch._src import types
+import numpy as np
+import torch
+from torch.utils._pytree import tree_iter
 
 _MJ_TYPE_ATTR = {
     mujoco.mjtBias: (mujoco.MjModel.actuator_biastype,),
@@ -68,10 +68,13 @@ _TRANSFORMS = {
     (types.Data, 'ximat'): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
     (types.Data, 'xmat'): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
     (types.Data, 'geom_xmat'): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
-    (types.Model, 'actuator_trnid'): lambda x: x[:, 0],
+    (types.Data, 'site_xmat'): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
+    (types.Data, 'cam_xmat'): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
+    (types.Model, 'cam_mat0'): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
     (types.Contact, 'frame'): (
         lambda x: x.reshape(x.shape[:-1] + (3, 3))  # pylint: disable=g-long-lambda
-        if x is not None and x.shape[0] else torch.zeros((0, 3, 3))
+        if x is not None and x.shape[0]
+        else torch.zeros((0, 3, 3))
     ),
 }
 
@@ -79,9 +82,13 @@ _INVERSE_TRANSFORMS = {
     (types.Data, 'ximat'): lambda x: x.reshape(x.shape[:-2] + (9,)),
     (types.Data, 'xmat'): lambda x: x.reshape(x.shape[:-2] + (9,)),
     (types.Data, 'geom_xmat'): lambda x: x.reshape(x.shape[:-2] + (9,)),
+    (types.Data, 'site_xmat'): lambda x: x.reshape(x.shape[:-2] + (9,)),
+    (types.Data, 'cam_xmat'): lambda x: x.reshape(x.shape[:-2] + (9,)),
+    (types.Model, 'cam_mat0'): lambda x: x.reshape(x.shape[:-2] + (9,)),
     (types.Contact, 'frame'): (
         lambda x: x.reshape(x.shape[:-2] + (9,))  # pylint: disable=g-long-lambda
-        if x is not None and x.shape[0] else torch.zeros((0, 9))
+        if x is not None and x.shape[0]
+        else torch.zeros((0, 9))
     ),
 }
 
@@ -90,22 +97,13 @@ _DERIVED = mesh.DERIVED.union(
     {(types.Data, 'efc_J'), (types.Option, 'has_fluid_params')}
 )
 
-def _device_put_torch(x):
-    if x is None:
-        return
-    try:
-        return torch.tensor(x)
-    except RuntimeError:
-        return torch.empty(x.shape if isinstance(x, np.ndarray) else len(x))
-
-torch.device_put = _device_put_torch
 
 def _model_derived(value: mujoco.MjModel) -> Dict[str, Any]:
-  return {k: torch.device_put(v) for k, v in mesh.get(value).items()}
+  return {k: torch_device_put(v) for k, v in mesh.get(value).items()}
 
 
 def _data_derived(value: mujoco.MjData) -> Dict[str, Any]:
-  return {'efc_J': torch.device_put(value.efc_J)}
+  return {'efc_J': torch_device_put(value.efc_J)}
 
 
 def _option_derived(value: types.Option) -> Dict[str, Any]:
@@ -116,7 +114,7 @@ def _option_derived(value: types.Option) -> Dict[str, Any]:
 
 
 def _validate(m: mujoco.MjModel):
-  """Validates that an mjModel is compatible with MJX."""
+  """Validates that an mjModel is compatible with mujoco_torch."""
 
   # check enum types
   for mj_type, attrs in _MJ_TYPE_ATTR.items():
@@ -140,8 +138,7 @@ def _validate(m: mujoco.MjModel):
     raise NotImplementedError('Tendons are not supported.')
 
   # check collision geom types
-  candidate_set = collision_driver.collision_candidates(m)
-  for g1, g2, *_ in candidate_set:
+  for (g1, g2, *_), c in collision_driver.collision_candidates(m).items():
     g1, g2 = mujoco.mjtGeom(g1), mujoco.mjtGeom(g2)
     if g1 == mujoco.mjtGeom.mjGEOM_PLANE and g2 in (
         mujoco.mjtGeom.mjGEOM_PLANE,
@@ -151,6 +148,12 @@ def _validate(m: mujoco.MjModel):
       continue
     if collision_driver.get_collision_fn((g1, g2)) is None:
       raise NotImplementedError(f'({g1}, {g2}) collisions not implemented.')
+    *_, params = collision_driver.get_params(m, c)
+    margin_gap = not np.allclose(np.concatenate([params.margin, params.gap]), 0)
+    if mujoco.mjtGeom.mjGEOM_MESH in (g1, g2) and margin_gap:
+      raise NotImplementedError(
+          f'Margin and gap not implemented for ({g1}, {g2})'
+      )
 
   # TODO(erikfrey): warn for high solver iterations, nefc, etc.
 
@@ -172,6 +175,19 @@ def _validate(m: mujoco.MjModel):
     if f & m.opt.enableflags:
       warnings.warn(f'Ignoring enable flag {f.name}.')
 
+  if not np.allclose(m.dof_frictionloss, 0):
+    raise NotImplementedError('dof_frictionloss is not implemented.')
+
+def torch_device_put(value, device=None):
+    """Equivalent of jax.device_put for pytorch."""
+    if not isinstance(value, torch.Tensor):
+        return value
+    if device is None:
+        device = torch.get_default_device()
+    return value.to(device)
+def torch_device_get(value):
+    """Equivalent of jax.device_get for pytorch."""
+    return value.cpu()
 
 @overload
 def device_put(value: mujoco.MjData) -> types.Data:
@@ -192,6 +208,11 @@ def device_put(value):
   Returns:
     on-device MJX struct reflecting the input value
   """
+  warnings.warn(
+      'device_put is deprecated, use put_model and put_data instead',
+      category=DeprecationWarning,
+  )
+
   clz = _TYPE_MAP.get(type(value))
   if clz is None:
     raise NotImplementedError(f'{type(value)} is not supported for device_put.')
@@ -204,12 +225,14 @@ def device_put(value):
     if (clz, f.name) in _DERIVED:
       continue
 
-    field_value = getattr(value, f.name)
+    field_value = getattr(value, f.name, None)
+    if field_value is None:
+        continue
     if (clz, f.name) in _TRANSFORMS:
       field_value = _TRANSFORMS[(clz, f.name)](field_value)
 
     if f.type is torch.Tensor:
-      field_value = torch.device_put(field_value)
+      field_value = torch_device_put(field_value)
     elif type(field_value) in _TYPE_MAP.keys():
       field_value = device_put(field_value)
 
@@ -250,47 +273,60 @@ def device_get_into(result, value):
   Raises:
     RuntimeError: if result length doesn't match data batch size
   """
+  warnings.warn(
+      'device_get_into is deprecated, use get_data instead',
+      category=DeprecationWarning,
+  )
 
-  value = torch.device_get(value)
+  value = torch_device_get(value)
 
   if isinstance(result, list):
-    array_shapes = [s.shape for s in torch.utils._pytree.tree_flatten(value)[0]]
+    # array_shapes = [s.shape for s in tree_iter(value)]
+    #
+    # if any(len(s) < 1 or s[0] != array_shapes[0][0] for s in array_shapes):
+    #   raise ValueError('unrecognizable batch dimension in value')
 
-    if any(len(s) < 1 or s[0] != array_shapes[0][0] for s in array_shapes):
-      raise ValueError('unrecognizable batch dimension in value')
+    batch_size = value.batch_size
 
-    batch_size = array_shapes[0][0]
-
-    if len(result) != batch_size:
+    if len(result) != batch_size[0]:
       raise ValueError(
           f"result length ({len(result)}) doesn't match value batch size"
           f' ({batch_size})'
       )
 
-    for i in range(batch_size):
+    for i in range(batch_size[0]):
       value_i = torch.utils._pytree.tree_map(lambda x, i=i: x[i], value)
       device_get_into(result[i], value_i)
 
   else:
     if isinstance(result, mujoco.MjData):
+      ncon = value.contact.dist.shape[0]
+      nefc = value.efc_J.shape[0]
       mujoco._functions._realloc_con_efc(  # pylint: disable=protected-access
-          result, ncon=value.ncon, nefc=value.nefc
+          result, ncon=ncon, nefc=nefc
       )
+      result.ncon = ncon
+      result.nefc = nefc
+      efc_start = nefc - ncon * 4
+      # TODO: use np here?
+      result.contact.efc_address[:] = np.arange(efc_start, nefc, 4)
+      result.contact.dim[:] = 3
 
-    for f in dataclasses.fields(value):  # type: ignore
-      if (type(value), f.name) in _DERIVED:
+    for fname in value.keys():  # type: ignore
+      if (type(value), fname) in _DERIVED:
         continue
 
-      field_value = getattr(value, f.name)
+      field_value = getattr(value, fname)
 
-      if (type(value), f.name) in _INVERSE_TRANSFORMS:
-        field_value = _INVERSE_TRANSFORMS[(type(value), f.name)](field_value)
+      if (type(value), fname) in _INVERSE_TRANSFORMS:
+        field_value = _INVERSE_TRANSFORMS[(type(value), fname)](field_value)
 
       if type(field_value) in _TYPE_MAP.values():
-        device_get_into(getattr(result, f.name), field_value)
+        device_get_into(getattr(result, fname), field_value)
         continue
 
       try:
-        setattr(result, f.name, field_value)
+        setattr(result, fname, field_value)
       except AttributeError:
-        getattr(result, f.name)[:] = field_value
+        # this is reached whenever the shape mismatch, e.g. solver_niter
+        getattr(result, fname)[:] = field_value

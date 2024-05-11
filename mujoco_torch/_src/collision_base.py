@@ -21,7 +21,7 @@ import torch
 # pylint: disable=g-importing-member
 from mujoco_torch._src.dataclasses import PyTreeNode
 from mujoco_torch._src.types import GeomType
-
+import tensordict
 # pylint: enable=g-importing-member
 
 Contact = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
@@ -45,16 +45,19 @@ CandidateSet = Dict[
 class GeomInfo(PyTreeNode):
   """Collision info for a geom."""
 
+  geom_id: torch.Tensor
   pos: torch.Tensor
   mat: torch.Tensor
   size: torch.Tensor
   face: Optional[torch.Tensor] = None
   vert: Optional[torch.Tensor] = None
-  edge: Optional[torch.Tensor] = None
+  edge_dir: Optional[torch.Tensor] = None
   facenorm: Optional[torch.Tensor] = None
+  edge: Optional[torch.Tensor] = None
+  edge_face_normal: Optional[torch.Tensor] = None
 
-
-class SolverParams(PyTreeNode):
+@tensordict.tensorclass(autocast=True)
+class SolverParams:
   """Contact solver params."""
 
   friction: torch.Tensor

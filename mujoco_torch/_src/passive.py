@@ -13,10 +13,11 @@
 # limitations under the License.
 # ==============================================================================
 """Passive forces."""
+
 from typing import Tuple
 
-# from torch import numpy as torch
 import torch
+
 from mujoco_torch._src import math
 from mujoco_torch._src import scan
 from mujoco_torch._src import support
@@ -25,8 +26,6 @@ from mujoco_torch._src.types import Data
 from mujoco_torch._src.types import DisableBit
 from mujoco_torch._src.types import JointType
 from mujoco_torch._src.types import Model
-
-
 # pylint: enable=g-importing-member
 
 
@@ -40,22 +39,21 @@ def _inertia_box_fluid_model(
     cvel: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
   """Fluid forces based on inertia-box approximation."""
-  box = torch.repeat(inertia[None, :], 3, axis=0)
+  box = torch_repeat(inertia[None, :], 3, dim=0)
   box *= torch.ones((3, 3)) - 2 * torch.eye(3)
-  box = 6.0 * torch.clamp_min(torch.sum(box, axis=-1), 1e-12)
-  box = torch.sqrt(box / torch.maximum(mass, 1e-12)) * (mass > 0.0)
+  box = 6.0 * torch.clamp_min(torch.sum(box, dim=-1), 1e-12)
+  box = torch.sqrt(box / mass.clamp_min(1e-12)) * (mass > 0.0)
 
   # transform to local coordinate frame
   offset = xipos - root_com
   lvel = math.transform_motion(cvel, offset, ximat)
   lwind = ximat.T @ m.opt.wind
-  # lvel[3:] += -lwind  # or scatter
-  lvel = torch.scatter_add(lvel, 0, torch.arange(3, lvel.shape[0]), -lwind)
+  lvel = lvel.at[3:].add(-lwind)
 
   # set viscous force and torque
-  diam = torch.mean(box, axis=-1)
-  lfrc_ang = lvel[:3] * -torch.pi * diam ** 3 * m.opt.viscosity
-  lfrc_vel = lvel[3:] * -3.0 * torch.pi * diam * m.opt.viscosity
+  diam = torch.mean(box, dim=-1)
+  lfrc_ang = lvel[:3] * -math.pi * diam**3 * m.opt.viscosity
+  lfrc_vel = lvel[3:] * -3.0 * math.pi * diam * m.opt.viscosity
 
   # add lift and drag force and torque
   scale_vel = torch.tensor([box[1] * box[2], box[0] * box[2], box[0] * box[1]])
@@ -64,8 +62,8 @@ def _inertia_box_fluid_model(
       box[1] * (box[0] ** 4 + box[2] ** 4),
       box[2] * (box[0] ** 4 + box[1] ** 4),
   ])
-  lfrc_vel = lfrc_vel - 0.5 * m.opt.density * scale_vel * torch.abs(lvel[3:]) * lvel[3:]
-  lfrc_ang = lfrc_ang - (
+  lfrc_vel -= 0.5 * m.opt.density * scale_vel * torch.abs(lvel[3:]) * lvel[3:]
+  lfrc_ang -= (
       1.0 * m.opt.density * scale_ang * torch.abs(lvel[:3]) * lvel[:3] / 64.0
   )
 
@@ -78,7 +76,7 @@ def _inertia_box_fluid_model(
 def passive(m: Model, d: Data) -> Data:
   """Adds all passive forces."""
   if m.opt.disableflags & DisableBit.PASSIVE:
-    return d
+    return d.replace(qfrc_passive=torch.zeros(m.nv))
 
   # joint-level springs
   def fn(jnt_typs, stiffness, qpos_spring, qpos):
@@ -90,20 +88,8 @@ def passive(m: Model, d: Data) -> Data:
       qs = qpos_spring[qpos_i : qpos_i + jnt_typ.qpos_width()]
       qfrc = torch.zeros(jnt_typ.dof_width())
       if jnt_typ == JointType.FREE:
-        # qfrc[:3] = -stiffness[i] * (q[:3] - qs[:3]) # or scatter
-        qfrc = torch.scatter(
-            input=qfrc,
-            dim=0,
-            index=torch.arange(0, 3, device=qfrc.device),
-            src=(-stiffness[i] * (q[:3] - qs[:3])).to(qfrc.dtype)
-            )
-        # qfrc[3:6] = -stiffness[i] * math.quat_sub(q[3:7], qs[3:7]) # or scatter
-        qfrc = torch.scatter(
-            input=qfrc,
-            dim=0,
-            index=torch.arange(3, 6, device=qfrc.device),
-            src=(-stiffness[i] * math.quat_sub(q[3:7], qs[3:7])).to(qfrc.dtype)
-            )
+        qfrc = qfrc.at[:3].set(-stiffness[i] * (q[:3] - qs[:3]))
+        qfrc = qfrc.at[3:6].set(-stiffness[i] * math.quat_sub(q[3:7], qs[3:7]))
       elif jnt_typ == JointType.BALL:
         qfrc = -stiffness[i] * math.quat_sub(q, qs)
       elif jnt_typ in (
@@ -114,8 +100,8 @@ def passive(m: Model, d: Data) -> Data:
       else:
         raise RuntimeError(f'unrecognized joint type: {jnt_typ}')
       qfrcs.append(qfrc)
-      qpos_i = qpos_i + jnt_typ.qpos_width()
-    return torch.cat(qfrcs)
+      qpos_i += jnt_typ.qpos_width()
+    return concatenate(qfrcs)
 
   qfrc_passive = scan.flat(
       m,
@@ -129,14 +115,14 @@ def passive(m: Model, d: Data) -> Data:
   )
 
   # dof-level dampers
-  qfrc_passive = qfrc_passive - m.dof_damping * d.qvel
+  qfrc_passive -= m.dof_damping * d.qvel
 
   # TODO(robotics-simulation): body-level gravity compensation
 
   # body-level viscosity, lift and drag
   if m.opt.has_fluid_params:
     force, torque = torch.vmap(
-        _inertia_box_fluid_model, (None, 0, 0, 0, 0, 0, 0)
+        _inertia_box_fluid_model, in_axes=(None, 0, 0, 0, 0, 0, 0)
     )(
         m,
         m.body_inertia,
@@ -146,10 +132,10 @@ def passive(m: Model, d: Data) -> Data:
         d.ximat,
         d.cvel,
     )
-    qfrc_target = torch.vmap(support.apply_ft, (None, None, 0, 0, 0, 0))(
+    qfrc_target = torch.vmap(support.apply_ft, in_axes=(None, None, 0, 0, 0, 0))(
         m, d, force, torque, d.xipos, torch.arange(m.nbody)
     )
-    qfrc_passive = qfrc_passive + torch.sum(qfrc_target, axis=0)
+    qfrc_passive += torch.sum(qfrc_target, dim=0)
 
   d = d.replace(qfrc_passive=qfrc_passive)
   return d

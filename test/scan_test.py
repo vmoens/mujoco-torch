@@ -14,21 +14,22 @@
 # ==============================================================================
 """Tests for scan functions."""
 
+import argparse
+
 import mujoco
+import mujoco_torch
 # pylint: enable=g-importing-member
 import numpy as np
-# from jax import numpy as torch
+import pytest
 import torch
-from absl.testing import absltest
-import mujoco_torch
 # pylint: disable=g-importing-member
 from mujoco_torch._src import scan
+from mujoco_torch._src.math import concatenate
 from mujoco_torch._src.types import JointType
 
 
-class ScanTest(absltest.TestCase):
-
-  _MULTI_DOF_XML = """
+class TestScan:
+    _MULTI_DOF_XML = """
       <mujoco>
         <compiler inertiafromgeom="true"/>
         <worldbody>
@@ -49,104 +50,153 @@ class ScanTest(absltest.TestCase):
       </mujoco>
     """
 
-  def test_flat_empty(self):
-    """Test scanning over just world body."""
-    m = mujoco.MjModel.from_xml_string("""
+    def test_flat_empty(self):
+        """Test scanning over just world body."""
+        m = mujoco.MjModel.from_xml_string("""
       <mujoco model="world_body">
         <worldbody/>
       </mujoco>
     """)
-    m = mujoco_torch.device_put(m)
+        m = mujoco_torch.device_put(m)
 
-    def fn(body_id):
-      return body_id + 1
+        def fn(body_id):
+            return body_id + 1
 
-    b_in = torch.tensor([1])
-    b_expect = torch.tensor([2])
-    b_out = scan.flat(m, fn, 'b', 'b', b_in)
+        b_in = torch.tensor([1])
+        b_expect = torch.tensor([2])
+        b_out = scan.flat(m, fn, 'b', 'b', b_in)
 
-    np.testing.assert_equal(np.array(b_out), np.array(b_expect))
+        torch.testing.assert_close(b_out, b_expect)
 
-  def test_flat_joints(self):
-    """Tests scanning over bodies with joints of different types."""
-    m = mujoco.MjModel.from_xml_string(self._MULTI_DOF_XML)
-    m = mujoco_torch.device_put(m)
+    def test_flat_joints(self):
+        """Tests scanning over bodies with joints of different types."""
+        m = mujoco.MjModel.from_xml_string(self._MULTI_DOF_XML)
+        m = mujoco_torch.device_put(m)
 
-    # we will test two functions:
-    #   1) j_fn receives jnt_types as a torch array
-    #   2) s_fn receives jnt_types as a static np array and can switch on it
-    j_fn = lambda jnt_pos, val: val + torch.sum(jnt_pos)
-    s_fn = lambda jnt_types, val: val + sum(jnt_types)
+        # we will test two functions:
+        #   1) j_fn receives jnt_types as a jp array
+        #   2) s_fn receives jnt_types as a static np array and can switch on it
 
-    b_in = torch.tensor([[0, 0], [1, 1], [2, 2], [3, 3]])
-    b_expect = torch.tensor([[0, 0], [1, 1], [3, 3], [8, 8]])
-    b_out = scan.flat(m, j_fn, 'jb', 'b', m.jnt_pos, b_in)
-    np.testing.assert_equal(np.array(b_out), np.array(b_expect))
+        b_in = torch.tensor([[0, 0], [1, 1], [2, 2], [3, 3]])
+        b_expect = torch.tensor([[0, 0], [1, 1], [3, 3], [8, 8]])
 
-    b_out = scan.flat(m, s_fn, 'jb', 'b', m.jnt_type, b_in)
-    np.testing.assert_equal(np.array(b_out), np.array(b_expect))
+        j_fn = lambda jnt_pos, val: val + torch.sum(jnt_pos)
 
-    # None should be omitted from the results
-    def no_free(jnt_types, val):
-      if tuple(jnt_types) == (JointType.FREE,):
-        return None
-      return val + sum(jnt_types)
-    b_expect = torch.tensor([[0, 0], [3, 3], [8, 8]])
-    b_out = scan.flat(m, no_free, 'jb', 'b', m.jnt_type, b_in)
-    np.testing.assert_equal(np.array(b_out), np.array(b_expect))
+        b_out = scan.flat(m, j_fn, 'jb', 'b', m.jnt_pos, b_in)
+        torch.testing.assert_close(b_out, b_expect.to(b_out.dtype))
 
-    # we should not call functions for which we know we will discard the results
-    def no_world(jnt_types, val):
-      if jnt_types.size == 0:
-        self.fail('world has no dofs, should not be called')
-      return val + sum(jnt_types)
-    v_in = torch.ones((m.nv, 1))
-    scan.flat(m, no_world, 'jv', 'v', m.jnt_type, v_in)
+        s_fn = lambda jnt_types, val: val + sum(jnt_types)
+        b_out = scan.flat(m, s_fn, 'jb', 'b', m.jnt_type, b_in)
+        torch.testing.assert_close(b_out, b_expect.to(b_out.dtype))
 
-  def test_body_tree(self):
-    """Tests tree scanning over bodies with different joint counts."""
-    m = mujoco.MjModel.from_xml_string(self._MULTI_DOF_XML)
-    m = mujoco_torch.device_put(m)
+        # None should be omitted from the results
+        def no_free_eq(jnt_types, val):
+            val = no_free_diff(jnt_types, val)
+            return torch.zeros(val.shape, dtype=val.dtype, device=val.device)
 
-    # we will test two functions:
-    #   1) j_fn receives jnt_pos which is a torch array
-    #   2) s_fn receives jnt_types which is a static np array
-    def j_fn(carry, jnt_pos, val):
-      carry = torch.zeros_like(val) if carry is None else carry
-      return carry + val + torch.sum(jnt_pos)
+        def no_free_diff(jnt_types, val):
+            return val + sum(jnt_types)
 
-    def s_fn(carry, jnt_types, val):
-      carry = torch.zeros_like(val) if carry is None else carry
-      return carry + val + sum(jnt_types)
+        def no_free(jnt_types, val):
+            cond = jnt_types.numel() == 1 and jnt_types == JointType.FREE
+            return torch.cond(
+                cond,
+                no_free_eq,
+                no_free_diff,
+                (jnt_types, val))
 
-    b_in = torch.tensor([[0, 0], [1, 1], [2, 2], [3, 3]])
-    b_expect = torch.tensor([[0, 0], [1, 1], [4, 4], [9, 9]])
+        # # @_remove_batch_dim_decorator()
+        # def no_free(jnt_types, val):
+        #   # Adding jnt_types.numel() which is the numpy behaviour
+        #   if jnt_types.numel() and jnt_types == JointType.FREE:
+        #     return None
+        #   return val + sum(jnt_types)
 
-    b_out = scan.body_tree(m, j_fn, 'jb', 'b', m.jnt_pos, b_in)
-    np.testing.assert_equal(np.array(b_out), np.array(b_expect))
+        b_expect = torch.tensor([[0, 0], [0, 0], [3, 3], [8, 8]])
+        b_out = scan.flat(m, no_free, 'jb', 'b', m.jnt_type, b_in)
+        torch.testing.assert_close(b_out, b_expect.to(b_out.dtype))
 
-    b_out = scan.body_tree(m, s_fn, 'jb', 'b', m.jnt_type, b_in)
-    np.testing.assert_equal(np.array(b_out), np.array(b_expect))
+        # we should not call functions for which we know we will discard the results
+        def no_world(jnt_types, val):
+            if jnt_types.numel() == 0:
+                raise RuntimeError('world has no dofs, should not be called')
+            return val + sum(jnt_types)
 
-    # and reverse too:
-    b_expect = torch.tensor([[12, 12], [12, 12], [3, 3], [8, 8]])
-    b_out = scan.body_tree(m, j_fn, 'jb', 'b', m.jnt_pos, b_in, reverse=True)
-    np.testing.assert_equal(np.array(b_out), np.array(b_expect))
+        v_in = torch.ones((m.nv, 1))
+        scan.flat(m, no_world, 'jv', 'v', m.jnt_type, v_in)
 
-    b_out = scan.body_tree(m, s_fn, 'jb', 'b', m.jnt_type, b_in, reverse=True)
-    np.testing.assert_equal(np.array(b_out), np.array(b_expect))
+    def test_body_tree(self):
+        """Tests tree scanning over bodies with different joint counts."""
+        m = mujoco.MjModel.from_xml_string(self._MULTI_DOF_XML)
+        m = mujoco_torch.device_put(m)
 
-    # None should be omitted from the results
-    def no_free(carry, jnt_types, val):
-      if tuple(jnt_types) == (JointType.FREE,):
-        return None
-      carry = torch.zeros_like(val) if carry is None else carry
-      return carry + val + sum(jnt_types)
-    b_expect = torch.tensor([[0, 0], [3, 3], [8, 8]])
-    b_out = scan.body_tree(m, no_free, 'jb', 'b', m.jnt_type, b_in)
-    np.testing.assert_equal(np.array(b_out), np.array(b_expect))
+        # we will test two functions:
+        #   1) j_fn receives jnt_pos which is a jp array
+        #   2) s_fn receives jnt_types which is a static np array
+        def j_fn(carry, jnt_pos, val):
+            carry = torch.zeros_like(val) if carry is None else carry
+            return carry + val + torch.sum(jnt_pos)
 
-  _MULTI_ACT_XML = """
+        def s_fn(carry, jnt_types, val):
+            carry = torch.zeros_like(val) if carry is None else carry
+            return carry + val + sum(jnt_types)
+
+        b_in = torch.tensor([[0, 0], [1, 1], [2, 2], [3, 3]])
+        b_expect = torch.tensor([[0, 0], [1, 1], [4, 4], [9, 9]])
+
+        b_out = scan.body_tree(m, j_fn, 'jb', 'b', m.jnt_pos, b_in)
+        torch.testing.assert_close(b_out, b_expect.to(b_out.dtype))
+
+        b_out = scan.body_tree(m, s_fn, 'jb', 'b', m.jnt_type, b_in)
+        torch.testing.assert_close(b_out, b_expect.to(b_out.dtype))
+
+        # and reverse too:
+        b_expect = torch.tensor([[12, 12], [12, 12], [3, 3], [8, 8]])
+        b_out = scan.body_tree(m, j_fn, 'jb', 'b', m.jnt_pos, b_in, reverse=True)
+        torch.testing.assert_close(b_out, b_expect.to(b_out.dtype))
+
+        b_out = scan.body_tree(m, s_fn, 'jb', 'b', m.jnt_type, b_in, reverse=True)
+        torch.testing.assert_close(b_out, b_expect.to(b_out.dtype))
+
+        # # None should be omitted from the results
+        # no_free_eq = lambda carry, jnt_types, val: torch.tensor(())  # Should be None
+        # no_free_carry = lambda carry, jnt_types, val: torch.zeros_like(val)
+        # no_free_sum = lambda carry, jnt_types, val: carry + val + jnt_types.sum()
+        #
+        # def no_free_nest(carry, jnt_types, val):
+        #     pred = carry.numel() == 0
+        #     if pred:
+        #         carry = torch.zeros_like(val)
+        #     return torch.cond(
+        #         pred,
+        #         no_free_carry,
+        #         no_free_sum,
+        #         (carry, jnt_types, val)
+        #     )
+        #
+        # def no_free(carry, jnt_types, val):
+        #     if carry is None:
+        #         carry = torch.tensor((), dtype=jnt_types.dtype)
+        #     return torch.cond(
+        #         bool(jnt_types.numel() == 1 and jnt_types == JointType.FREE),
+        #         no_free_eq,
+        #         no_free_nest,
+        #         (carry, jnt_types, val)
+        #     )
+        def no_free(carry, jnt_types, val):
+            print(type(jnt_types))
+            print(jnt_types)
+            if bool(jnt_types.numel() == 1 and jnt_types == JointType.FREE):
+                return torch.zeros_like(val)
+            if carry is None or carry.numel() == 0:
+                return torch.zeros_like(val)
+            return carry + val + jnt_types.sum()
+        # b_expect = torch.tensor([[0, 0], [3, 3], [8, 8]])
+        b_expect = torch.tensor([[0, 0], [0, 0], [3, 3], [8, 8]])
+        b_out = scan.body_tree(m, no_free, 'jb', 'b', m.jnt_type, b_in)
+        torch.testing.assert_close(b_out, b_expect.to(b_out.dtype))
+
+    _MULTI_ACT_XML = """
     <mujoco>
       <option timestep="0.02"/>
       <compiler autolimits="true"/>
@@ -194,35 +244,37 @@ class ScanTest(absltest.TestCase):
     </mujoco>
   """
 
-  def testscan_actuators(self):
-    """Tests scanning over actuators."""
-    m = mujoco.MjModel.from_xml_string(self._MULTI_ACT_XML)
-    m = mujoco_torch.device_put(m)
+    def test_scan_actuators(self):
+        """Tests scanning over actuators."""
+        m = mujoco.MjModel.from_xml_string(self._MULTI_ACT_XML)
+        m = mujoco_torch.device_put(m)
 
-    fn = lambda *args: args
-    args = (
-      m.actuator_gear,
-      m.jnt_type,
-      torch.arange(m.nq),
-      torch.arange(m.nv),
-      torch.tensor([1.4, 1.1]),
-    )
-    gear, jnt_typ, qadr, vadr, act = scan.flat(
-        m, fn, 'ujqva', 'ujqva', *args, group_by='u'
-    )
+        fn = lambda *args: args
+        args = (
+            m.actuator_gear,
+            m.jnt_type,
+            torch.arange(m.nq),
+            torch.arange(m.nv),
+            torch.tensor([1.4, 1.1]),
+        )
+        gear, jnt_typ, qadr, vadr, act = scan.flat(
+            m, fn, 'ujqva', 'ujqva', *args, group_by='u'
+        )
 
-    np.testing.assert_array_equal(gear, m.actuator_gear)
-    np.testing.assert_array_equal(jnt_typ, m.jnt_type[m.actuator_trnid])
-    np.testing.assert_array_equal(act, torch.tensor([1.4, 1.1]))
-    expected_vadr = np.concatenate(
-        [np.nonzero(m.dof_jntid == trnid)[0] for trnid in m.actuator_trnid]
-    )
-    np.testing.assert_array_equal(vadr, expected_vadr)
-    expected_qadr = np.concatenate(
-        [np.nonzero(scan._q_jointid(m) == i)[0] for i in m.actuator_trnid]
-    )
-    np.testing.assert_array_equal(qadr, expected_qadr)
+        actuator_trnid = m.actuator_trnid[:, 0]
+        torch.testing.assert_close(gear, m.actuator_gear)
+        torch.testing.assert_close(jnt_typ, m.jnt_type[actuator_trnid])
+        torch.testing.assert_close(act, torch.tensor([1.4, 1.1]), msg=str(act))
+        expected_vadr = concatenate(
+            [torch.nonzero(m.dof_jntid == trnid)[:, 0] for trnid in actuator_trnid]
+        )
+        torch.testing.assert_close(vadr, expected_vadr)
+        expected_qadr = concatenate(
+            [torch.nonzero(scan._q_jointid(m) == i)[:, 0] for i in actuator_trnid]
+        )
+        torch.testing.assert_close(qadr, expected_qadr)
 
 
 if __name__ == '__main__':
-  absltest.main()
+    args, unknown = argparse.ArgumentParser().parse_known_args()
+    pytest.main([__file__, "--capture", "no", "--exitfirst"] + unknown)

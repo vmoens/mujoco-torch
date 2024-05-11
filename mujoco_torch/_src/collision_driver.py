@@ -14,14 +14,15 @@
 # ==============================================================================
 """Collide geometries."""
 
-from typing import Callable, Dict, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import mujoco
-# pylint: enable=g-importing-member
-import numpy as np
-# from torch import numpy as torch
 import torch
+from torch.utils._pytree import tree_map
+
 from mujoco_torch._src import collision_base
+from mujoco_torch._src import mesh
+from mujoco_torch._src import support
 # pylint: disable=g-importing-member
 from mujoco_torch._src.collision_base import Candidate
 from mujoco_torch._src.collision_base import CandidateSet
@@ -33,20 +34,26 @@ from mujoco_torch._src.collision_convex import plane_convex
 from mujoco_torch._src.collision_convex import sphere_convex
 from mujoco_torch._src.collision_primitive import capsule_capsule
 from mujoco_torch._src.collision_primitive import plane_capsule
+from mujoco_torch._src.collision_primitive import plane_ellipsoid
 from mujoco_torch._src.collision_primitive import plane_sphere
 from mujoco_torch._src.collision_primitive import sphere_capsule
 from mujoco_torch._src.collision_primitive import sphere_sphere
+from mujoco_torch._src.collision_sdf import capsule_ellipsoid
+from mujoco_torch._src.collision_sdf import ellipsoid_ellipsoid
+from mujoco_torch._src.math import concatenate
 from mujoco_torch._src.types import Contact
 from mujoco_torch._src.types import Data
 from mujoco_torch._src.types import DisableBit
 from mujoco_torch._src.types import GeomType
 from mujoco_torch._src.types import Model
+# pylint: enable=g-importing-member
 
 # pair-wise collision functions
 _COLLISION_FUNC = {
     (GeomType.PLANE, GeomType.SPHERE): plane_sphere,
     (GeomType.PLANE, GeomType.CAPSULE): plane_capsule,
     (GeomType.PLANE, GeomType.BOX): plane_convex,
+    (GeomType.PLANE, GeomType.ELLIPSOID): plane_ellipsoid,
     (GeomType.PLANE, GeomType.MESH): plane_convex,
     (GeomType.SPHERE, GeomType.SPHERE): sphere_sphere,
     (GeomType.SPHERE, GeomType.CAPSULE): sphere_capsule,
@@ -54,7 +61,9 @@ _COLLISION_FUNC = {
     (GeomType.SPHERE, GeomType.MESH): sphere_convex,
     (GeomType.CAPSULE, GeomType.CAPSULE): capsule_capsule,
     (GeomType.CAPSULE, GeomType.BOX): capsule_convex,
+    (GeomType.CAPSULE, GeomType.ELLIPSOID): capsule_ellipsoid,
     (GeomType.CAPSULE, GeomType.MESH): capsule_convex,
+    (GeomType.ELLIPSOID, GeomType.ELLIPSOID): ellipsoid_ellipsoid,
     (GeomType.BOX, GeomType.BOX): convex_convex,
     (GeomType.BOX, GeomType.MESH): convex_convex,
     (GeomType.MESH, GeomType.MESH): convex_convex,
@@ -80,10 +89,27 @@ def _add_candidate(
   if t1 > t2:
     t1, t2, g1, g2 = t2, t1, g2, g1
 
+  # MuJoCo does not collide planes with other planes or hfields
+  if t1 == GeomType.PLANE and t2 == GeomType.PLANE:
+    return
+  if t1 == GeomType.PLANE and t2 == GeomType.HFIELD:
+    return
+
   def mesh_key(i):
     convex_data = [[None] * m.ngeom] * 3
     if isinstance(m, Model):
-      convex_data = [m.geom_convex_face, m.geom_convex_vert, m.geom_convex_edge]
+      convex_data = [
+          m.geom_convex_face,
+          m.geom_convex_vert,
+          m.geom_convex_edge_dir,
+      ]
+    elif isinstance(m, mujoco.MjModel):
+      kwargs = mesh.get(m)
+      convex_data = [
+          kwargs['geom_convex_face'],
+          kwargs['geom_convex_vert'],
+          kwargs['geom_convex_edge_dir'],
+      ]
     key = tuple((-1,) if v[i] is None else v[i].shape for v in convex_data)
     return key
 
@@ -118,7 +144,7 @@ def _pair_params(
   margin = m.pair_margin[ipair]
   gap = m.pair_gap[ipair]
 
-  return SolverParams(friction, solref, solreffriction, solimp, margin, gap)
+  return SolverParams(friction, solref, solreffriction, solimp, margin, gap).auto_batch_size_()
 
 
 def _priority_params(
@@ -132,10 +158,10 @@ def _priority_params(
   solreffriction = torch.zeros(geomp.shape + (mujoco.mjNREF,))
   solimp = m.geom_solimp[geomp]
   g = torch.tensor([(c.geom1, c.geom2) for c in candidates])
-  margin = torch.amax(m.geom_margin[g.T], axis=0)
-  gap = torch.amax(m.geom_gap[g.T], axis=0)
+  margin = torch.amax(m.geom_margin[g.T], dim=0)
+  gap = torch.amax(m.geom_gap[g.T], dim=0)
 
-  return SolverParams(friction, solref, solreffriction, solimp, margin, gap)
+  return SolverParams(friction, solref, solreffriction, solimp, margin, gap, batch_size=[1])
 
 
 def _dynamic_params(
@@ -143,65 +169,107 @@ def _dynamic_params(
     candidates: Sequence[Candidate],
 ) -> SolverParams:
   """Gets solver params for dynamic geoms."""
-  g1 = torch.tensor([c.geom1 for c in candidates])
-  g2 = torch.tensor([c.geom2 for c in candidates])
+  g1 = torch.as_tensor([c.geom1 for c in candidates])
+  g2 = torch.as_tensor([c.geom2 for c in candidates])
 
-  friction = torch.maximum(m.geom_friction[g1], m.geom_friction[g2])
+  # TODO: remove as_tensor when we make sure that the model is a tensorclass
+  friction = torch.maximum(torch.as_tensor(m.geom_friction)[g1], torch.as_tensor(m.geom_friction)[g2])
   # copy friction terms for the full geom pair
   friction = friction[:, torch.tensor([0, 0, 1, 2, 2])]
 
   minval = torch.tensor(mujoco.mjMINVAL)
-  solmix1, solmix2 = m.geom_solmix[g1], m.geom_solmix[g2]
+  solmix = torch.as_tensor(m.geom_solmix)
+  solmix1 = solmix[g1]
+  solmix2 = solmix[g2]
   mix = solmix1 / (solmix1 + solmix2)
   mix = torch.where((solmix1 < minval) & (solmix2 < minval), 0.5, mix)
   mix = torch.where((solmix1 < minval) & (solmix2 >= minval), 0.0, mix)
   mix_fn = torch.vmap(lambda a, b, m: m * a + (1 - m) * b)
 
-  solref1, solref2 = m.geom_solref[g1], m.geom_solref[g2]
+  solref = torch.as_tensor(m.geom_solref)
+  solref1 = solref[g1]
+  solref2 = solref[g2]
   solref = torch.minimum(solref1, solref2)
   s_mix = mix_fn(solref1, solref2, mix)
   solref = torch.where((solref1[0] > 0) & (solref2[0] > 0), s_mix, solref)
   solreffriction = torch.zeros(g1.shape + (mujoco.mjNREF,))
-  solimp = mix_fn(m.geom_solimp[g1], m.geom_solimp[g2], mix)
-  margin = torch.maximum(m.geom_margin[g1], m.geom_margin[g2])
-  gap = torch.maximum(m.geom_gap[g1], m.geom_gap[g2])
+  solimp = torch.as_tensor(m.geom_solimp)
+  solimp = mix_fn(solimp[g1], solimp[g2], mix)
+  margin = torch.as_tensor(m.geom_margin)
+  margin = torch.maximum(margin[g1], margin[g2])
+  gap = torch.as_tensor(m.geom_gap)
+  gap = torch.maximum(gap[g1], gap[g2])
 
-  return SolverParams(friction, solref, solreffriction, solimp, margin, gap)
+  return SolverParams(friction, solref, solreffriction, solimp, margin, gap).auto_batch_size_()
+
+
+def get_params(
+    m: Union[Model, mujoco.MjModel], candidates: Sequence[Candidate]
+) -> Tuple[List[int], List[int], SolverParams]:
+  """Gets solver params for a list of collision candidates."""
+  # group sol params by different candidate types
+  typ_cands = {}
+  for c in candidates:
+    typ = (c.ipair > -1, c.geomp > -1)
+    typ_cands.setdefault(typ, []).append(c)
+
+  geom1, geom2, params = [], [], []
+  for (pair, priority), candidates in typ_cands.items():
+    geom1.extend([c.geom1 for c in candidates])
+    geom2.extend([c.geom2 for c in candidates])
+    if pair:
+      params.append(_pair_params(m, candidates))
+    elif priority:
+      params.append(_priority_params(m, candidates))
+    else:
+      params.append(_dynamic_params(m, candidates))
+
+  # def fn(*x):
+  #     return concatenate(x)
+  # params = params[0].apply(fn, *params[1:])
+  params = torch.cat(params, dim=0)
+ # params = tree_map(fn, *params)
+  return geom1, geom2, params
 
 
 def _pair_info(
     m: Model, d: Data, geom1: Sequence[int], geom2: Sequence[int]
 ) -> Tuple[GeomInfo, GeomInfo, Sequence[Dict[str, Optional[int]]]]:
   """Returns geom pair info for calculating collision."""
-  g1, g2 = torch.tensor(geom1), torch.tensor(geom2)
-  info1 = GeomInfo(
-      d.geom_xpos[g1],
-      d.geom_xmat[g1],
-      m.geom_size[g1],
-  )
-  info2 = GeomInfo(
-      d.geom_xpos[g2],
-      d.geom_xmat[g2],
-      m.geom_size[g2],
-  )
-  in_axes1 = in_axes2 = torch.utils._pytree.tree_map(lambda x: 0, info1)
-  if m.geom_convex_face[geom1[0]] is not None:
-    info1 = info1.replace(
-        face=torch.stack([m.geom_convex_face[i] for i in geom1]),
-        vert=torch.stack([m.geom_convex_vert[i] for i in geom1]),
-        edge=torch.stack([m.geom_convex_edge[i] for i in geom1]),
-        facenorm=torch.stack([m.geom_convex_facenormal[i] for i in geom1]),
+  def mesh_info(geom):
+    g = torch.tensor(geom)
+    info = GeomInfo(
+        g,
+        d.geom_xpos[g],
+        d.geom_xmat[g],
+        m.geom_size[g],
     )
-    in_axes1 = in_axes1.replace(face=0, vert=0, edge=0, facenorm=0)
-  if m.geom_convex_face[geom2[0]] is not None:
-    info2 = info2.replace(
-        face=torch.stack([m.geom_convex_face[i] for i in geom2]),
-        vert=torch.stack([m.geom_convex_vert[i] for i in geom2]),
-        edge=torch.stack([m.geom_convex_edge[i] for i in geom2]),
-        facenorm=torch.stack([m.geom_convex_facenormal[i] for i in geom2]),
-    )
-    in_axes2 = in_axes2.replace(face=0, vert=0, edge=0, facenorm=0)
-  return info1, info2, (in_axes1, in_axes2)
+    in_axes = tree_map(lambda x: 0, info)
+    is_mesh = m.geom_convex_face[geom[0]] is not None
+    if is_mesh:
+      info = info.replace(
+          face=torch.stack([m.geom_convex_face[i] for i in geom]),
+          vert=torch.stack([m.geom_convex_vert[i] for i in geom]),
+          edge_dir=torch.stack([m.geom_convex_edge_dir[i] for i in geom]),
+          facenorm=torch.stack([m.geom_convex_facenormal[i] for i in geom]),
+          edge=torch.stack([m.geom_convex_edge[i] for i in geom]),
+          edge_face_normal=torch.stack(
+              [m.geom_convex_edge_face_normal[i] for i in geom]
+          ),
+      )
+      in_axes = in_axes.replace(
+          face=0,
+          vert=0,
+          edge_dir=0,
+          facenorm=0,
+          edge=0,
+          edge_face_normal=0,
+      )
+    return info, in_axes
+
+  info1, in_axes1 = mesh_info(geom1)
+  info2, in_axes2 = mesh_info(geom2)
+  return info1, info2, [in_axes1, in_axes2]
 
 
 def _body_pair_filter(
@@ -230,6 +298,18 @@ def _body_pair_filter(
   return False
 
 
+def _broadphase_enabled(
+    geom_types: Tuple[GeomType, GeomType],
+    n_pairs: int,
+    max_pairs: int,
+) -> bool:
+  return (
+      GeomType.PLANE not in geom_types
+      and max_pairs > -1
+      and n_pairs > max_pairs
+  )
+
+
 def _collide_geoms(
     m: Model,
     d: Data,
@@ -241,35 +321,31 @@ def _collide_geoms(
   if not fn:
     return Contact.zero()
 
-  # group sol params by different candidate types
-  typ_cands = {}
-  for c in candidates:
-    typ = (c.ipair > -1, c.geomp > -1)
-    typ_cands.setdefault(typ, []).append(c)
+  geom1, geom2, params = get_params(m, candidates)
+  g1, g2, in_axes = _pair_info(m, d, geom1, geom2)
 
-  geom1, geom2, params = [], [], []
-  for (pair, priority), candidates in typ_cands.items():
-    geom1.extend([c.geom1 for c in candidates])
-    geom2.extend([c.geom2 for c in candidates])
-    if pair:
-      params.append(_pair_params(m, candidates))
-    elif priority:
-      params.append(_priority_params(m, candidates))
-    else:
-      params.append(_dynamic_params(m, candidates))
+  # Run a crude version of broadphase.
+  max_pairs = int(support.get_custom_numeric(m, 'max_geom_pairs'))
+  run_broadphase = _broadphase_enabled(geom_types, len(geom1), max_pairs)
+  n_pairs = max_pairs if run_broadphase else len(geom1)
+  if run_broadphase:
+    # broadphase over geom pairs, using bounding spheres
+    size1 = torch.max(m.geom_size[g1.geom_id], dim=-1)
+    size2 = torch.max(m.geom_size[g2.geom_id], dim=-1)
+    dists = torch.vmap(torch.linalg.norm)(g2.pos - g1.pos) - (size1 + size2)
+    _, idx = torch.lax.top_k(-dists, k=n_pairs)
+    g1, g2, params = tree_map(
+        lambda x, idx=idx: x[idx, ...], (g1, g2, params)
+    )
 
   # call contact function
-  g1, g2, in_axes = _pair_info(m, d, geom1, geom2)
-  res = torch.vmap(fn, in_axes)(g1, g2)
-  dist, pos, frame = torch.utils._pytree.tree_map(lambda *x: mujoco_torch._src.math.contatenate(x), *res)
+  res = torch.vmap(fn, in_axes=in_axes)(g1, g2)
+  dist, pos, frame = tree_map(concatenate, res)
 
-  params = torch.utils._pytree.tree_map(lambda *x: mujoco_torch._src.math.contatenate(x), *params)
-  geom1, geom2 = torch.tensor(geom1), torch.tensor(geom2)
   # repeat params by the number of contacts per geom pair
-  n_repeat = dist.shape[-1] // geom1.shape[0]
-  geom1, geom2, params = torch.utils._pytree.tree_map(
-      lambda x: x.repeat_interleave(n_repeat, dim=0),
-      (geom1, geom2, params),
+  geom1, geom2, params = tree_map(
+      lambda x: x.repeat_interleave(fn.ncon, dim=0),  # pytype: disable=attribute-error
+      (g1.geom_id, g2.geom_id, params),
   )
 
   con = Contact(
@@ -283,20 +359,8 @@ def _collide_geoms(
       solimp=params.solimp,
       geom1=geom1,
       geom2=geom2,
-      dim=np.array([]),
-      efc_address=np.array([]),
   )
   return con
-
-
-def _max_contact_points(m: Model) -> int:
-  """Returns the maximum number of contact points when set as a numeric."""
-  for i in range(m.nnumeric):
-    name = m.names[m.name_numericadr[i] :].decode('utf-8').split('\x00', 1)[0]
-    if name == 'max_contact_points':
-      return int(m.numeric_data[m.numeric_adr[i]])
-
-  return -1
 
 
 def collision_candidates(m: Union[Model, mujoco.MjModel]) -> CandidateSet:
@@ -309,8 +373,16 @@ def collision_candidates(m: Union[Model, mujoco.MjModel]) -> CandidateSet:
 
   body_pairs = []
   exclude_signature = set(m.exclude_signature)
+  geom_con = m.geom_contype | m.geom_conaffinity
+  b_start = m.body_geomadr
+  b_end = b_start + m.body_geomnum
+
   for b1 in range(m.nbody):
+    if not geom_con[b_start[b1]:b_end[b1]].any():
+      continue
     for b2 in range(b1, m.nbody):
+      if not geom_con[b_start[b2]:b_end[b2]].any():
+        continue
       signature = (b1 << 16) + (b2)
       if signature in exclude_signature:
         continue
@@ -319,12 +391,12 @@ def collision_candidates(m: Union[Model, mujoco.MjModel]) -> CandidateSet:
       body_pairs.append((b1, b2))
 
   for b1, b2 in body_pairs:
-    start1 = m.body_geomadr[b1]
-    end1 = m.body_geomadr[b1] + m.body_geomnum[b1]
-    for g1 in range(start1, end1):
-      start2 = m.body_geomadr[b2]
-      end2 = m.body_geomadr[b2] + m.body_geomnum[b2]
-      for g2 in range(start2, end2):
+    for g1 in range(b_start[b1], b_end[b1]):
+      if not geom_con[g1]:
+        continue
+      for g2 in range(b_start[b2], b_end[b2]):
+        if not geom_con[g2]:
+          continue
         mask = m.geom_contype[g1] & m.geom_conaffinity[g2]
         mask |= m.geom_contype[g2] & m.geom_conaffinity[g1]
         if mask != 0:
@@ -333,29 +405,31 @@ def collision_candidates(m: Union[Model, mujoco.MjModel]) -> CandidateSet:
   return candidate_set
 
 
-def ncon(m: Model) -> int:
+def ncon(m: Union[Model, mujoco.MjModel]) -> int:
   """Returns the number of contacts computed in MJX given a model."""
   if m.opt.disableflags & DisableBit.CONTACT:
     return 0
 
   candidates = collision_candidates(m)
-  max_count = _max_contact_points(m)
+  max_count = int(support.get_custom_numeric(m, 'max_contact_points'))
+  max_pairs = int(support.get_custom_numeric(m, 'max_geom_pairs'))
 
   count = 0
   for k, v in candidates.items():
     fn = get_collision_fn(k[0:2])
     if fn is None:
       continue
-    count += len(v) * fn.ncon  # pytype: disable=attribute-error
+    run_broadphase = _broadphase_enabled((k[0], k[1]), len(v), max_pairs)
+    n_pair = max_pairs if run_broadphase else len(v)
+    count += n_pair * fn.ncon  # pytype: disable=attribute-error
 
   return min(max_count, count) if max_count > -1 else count
 
 
 def collision(m: Model, d: Data) -> Data:
   """Collides geometries."""
-  ncon_ = ncon(m)
-  if ncon_ == 0:
-    return d.replace(contact=Contact.zero(), ncon=0)
+  if ncon(m) == 0:
+    return d.replace(contact=Contact.zero())
 
   candidate_set = collision_candidates(m)
 
@@ -367,21 +441,12 @@ def collision(m: Model, d: Data) -> Data:
   if not contacts:
     raise RuntimeError('No contacts found.')
 
-  contact = torch.utils._pytree.tree_map(lambda *x: mujoco_torch._src.math.contatenate(x), *contacts)
+  contact = tree_map(lambda *x: concatenate(x), *contacts)
 
-  max_contact_points = _max_contact_points(m)
+  max_contact_points = int(support.get_custom_numeric(m, 'max_contact_points'))
   if max_contact_points > -1 and contact.dist.shape[0] > max_contact_points:
     # get top-k contacts
-    _, idx = torch.lax.top_k(-contact.dist, k=max_contact_points)
-    contact = torch.utils._pytree.tree_map(lambda x, idx=idx: torch.take(x, idx, axis=0), contact)
+    _, idx = torch.top_k(-contact.dist, k=max_contact_points)
+    contact = tree_map(lambda x, idx=idx: x[idx], contact)
 
-  if ncon_ != contact.dist.shape[0]:
-    raise RuntimeError('Number of contacts does not match ncon.')
-
-  # TODO(robotics-simulation): move this logic to device_put
-  ns = d.ne + d.nf + d.nl
-  contact = contact.replace(efc_address=np.arange(ns, ns + ncon_ * 4, 4))
-  # TODO(robotics-simulation): add support for other friction dimensions
-  contact = contact.replace(dim=3 * np.ones(ncon_, dtype=np.int32))
-
-  return d.replace(contact=contact, ncon=ncon_)
+  return d.replace(contact=contact)

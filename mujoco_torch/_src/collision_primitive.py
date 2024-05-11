@@ -17,10 +17,13 @@
 from typing import Tuple
 
 import torch
+from torch.utils._pytree import tree_map
+
 from mujoco_torch._src import math
 # pylint: disable=g-importing-member
 from mujoco_torch._src.collision_base import Contact
 from mujoco_torch._src.collision_base import GeomInfo
+from mujoco_torch._src.math import concatenate
 
 
 # pylint: enable=g-importing-member
@@ -43,8 +46,8 @@ def plane_sphere(plane: GeomInfo, sphere: GeomInfo) -> Contact:
   """Calculates contact between a plane and a sphere."""
   n = plane.mat[:, 2]
   dist, pos = _plane_sphere(n, plane.pos, sphere.pos, sphere.size[0])
-  return torch.utils._pytree.tree_map(
-      lambda x: torch.unsqueeze(x, 0), (dist, pos, math.make_frame(n))
+  return tree_map(
+      lambda x: x.unsqueeze(0), (dist, pos, math.make_frame(n))
   )
 
 
@@ -63,7 +66,20 @@ def plane_capsule(plane: GeomInfo, cap: GeomInfo) -> Contact:
     dist = torch.unsqueeze(dist, 0)
     pos = torch.unsqueeze(pos, 0)
     contacts.append((dist, pos, frame))
-  return torch.utils._pytree.tree_map(lambda *x: mujoco_torch._src.math.contatenate(x), *contacts)
+  return tree_map(lambda *x: concatenate(x), *contacts)
+
+
+def plane_ellipsoid(plane: GeomInfo, ellipsoid: GeomInfo) -> Contact:
+  """Calculates one contact between an ellipsoid and a plane."""
+  n = plane.mat[:, 2]
+  size = ellipsoid.size
+  sphere_support = -math.normalize((ellipsoid.mat.T @ n) * size)
+  pos = ellipsoid.pos + ellipsoid.mat @ (sphere_support * size)
+  dist = torch.dot(n, pos - plane.pos)
+  pos = pos - n * dist * 0.5
+  return tree_map(
+      lambda x: x.unsqueeze(0), (dist, pos, math.make_frame(n))
+  )
 
 
 def _sphere_sphere(
@@ -80,8 +96,8 @@ def _sphere_sphere(
 def sphere_sphere(s1: GeomInfo, s2: GeomInfo) -> Contact:
   """Calculates contact between two spheres."""
   dist, pos, n = _sphere_sphere(s1.pos, s1.size[0], s2.pos, s2.size[0])
-  return torch.utils._pytree.tree_map(
-      lambda x: torch.unsqueeze(x, 0), (dist, pos, math.make_frame(n))
+  return tree_map(
+      lambda x: x.unsqueeze(0), (dist, pos, math.make_frame(n))
   )
 
 
@@ -93,8 +109,8 @@ def sphere_capsule(sphere: GeomInfo, cap: GeomInfo) -> Contact:
       cap.pos - segment, cap.pos + segment, sphere.pos
   )
   dist, pos, n = _sphere_sphere(sphere.pos, sphere.size[0], pt, cap.size[0])
-  return torch.utils._pytree.tree_map(
-      lambda x: torch.unsqueeze(x, 0), (dist, pos, math.make_frame(n))
+  return tree_map(
+      lambda x: x.unsqueeze(0), (dist, pos, math.make_frame(n))
   )
 
 
@@ -115,13 +131,14 @@ def capsule_capsule(cap1: GeomInfo, cap2: GeomInfo) -> Contact:
   )
   radius1, radius2 = cap1.size[0], cap2.size[0]
   dist, pos, n = _sphere_sphere(pt1, radius1, pt2, radius2)
-  return torch.utils._pytree.tree_map(
-      lambda x: torch.unsqueeze(x, 0), (dist, pos, math.make_frame(n))
+  return tree_map(
+      lambda x: x.unsqueeze(0), (dist, pos, math.make_frame(n))
   )
 
 # store ncon as function attributes
 plane_sphere.ncon = 1
 plane_capsule.ncon = 2
+plane_ellipsoid.ncon = 1
 sphere_sphere.ncon = 1
 sphere_capsule.ncon = 1
 capsule_capsule.ncon = 1

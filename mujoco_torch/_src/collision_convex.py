@@ -14,6 +14,7 @@
 # ==============================================================================
 """Convex collisions."""
 
+import functools
 from typing import Tuple
 
 import torch
@@ -147,8 +148,8 @@ def _closest_segment_triangle_points(
   mask = (distance == min_dist).T
   seg_pt = torch.tensor([seg_pt1, seg_pt2, seg_pt3, seg_pt4]) * mask
   tri_pt = torch.tensor([tri_pt1, tri_pt2, tri_pt3, tri_pt4]) * mask
-  seg_pt = torch.sum(seg_pt, axis=0) / torch.sum(mask)
-  tri_pt = torch.sum(tri_pt, axis=0) / torch.sum(mask)
+  seg_pt = torch.sum(seg_pt, dim=0) / torch.sum(mask)
+  tri_pt = torch.sum(tri_pt, dim=0) / torch.sum(mask)
 
   return seg_pt, tri_pt
 
@@ -161,7 +162,7 @@ def _manifold_points(
   a_idx = torch.argmax(dist_mask)
   a = poly[a_idx]
   # choose point b furthest from a
-  b_idx = (((a - poly) ** 2).sum(axis=1) + dist_mask).argmax()
+  b_idx = (((a - poly) ** 2).sum(dim=1) + dist_mask).argmax()
   b = poly[b_idx]
   # choose point c furthest along the axis orthogonal to (a-b)
   ab = torch.linalg.cross(poly_norm, a - b)
@@ -176,6 +177,223 @@ def _manifold_points(
   dist_ap = torch.abs(ap.dot(ac)) + dist_mask
   d_idx = torch.cat([dist_bp, dist_ap]).argmax() % poly.shape[0]
   return torch.tensor([a_idx, b_idx, c_idx, d_idx])
+
+
+def plane_convex(plane: GeomInfo, convex: GeomInfo) -> Contact:
+  """Calculates contacts between a plane and a convex object."""
+  vert = convex.vert
+
+  # get points in the convex frame
+  plane_pos = convex.mat.T @ (plane.pos - convex.pos)
+  n = convex.mat.T @ plane.mat[:, 2]
+  support = (plane_pos - vert) @ n
+  idx = _manifold_points(vert, support > 0, n)
+  pos = vert[idx]
+
+  # convert to world frame
+  pos = convex.pos + pos @ convex.mat.T
+  n = plane.mat[:, 2]
+
+  frame = torch.stack([math.make_frame(n)] * 4, dim=0)
+  unique = torch.tril(idx == idx[:, None]).sum(dim=1) == 1
+  dist = torch.where(unique, -support[idx], 1)
+  pos = pos - 0.5 * dist[:, None] * n
+  return dist, pos, frame
+
+
+def sphere_convex(sphere: GeomInfo, convex: GeomInfo) -> Contact:
+  """Calculates contact between a sphere and a convex object."""
+  faces = convex.face
+  normals = convex.facenorm
+
+  # Put sphere in convex frame.
+  sphere_pos = convex.mat.T @ (sphere.pos - convex.pos)
+
+  # Get support from face normals.
+  @torch.vmap
+  def get_support(faces, normal):
+    pos = sphere_pos - normal * sphere.size[0]
+    return torch.dot(pos - faces[0], normal)
+
+  support = get_support(faces, normals)
+  has_separating_axis = (support >= 0).any()
+
+  # Pick the face with the best separating axis.
+  best_idx = support.argmax()
+  face = faces[best_idx]
+  face_normal = normals[best_idx]
+
+  # Get closest point between the polygon face and the sphere center point.
+  # Project the sphere center point onto poly plane. If it's inside polygon
+  # side planes, then we're done.
+  pt = _project_pt_onto_plane(sphere_pos, face[0], face_normal)
+  edge_p0 = torch.roll(face, shifts=1, dims=0)
+  edge_p1 = face
+  side_normals = torch.vmap(torch.cross, (0, None))(
+      edge_p1 - edge_p0,
+      face_normal,
+  )
+  edge_dist = torch.vmap(
+      lambda plane_pt, plane_norm: (pt - plane_pt).dot(plane_norm)
+  )(edge_p0, side_normals)
+  pt_on_face = (edge_dist <= 0).all()  # lte to handle degenerate edges
+
+  # If the point is outside side planes, project onto the closest side plane
+  # that the point is in front of.
+  degenerate_edge = (side_normals == 0).all(1)
+  behind = edge_dist < 0.0
+  edge_dist = torch.where(degenerate_edge | behind, 1e12, edge_dist)
+  idx = edge_dist.argmin()
+  edge_pt = math.closest_segment_point(edge_p0[idx], edge_p1[idx], pt)
+  pt = torch.where(pt_on_face, pt, edge_pt)
+
+  # Get the normal, dist, and contact position.
+  pt_normal, d = math.normalize_with_norm(pt - sphere_pos)
+  # Ensure normal points towards convex centroid.
+  inside = torch.dot(pt, pt_normal) > 0
+  sign = torch.where(inside, -1, 1)
+  n = torch.where(pt_on_face | (d < 1e-6), -face_normal, sign * pt_normal)
+  d *= sign
+
+  spt = sphere_pos + n * sphere.size[0]
+  dist = torch.where(has_separating_axis, 1.0, d - sphere.size[0])
+  pos = (pt + spt) * 0.5
+
+  # Go back to world frame.
+  n = convex.mat @ n
+  pos = convex.mat @ pos + convex.pos
+
+  return tree_map(
+      lambda x: x.unsqueeze(0), (dist, pos, math.make_frame(n))
+  )
+
+
+def capsule_convex(cap: GeomInfo, convex: GeomInfo) -> Contact:
+  """Calculates contacts between a capsule and a convex object."""
+  # Get convex transformed normals, faces, and vertices.
+  faces = convex.face
+  normals = convex.facenorm
+
+  # Put capsule in convex frame.
+  cap_pos = convex.mat.T @ (cap.pos - convex.pos)
+  axis, length = cap.mat[:, 2], cap.size[1]
+  axis = convex.mat.T @ axis
+  seg = axis * length
+  cap_pts = torch.stack([
+      cap_pos - seg,
+      cap_pos + seg,
+  ])
+
+  # Get support from face normals.
+  @torch.vmap
+  def get_support(face, normal):
+    pts = cap_pts - normal * cap.size[0]
+    sup = torch.vmap(lambda x: torch.linalg.dot(x - face[0], normal))(pts)
+    return sup.min()
+
+  support = get_support(faces, normals)
+  has_support = (support < 0).all()
+
+  # Pick the face with minimal penetration.
+  best_idx = support.argmax()
+  face = faces[best_idx]
+  normal = normals[best_idx]
+
+  # Clip the segment against side planes and create two contact points against
+  # the face.
+  edge_p0 = torch.roll(face, shifts=1, dims=0)
+  edge_p1 = face
+  side_planes = torch.vmap(torch.cross, (0, None))(
+      edge_p1 - edge_p0,
+      normal,
+  )
+  cap_pts_clipped, mask = _clip_edge_to_planes(
+      cap_pts[0], cap_pts[1], edge_p0, side_planes
+  )
+  cap_pts_clipped = cap_pts_clipped - normal * cap.size[0]
+  face_pts = torch.vmap(_project_pt_onto_plane, (0, None, None))(
+      cap_pts_clipped, face[0], normal
+  )
+  # Create variables for the face contact.
+  pos = (cap_pts_clipped + face_pts) * 0.5
+  contact_normal = -torch.stack([normal] * 2, 0)
+  face_penetration = torch.where(
+      mask & has_support, torch.dot(face_pts - cap_pts_clipped, normal), -1
+  )
+
+  # Pick a potential shallow edge contact.
+  def get_edge_axis(edge):
+    edge_closest_pt, cap_closest_pt = math.closest_segment_to_segment_points(
+        edge[0], edge[1], cap_pts[0], cap_pts[1]
+    )
+    edge_dir = edge_closest_pt - cap_closest_pt
+    degenerate_edge_dir = torch.sum(edge_dir.pow(2)) < 1e-6
+    edge_axis, edge_dist = math.normalize_with_norm(edge_dir)
+    return (
+        edge_dist,
+        edge_axis,
+        degenerate_edge_dir,
+        edge_closest_pt,
+        cap_closest_pt,
+    )
+
+  edge = convex.vert[convex.edge]
+  # edge = jp.take(convex.vert, convex.edge, dim=0)
+  edge_face_normal = convex.edge_face_normal  # pytype: disable=attribute-error
+
+  res = torch.vmap(get_edge_axis)(edge.reshape(-1, 2, 3))
+  e_idx = abs(res[0]).argmin()
+  (
+      edge_dist,
+      edge_axis,
+      degenerate_edge_dir,
+      edge_closest_pt,
+      cap_closest_pt,
+  ) = tree_map(lambda x, i=e_idx: x[i], res)
+  # ) = tree_map(lambda x, i=e_idx: jp.take(x, i, dim=0), res)
+
+  edge_face_normals = edge_face_normal[e_idx]
+  edge_voronoi_front = ((edge_face_normals @ edge_axis) < 0).all()
+  shallow = ~degenerate_edge_dir & edge_voronoi_front
+  edge_penetration = torch.where(shallow, cap.size[0] - edge_dist, -1)
+
+  # Determine edge contact position.
+  edge_pos = (
+      edge_closest_pt + (cap_closest_pt + edge_axis * cap.size[0])
+  ) * 0.5
+  edge_dir_parallel_to_face = (
+      abs(edge_axis.dot(normal)) > 0.99
+  ) & ~degenerate_edge_dir
+  min_face_penetration = face_penetration.min()
+  has_edge_contact = (
+      (edge_penetration > 0)
+      # prefer edge contact if the edge is smaller than face penetration
+      & torch.where(
+          min_face_penetration > 0,
+          edge_penetration < min_face_penetration,
+          True,
+      )
+      # prefer face contact if the edge axis is parallel to the face normal
+      & ~edge_dir_parallel_to_face
+      # make sure we have a shallow contact
+      & edge_voronoi_front
+  )
+
+  # Get the contact info.
+  pos = torch.where(has_edge_contact, pos.at[0].set(edge_pos), pos)
+  n = torch.where(
+      has_edge_contact, contact_normal.at[0].set(edge_axis), contact_normal
+  )
+
+  # Go back to world frame.
+  pos = convex.pos + pos @ convex.mat.T
+  n = n @ convex.mat.T
+
+  dist = -torch.where(
+      has_edge_contact, torch.tensor([edge_penetration, -1]), face_penetration
+  )
+  frame = torch.vmap(math.make_frame)(n)
+  return dist, pos, frame
 
 
 def _project_pt_onto_plane(
@@ -299,7 +517,7 @@ def _clip(
     mask: True if a point is in the clipping polygon, False otherwise
   """
   # Get clipping edge points, edge planes, and edge normals.
-  clipping_p0 = torch.roll(clipping_poly, 1, axis=0)
+  clipping_p0 = torch.roll(clipping_poly, shifts=1, dims=0)
   clipping_plane_pts = clipping_p0
   clipping_p1 = clipping_poly
   clipping_plane_normals = torch.vmap(torch.linalg.cross, (0, None))(
@@ -308,7 +526,7 @@ def _clip(
   )
 
   # Get subject edge points, edge planes, and edge normals.
-  subject_edge_p0 = torch.roll(subject_poly, 1, axis=0)
+  subject_edge_p0 = torch.roll(subject_poly, shifts=1, dims=0)
   subject_plane_pts = subject_edge_p0
   subject_edge_p1 = subject_poly
   subject_plane_normals = torch.vmap(torch.linalg.cross, (0, None))(
@@ -353,7 +571,7 @@ def _create_contact_manifold(
     subject_poly: torch.Tensor,
     clipping_norm: torch.Tensor,
     subject_norm: torch.Tensor,
-    sep_axis: torch.Tensor,
+    sep_dim: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
   """Creates a contact manifold between two convex polygons.
 
@@ -365,7 +583,7 @@ def _create_contact_manifold(
     subject_poly: the subject polygon to clip contacts onto.
     clipping_norm: the clipping polygon normal.
     subject_norm: the subject polygon normal.
-    sep_axis: the separating axis
+    sep_dim: the separating axis
 
   Returns:
     tuple of dist, pos, and normal
@@ -386,9 +604,9 @@ def _create_contact_manifold(
 
   # Choose four contact points.
   best = _manifold_points(poly_ref, mask, clipping_norm)
-  contact_pts = torch.take(poly_ref, best, axis=0)
-  mask_pts = torch.take(mask, best, axis=0)
-  penetration_dir = torch.take(poly_incident, best, axis=0) - contact_pts
+  contact_pts = torch.take(poly_ref, best, dim=0)
+  mask_pts = torch.take(mask, best, dim=0)
+  penetration_dir = torch.take(poly_incident, best, dim=0) - contact_pts
   penetration = penetration_dir.dot(-clipping_norm)
 
   dist = torch.where(mask_pts, -penetration, torch.ones_like(penetration))
@@ -415,13 +633,17 @@ def _sat_hull_hull(
   We return both the edge and face contacts. Valid contacts can be checked with
   dist < 0. Resulting edge contacts should be preferred over face contacts.
 
+  This method checks all separating axes via a brute force support function, and
+  is thus costly to run over large meshes, but is more performant for smaller
+  meshes (boxes, tetrahedra, etc.).
+
   Args:
-    faces_a: An ndarray of hull A's polygon faces.
-    faces_b: An ndarray of hull B's polygon faces.
+    faces_a: Faces for hull A.
+    faces_b: Faces for hull B.
     vertices_a: Vertices for hull A.
     vertices_b: Vertices for hull B.
-    normals_a: Normal vectors for hull A's polygon faces.
-    normals_b: Normal vectors for hull B's polygon faces.
+    normals_a: Normal vectors for hull A faces.
+    normals_b: Normal vectors for hull B faces.
     unique_edges_a: Unique edges for hull A.
     unique_edges_b: Unique edges for hull B.
 
@@ -429,20 +651,26 @@ def _sat_hull_hull(
     tuple of dist, pos, and normal
   """
   # get the separating axes
-  edge_dir_a = unique_edges_a[:, 0] - unique_edges_a[:, 1]
-  edge_dir_b = unique_edges_b[:, 0] - unique_edges_b[:, 1]
+  v_norm = torch.vmap(math.normalize)
+  edge_dir_a = v_norm(unique_edges_a[:, 0] - unique_edges_a[:, 1])
+  edge_dir_b = v_norm(unique_edges_b[:, 0] - unique_edges_b[:, 1])
   edge_dir_a_r = torch.tile(edge_dir_a, reps=(unique_edges_b.shape[0], 1))
-  edge_dir_b_r = torch.repeat(edge_dir_b, repeats=unique_edges_a.shape[0], axis=0)
-  edge_edge_axes = torch.vmap(torch.linalg.cross)(edge_dir_a_r, edge_dir_b_r)
-  edge_edge_axes = torch.vmap(lambda x: math.normalize(x, axis=0))(
-      edge_edge_axes
+  edge_dir_b_r = torch.repeat(edge_dir_b, repeats=unique_edges_a.shape[0], dim=0)
+  edge_axes = torch.vmap(torch.linalg.cross)(edge_dir_a_r, edge_dir_b_r)
+  degenerate_edge_axes = (edge_axes**2).sum(1) < 1e-6
+  edge_axes = torch.vmap(lambda x: math.normalize(x, dim=0))(edge_axes)
+  n_norm = normals_a.shape[0] + normals_b.shape[0]
+  degenerate_axes = torch.concatenate(
+      [torch.tensor([False] * n_norm), degenerate_edge_axes]
   )
 
-  axes = torch.cat([normals_a, normals_b, edge_edge_axes])
+  axes = torch.cat([normals_a, normals_b, edge_axes])
 
   # for each separating axis, get the support
   @torch.vmap
-  def get_support(axis):
+  def get_support(axis, is_degenerate):
+    # the matmul here is more performant with vmap(dot)
+    # dot = functools.partial(torch.dot, precision=jax.lax.Precision.HIGH)
     support_a = torch.vmap(torch.dot, (None, 0))(axis, vertices_a)
     support_b = torch.vmap(torch.dot, (None, 0))(axis, vertices_b)
     dist1 = support_a.max() - support_b.min()
@@ -452,7 +680,7 @@ def _sat_hull_hull(
     dist = torch.where(~torch.all(axis == 0.0), dist, 1e6)  # degenerate axis
     return dist, sign
 
-  support, sign = get_support(axes)
+  support, sign = get_support(axes, degenerate_axes)
 
   # choose the best separating axis
   best_idx = torch.argmin(support)
@@ -461,8 +689,8 @@ def _sat_hull_hull(
   is_edge_contact = best_idx >= (normals_a.shape[0] + normals_b.shape[0])
 
   # get the (reference) face most aligned with the separating axis
-  dist_a = torch.vmap(torch.dot, (None, 0))(best_axis, normals_a)
-  dist_b = torch.vmap(torch.dot, (None, 0))(best_axis, normals_b)
+  dist_a = normals_a @ best_axis
+  dist_b = normals_b @ best_axis
   a_max = dist_a.argmax()
   b_max = dist_b.argmax()
   a_min = dist_a.argmin()
@@ -497,171 +725,149 @@ def _sat_hull_hull(
   return dist, pos, normal
 
 
-def plane_convex(plane: GeomInfo, convex: GeomInfo) -> Contact:
-  """Calculates contacts between a plane and a convex object."""
-  vert = convex.vert
-
-  # get points in the convex frame
-  plane_pos = convex.mat.T @ (plane.pos - convex.pos)
-  n = convex.mat.T @ plane.mat[:, 2]
-  support = (plane_pos - vert) @ n
-  idx = _manifold_points(vert, support > 0, n)
-  pos = vert[idx]
-
-  # convert to world frame
-  pos = convex.pos + pos @ convex.mat.T
-  n = plane.mat[:, 2]
-
-  frame = torch.stack([math.make_frame(n)] * 4, axis=0)
-  unique = torch.tril(idx == idx[:, None]).sum(axis=1) == 1
-  dist = torch.where(unique, -support[idx], 1)
-  return dist, pos, frame
+def _arcs_intersect(
+    a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, d: torch.Tensor
+) -> torch.Tensor:
+  """Tests if arcs AB and CD on the unit sphere intersect."""
+  ba, dc = torch.cross(b, a), torch.cross(d, c)
+  cba, dba = torch.dot(c, ba), torch.dot(d, ba)
+  adc, bdc = torch.dot(a, dc), torch.dot(b, dc)
+  return (cba * dba < 0) & (adc * bdc < 0) & (cba * bdc > 0)
 
 
-def sphere_convex(sphere: GeomInfo, convex: GeomInfo) -> Contact:
-  """Calculates contact between a sphere and a convex object."""
-  faces = torch.take(convex.vert, convex.face, axis=0)
-  normals = convex.facenorm
+def _sat_gaussmap(
+    centroid_a: torch.Tensor,
+    faces_a: torch.Tensor,
+    faces_b: torch.Tensor,
+    vertices_a: torch.Tensor,
+    vertices_b: torch.Tensor,
+    normals_a: torch.Tensor,
+    normals_b: torch.Tensor,
+    edges_a: torch.Tensor,
+    edges_b: torch.Tensor,
+    edge_face_normals_a: torch.Tensor,
+    edge_face_normals_b: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+  """Runs the Separating Axis Test for a pair of hulls.
 
-  # Put sphere in convex frame.
-  sphere_pos = convex.mat.T @ (sphere.pos - convex.pos)
+  Runs the separating axis test for all faces. Tests edge separating axes via
+  edge intersections on gauss maps for all edge pairs. h/t to Dirk Gregorius
+  for the implementation details and gauss map trick.
 
-  # Get support from face normals.
+  Args:
+    centroid_a: Centroid of hull A.
+    faces_a: Faces for hull A.
+    faces_b: Faces for hull B.
+    vertices_a: Vertices for hull A.
+    vertices_b: Vertices for hull B.
+    normals_a: Normal vectors for hull A faces.
+    normals_b: Normal vectors for hull B faces.
+    edges_a: Edges for hull A.
+    edges_b: Edges for hull B.
+    edge_face_normals_a: Face normals for edges in hull A.
+    edge_face_normals_b: Face normals for edges in hull B.
+
+  Returns:
+    tuple of dist, pos, and normal
+  """
+  # Handle face separating axes.
+  axes = torch.cat([normals_a, -normals_b])
+
   @torch.vmap
-  def get_support(faces, normal):
-    pos = sphere_pos - normal * sphere.size[0]
-    return torch.dot(pos - faces[0], normal)
+  def get_support(axis):
+    # the matmul here is more performant with vmap(dot)
+    # dot = functools.partial(torch.dot, precision=jax.lax.Precision.HIGH)
+    support_a = torch.vmap(torch.dot, (None, 0))(axis, vertices_a)
+    support_b = torch.vmap(torch.dot, (None, 0))(axis, vertices_b)
+    dist = support_a.max() - support_b.min()
+    separating = dist < 0
+    dist = torch.where(dist < 0, 1e6, dist)
+    return dist, separating
 
-  support = get_support(faces, normals)
+  support, separating = get_support(axes)
+  is_face_separating = separating.any()
 
-  # Pick the face with minimal penetration as long as it has support.
-  support = torch.where(support >= 0, -1e12, support)
-  best_idx = support.argmax()
-  face = faces[best_idx]
-  normal = normals[best_idx]
+  # choose the best separating axis
+  best_idx = support.argmin()
+  best_axis = axes[best_idx]
 
-  # Get closest point between the polygon face and the sphere center point.
-  # Project the sphere center point onto poly plane. If it's inside polygon
-  # edge normals, then we're done.
-  pt = _project_pt_onto_plane(sphere_pos, face[0], normal)
-  edge_p0 = torch.roll(face, 1, axis=0)
-  edge_p1 = face
-  edge_normals = torch.vmap(torch.linalg.cross, (0, None))(
-      edge_p1 - edge_p0,
-      normal,
-  )
-  edge_dist = torch.vmap(
-      lambda plane_pt, plane_norm: (pt - plane_pt).dot(plane_norm)
-  )(edge_p0, edge_normals)
-  inside = torch.all(edge_dist <= 0)  # lte to handle degenerate edges
+  # get the (reference) face most aligned with the separating axis
+  dist_a = normals_a @ best_axis
+  dist_b = normals_b @ -best_axis
+  face_a_idx = dist_a.argmax()
+  face_b_idx = dist_b.argmax()
 
-  # If the point is outside edge normals, project onto the closest edge plane
-  # that the point is in front of.
-  degenerate_edge = torch.all(edge_normals == 0, axis=1)
-  behind = edge_dist < 0.0
-  edge_dist = torch.where(degenerate_edge | behind, 1e12, edge_dist)
-  idx = edge_dist.argmin()
-  edge_pt = math.closest_segment_point(edge_p0[idx], edge_p1[idx], pt)
-
-  pt = torch.where(inside, pt, edge_pt)
-
-  # Get the normal, dist, and contact position.
-  n, d = math.normalize_with_norm(pt - sphere_pos)
-  spt = sphere_pos + n * sphere.size[0]
-  dist = d - sphere.size[0]
-  pos = (pt + spt) * 0.5
-
-  # Go back to world frame.
-  n = convex.mat @ n
-  pos = convex.mat @ pos + convex.pos
-
-  return torch.utils._pytree.tree_map(
-      lambda x: torch.unsqueeze(x, 0), (dist, pos, math.make_frame(n))
+  cond = best_idx < normals_a.shape[0]
+  ref_face = torch.where(cond, faces_a[face_a_idx], faces_b[face_b_idx])
+  incident_face = torch.where(cond, faces_b[face_b_idx], faces_a[face_a_idx])
+  ref_face_norm = torch.where(cond, normals_a[face_a_idx], normals_b[face_b_idx])
+  incident_face_norm = torch.where(
+      cond, normals_b[face_b_idx], normals_a[face_a_idx]
   )
 
-
-def capsule_convex(cap: GeomInfo, convex: GeomInfo) -> Contact:
-  """Calculates contacts between a capsule and a convex object."""
-  # Get convex transformed normals, faces, and vertices.
-  faces = torch.take(convex.vert, convex.face, axis=0)
-  normals = convex.facenorm
-
-  # Put capsule in convex frame.
-  cap_pos = convex.mat.T @ (cap.pos - convex.pos)
-  axis, length = cap.mat[:, 2], cap.size[1]
-  axis = convex.mat.T @ axis
-  seg = axis * length
-  cap_pts = torch.tensor([
-      cap_pos - seg,
-      cap_pos + seg,
-  ])
-
-  # Get support from face normals.
-  @torch.vmap
-  def get_support(face, normal):
-    pts = cap_pts - normal * cap.size[0]
-    sup = torch.vmap(lambda x: torch.dot(x - face[0], normal))(pts)
-    return sup.min()
-
-  support = get_support(faces, normals)
-  has_support = torch.all(support < 0)
-
-  # Pick the face with minimal penetration as long as it has support.
-  support = torch.where(support >= 0, -1e12, support)
-  best_idx = support.argmax()
-  face = faces[best_idx]
-  normal = normals[best_idx]
-
-  # Clip the edge against side planes and create two contact points against the
-  # face.
-  edge_p0 = torch.roll(face, 1, axis=0)
-  edge_p1 = face
-  edge_normals = torch.vmap(torch.linalg.cross, (0, None))(
-      edge_p1 - edge_p0,
-      normal,
-  )
-  cap_pts_clipped, mask = _clip_edge_to_planes(
-      cap_pts[0], cap_pts[1], edge_p0, edge_normals
-  )
-  cap_pts_clipped = cap_pts_clipped - normal * cap.size[0]
-  face_pts = torch.vmap(_project_pt_onto_plane, (0, None, None))(
-      cap_pts_clipped, face[0], normal
-  )
-  # Create variables for the face contact.
-  pos = (cap_pts_clipped + face_pts) * 0.5
-  norm = torch.stack([normal] * 2, 0)
-  penetration = torch.where(
-      mask & has_support, torch.dot(face_pts - cap_pts_clipped, normal), -1
+  dist, pos, normal = _create_contact_manifold(
+      ref_face,
+      incident_face,
+      ref_face_norm,
+      incident_face_norm,
+      -best_axis,
   )
 
-  # Get a potential edge contact.
-  edge_closest, cap_closest = torch.vmap(
-      math.closest_segment_to_segment_points, (0, 0, None, None)
-  )(edge_p0, edge_p1, cap_pts[0], cap_pts[1])
-  e_idx = ((edge_closest - cap_closest) ** 2).sum(axis=1).argmin()
-  cap_closest_pt, edge_closest_pt = cap_closest[e_idx], edge_closest[e_idx]
-  edge_axis = cap_closest_pt - edge_closest_pt
-  edge_axis, edge_dist = math.normalize_with_norm(edge_axis)
-  edge_pos = (
-      edge_closest_pt + (cap_closest_pt - edge_axis * cap.size[0])
-  ) * 0.5
-  edge_norm = edge_axis
-  edge_penetration = cap.size[0] - edge_dist
-  has_edge_contact = edge_penetration > 0
-
-  # Get the contact info.
-  pos = torch.where(has_edge_contact, pos.at[0].set(edge_pos), pos)
-  n = -torch.where(has_edge_contact, norm.at[0].set(edge_norm), norm)
-
-  # Go back to world frame.
-  pos = convex.pos + pos @ convex.mat.T
-  n = n @ convex.mat.T
-
-  dist = -torch.where(
-      has_edge_contact, penetration.at[0].set(edge_penetration), penetration
+  # Handle edge separating axes by checking all edge pairs.
+  a_idx = torch.arange(edges_a.shape[0]).repeat_interleave(edges_b.shape[0])
+  b_idx = torch.arange(edges_b.shape[0]).repeat_interleave(edges_a.shape[0], 0)
+  normal_a_1 = edge_face_normals_a[a_idx, 0]
+  normal_a_2 = edge_face_normals_a[a_idx, 1]
+  normal_b_1 = edge_face_normals_b[b_idx, 0]
+  normal_b_2 = edge_face_normals_b[b_idx, 1]
+  is_minkowski_face = torch.vmap(_arcs_intersect)(
+      normal_a_1, normal_a_2, -normal_b_1, -normal_b_2
   )
-  frame = torch.vmap(math.make_frame)(n)
-  return dist, pos, frame
+
+  # get distances
+  edge_a_dir = torch.vmap(math.normalize)(edges_a[:, 0] - edges_a[:, 1])[a_idx]
+  edge_b_dir = torch.vmap(math.normalize)(edges_b[:, 0] - edges_b[:, 1])[b_idx]
+  edges_a, edges_b = edges_a[a_idx], edges_b[b_idx]
+  edge_a_pt, edge_a_pt_2 = edges_a[:, 0], edges_a[:, 1]
+  edge_b_pt, edge_b_pt_2 = edges_b[:, 0], edges_b[:, 1]
+
+  def get_normals(a_dir, a_pt, b_dir):
+    edge_axis = torch.cross(a_dir, b_dir)
+    degenerate_edge_axis = torch.sum(edge_axis**2) < 1e-6
+    edge_axis = math.normalize(edge_axis)
+    # correct normal to point from a to b, object b is at the origin
+    sign = torch.where(torch.dot(edge_axis, a_pt - centroid_a) > 0.0, 1.0, -1.0)
+    return edge_axis * sign, degenerate_edge_axis
+
+  edge_axes, degenerate_edge_axes = torch.vmap(get_normals)(
+      edge_a_dir, edge_a_pt, edge_b_dir)
+  edge_dist = torch.vmap(torch.dot)(edge_axes, edge_b_pt - edge_a_pt)
+  # handle degenerate axis
+  edge_dist = torch.where(degenerate_edge_axes, -float("inf"), edge_dist)
+  # ensure edges create minkowski face
+  edge_dist = torch.where(is_minkowski_face, edge_dist, -float("inf"))
+
+  best_edge_idx = edge_dist.argmax()
+  best_edge_dist = edge_dist[best_edge_idx]
+  is_edge_contact = torch.where(
+      dist.max() < 0, best_edge_dist > dist.max() - 1e-6,
+      (best_edge_dist < 0) & ~torch.isinf(best_edge_dist)
+  )
+  is_edge_contact = is_edge_contact & ~is_face_separating
+  normal = torch.where(is_edge_contact, edge_axes[best_edge_idx], normal)
+  dist = torch.where(
+      is_edge_contact,
+      torch.tensor([best_edge_dist, 1, 1, 1]),
+      dist,
+  )
+  a_closest, b_closest = math.closest_segment_to_segment_points(
+      edge_a_pt[best_edge_idx], edge_a_pt_2[best_edge_idx],
+      edge_b_pt[best_edge_idx], edge_b_pt_2[best_edge_idx])
+  pos = torch.where(
+      is_edge_contact,
+      (0.5 * (a_closest + b_closest), (4, 1)).repeat_interleave(pos))
+
+  return dist, pos, normal
 
 
 def convex_convex(c1: GeomInfo, c2: GeomInfo) -> Contact:
@@ -669,12 +875,13 @@ def convex_convex(c1: GeomInfo, c2: GeomInfo) -> Contact:
   if c1.face is None or c2.face is None or c1.vert is None or c2.vert is None:
     raise AssertionError('Mesh info missing.')
   # pad face vertices so that we can broadcast between geom1 and geom2
-  s1, s2 = c1.face.shape[-1], c2.face.shape[-1]
-  if s1 < s2:
-    face = torch.pad(c1.face, ((0, 0), (0, s2 - s1)), 'edge')
+  # face has shape (n_face, n_vert, 3)
+  nvert1, nvert2 = c1.face.shape[1], c2.face.shape[1]
+  if nvert1 < nvert2:
+    face = torch.pad(c1.face, ((0, 0), (0, nvert2 - nvert1), (0, 0)), 'edge')
     c1 = c1.replace(face=face)
-  elif s2 < s1:
-    face = torch.pad(c2.face, ((0, 0), (0, s1 - s2)), 'edge')
+  elif nvert2 < nvert1:
+    face = torch.pad(c2.face, ((0, 0), (0, nvert1 - nvert2), (0, 0)), 'edge')
     c2 = c2.replace(face=face)
 
   # ensure that the first object has fewer verts
@@ -682,8 +889,8 @@ def convex_convex(c1: GeomInfo, c2: GeomInfo) -> Contact:
   if swapped:
     c1, c2 = c2, c1
 
-  faces1 = torch.take(c1.vert, c1.face, axis=0)
-  faces2 = torch.take(c2.vert, c2.face, axis=0)
+  faces1 = c1.face
+  faces2 = c2.face
 
   to_local_pos = c2.mat.T @ (c1.pos - c2.pos)
   to_local_mat = c2.mat.T @ c1.mat
@@ -695,19 +902,44 @@ def convex_convex(c1: GeomInfo, c2: GeomInfo) -> Contact:
   vertices1 = to_local_pos + c1.vert @ to_local_mat.T
   vertices2 = c2.vert
 
-  unique_edges1 = torch.take(vertices1, c1.edge, axis=0)
-  unique_edges2 = torch.take(vertices2, c2.edge, axis=0)
+  unique_edges1 = vertices1[c1.edge]
+  unique_edges2 = vertices2[c2.edge]
 
-  dist, pos, normal = _sat_hull_hull(
-      faces1,
-      faces2,
-      vertices1,
-      vertices2,
-      normals1,
-      normals2,
-      unique_edges1,
-      unique_edges2,
+  edges1 = vertices1[c1.edge]
+  edges2 = vertices2[c2.edge]
+
+  edge_face_normals1 = c1.edge_face_normal @ to_local_mat.T
+  edge_face_normals2 = c2.edge_face_normal
+
+  enable_bruteforce = (
+      unique_edges1.shape[0] * unique_edges2.shape[0]
+      < edges1[0].shape[0] * edges2[0].shape[0]
   )
+  if enable_bruteforce:
+    dist, pos, normal = _sat_bruteforce(
+        faces1,
+        faces2,
+        vertices1,
+        vertices2,
+        normals1,
+        normals2,
+        unique_edges1,
+        unique_edges2,
+    )
+  else:
+    dist, pos, normal = _sat_gaussmap(
+        to_local_pos,
+        faces1,
+        faces2,
+        vertices1,
+        vertices2,
+        normals1,
+        normals2,
+        edges1,
+        edges2,
+        edge_face_normals1,
+        edge_face_normals2,
+    )
 
   # Go back to world frame.
   pos = c2.pos + pos @ c2.mat.T
