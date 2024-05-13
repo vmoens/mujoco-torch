@@ -184,8 +184,6 @@ class TestScan:
         #         (carry, jnt_types, val)
         #     )
         def no_free(carry, jnt_types, val):
-            print(type(jnt_types))
-            print(jnt_types)
             if bool(jnt_types.numel() == 1 and jnt_types == JointType.FREE):
                 return torch.zeros_like(val)
             if carry is None or carry.numel() == 0:

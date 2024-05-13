@@ -13,7 +13,7 @@
 # limitations under the License.
 # ==============================================================================
 """Core smooth dynamics functions."""
-
+import scipy.linalg
 import mujoco
 from mujoco_torch._src import math
 from mujoco_torch._src import scan
@@ -26,6 +26,7 @@ from mujoco_torch._src.types import JointType
 from mujoco_torch._src.types import Model
 from mujoco_torch._src.types import TrnType
 # pylint: enable=g-importing-member
+from mujoco_torch._src.math import concatenate
 import numpy as np
 
 import torch
@@ -280,7 +281,8 @@ def crb(m: Model, d: Data) -> Data:
   crb_dof = crb_body[torch.tensor(m.dof_bodyid)]
   crb_cdof = torch.vmap(math.inert_mul)(crb_dof, d.cdof)
   qm = support.make_m(m, crb_cdof, d.cdof, m.dof_armature)
-  d = d.replace(qM=qm)
+  # d = d.replace(qM=qm)
+  d.qM = qm
 
   return d
 
@@ -289,8 +291,9 @@ def factor_m(m: Model, d: Data) -> Data:
   """Gets factorizaton of inertia-like matrix M, assumed spd."""
 
   if not support.is_sparse(m):
-    qh, _ = jax.scipy.linalg.cho_factor(d.qM)
-    d = d.replace(qLD=qh)
+    qh = torch.linalg.cholesky(d.qM, upper=True)
+    # d = d.replace(qLD=qh)
+    d.qLD = qh
     return d
 
   # build up indices for where we will do backwards updates over qLD
@@ -347,7 +350,8 @@ def solve_m(m: Model, d: Data, x: torch.Tensor) -> torch.Tensor:
   """Computes sparse backsubstitution:  x = inv(L'*D*L)*y ."""
 
   if not support.is_sparse(m):
-    return jax.scipy.linalg.cho_solve((d.qLD, False), x)
+    result = torch.cholesky_solve(x.unsqueeze(-1), d.qLD, upper=True).squeeze(-1)
+    return result
 
   depth = []
   for i in range(m.nv):

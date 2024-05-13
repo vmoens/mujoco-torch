@@ -81,11 +81,7 @@ class TestDevice:
     mx = device.device_put(m)
     dx = mujoco_torch.make_data(mx)
     d = mujoco.MjData(m)
-    print('dx.solver_niter', dx.solver_niter)
-    print('d.solver_niter', d.solver_niter)
     device.device_get_into(d, dx)
-    print('dx.solver_niter', dx.solver_niter)
-    print('d.solver_niter', d.solver_niter)
     _assert_eq(dx, d)
 
   @pytest.mark.parametrize("fname",['constraints.xml', 'pendula.xml'])

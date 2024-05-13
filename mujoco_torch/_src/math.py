@@ -211,8 +211,8 @@ def axis_angle_to_quat(dim: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
   """
   s, c = torch.sin(angle * 0.5), torch.cos(angle * 0.5)
   # return torch.insert(axis * s, 0, c)
-  out = axis * s
-  return torch.cat([torch.zeros_like(out[:1]), out])
+  out = dim * s
+  return torch.cat([c[None], out])
 
 
 def quat_integrate(q: torch.Tensor, v: torch.Tensor, dt: torch.Tensor) -> torch.Tensor:

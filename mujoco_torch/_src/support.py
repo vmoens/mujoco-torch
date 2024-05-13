@@ -193,7 +193,6 @@ def apply_ft(
   """Apply Cartesian force and torque."""
   jacp, jacr = jac(m, d, point, body_id)
   # [11, 7, 3] x [3] + [11, 3] x [3]
-  print("jacp.shape, jacr.shape, force.shape, torque.shape", jacp.shape, jacr.shape, force.shape, torque.shape)
   def inner(a, b):
     return a.dot(force) + b.dot(torque)
   result = torch.vmap(inner, (0, 0), (0, ))(jacp, jacr)
@@ -220,10 +219,6 @@ def xfrc_accumulate(m: Model, d: Data) -> torch.Tensor:
       d.xipos,
       torch.arange(m.nbody),
   )
-  print('d.xfrc_applied', d.xfrc_applied.shape)
-  print('d.xipos', d.xipos.shape)
-  print('m.nbody', m.nbody)
-  print('qfrc', qfrc.shape)
   return qfrc.sum(0)
 
 

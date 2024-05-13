@@ -427,8 +427,8 @@ def put_data(m: mujoco.MjModel, d: mujoco.MjData, device=None) -> types.Data:
     mujoco.mj_fullM(m, fields['qM'], d.qM)
     # TODO(erikfrey): derive L*L' from L'*D*L instead of recomputing
     try:
-      fields['qLD'], _ = scipy.linalg.cho_factor(fields['qM'])
-    except scipy.linalg.LinAlgError:
+      fields['qLD'] = torch.linalg.cholesky(torch.as_tensor(fields['qM']), upper=True)
+    except RuntimeError:
       # this happens when qM is empty or unstable simulation
       fields['qLD'] = np.zeros((m.nv, m.nv))
     fields['qLDiagInv'] = np.zeros(0)

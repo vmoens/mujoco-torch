@@ -63,7 +63,12 @@ def _q_bodyid(m: Model) -> torch.Tensor:
   """Returns the bodyid for each qpos adress."""
   q_bodyids = [torch.tensor([], dtype=torch.int64)]
   for jnt_type, jnt_bodyid in zip(m.jnt_type, m.jnt_bodyid):
-    width = {JointType.FREE: 7, JointType.BALL: 4}.get(jnt_type, 1)
+    if JointType.FREE == jnt_type:
+      width = 7
+    elif JointType.BALL == jnt_type:
+      width = 4
+    else:
+      width = 1
     q_bodyids.append(repeat(jnt_bodyid, width))
   return concatenate(q_bodyids)
 
@@ -250,9 +255,9 @@ def flat(
     def type_ids_fn(m, i):
       return {
         'b': i,
-        'j': torch.nonzero(m.jnt_bodyid == i)[:, 0],
-        'v': torch.nonzero(m.dof_bodyid == i)[:, 0],
-        'q': torch.nonzero(_q_bodyid(m) == i)[:, 0],
+        'j': torch.nonzero(m.jnt_bodyid == i, as_tuple=True)[0],
+        'v': torch.nonzero(m.dof_bodyid == i, as_tuple=True)[0],
+        'q': torch.nonzero(_q_bodyid(m) == i, as_tuple=True)[0],
       }
 
     def key_fn(type_ids):
@@ -332,7 +337,10 @@ def flat(
   for _, typ_ids in key_typ_ids:
     # only execute f if we would actually take something from the result
     if any(typ_ids[v].numel() > 0 for v in out_types):
-      f_args = [_take(arg, typ_ids[typ]) for arg, typ in zip(args, in_types)]
+
+      f_args = []
+      for arg, typ in zip(args, in_types):
+        f_args.append(_take(arg, typ_ids[typ]))
       # y = _nvmap(f, *f_args)
       y = _generic_vmap(f, *f_args)
       ys.append(y)

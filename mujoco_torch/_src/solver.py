@@ -13,6 +13,7 @@
 # limitations under the License.
 # ==============================================================================
 """Constraint solvers."""
+from torch._C._functorch import is_batchedtensor, _remove_batch_dim, _add_batch_dim, _vmap_increment_nesting
 
 import mujoco
 from mujoco_torch._src import constraint
@@ -154,10 +155,22 @@ def _while_loop_scan(cond_fun, body_fun, init_val, max_iter):
   def _fun(tup, it):
     val, cond = tup
     # When cond is met, we start doing no-ops.
+    # return jax.lax.cond(cond, _iter, lambda x: (x, False), val), it
     return torch.cond(cond, _iter, lambda x: (x, False), val), it
 
   init = (init_val, cond_fun(init_val))
-  return jax.lax.scan(_fun, init, None, length=max_iter)[0][0]
+  # return jax.lax.scan(_fun, init, None, length=max_iter)[0][0]
+  return scan(_fun, init, None, length=max_iter)[0][0]
+
+def scan(f, init, xs, length=None):
+  if xs is None:
+    xs = [None] * length
+  carry = init
+  ys = []
+  for x in xs:
+    carry, y = f(carry, x)
+    ys.append(y)
+  return carry, torch.stack(ys) if all(y is not None for y in ys) else None
 
 
 def _update_constraint(m: Model, d: Data, ctx: _Context) -> _Context:
@@ -220,8 +233,8 @@ def _update_gradient(m: Model, d: Data, ctx: _Context) -> _Context:
     active = (ctx.Jaref < 0).at[: ne + nf].set(True)
     h = (d.efc_J.T * d.efc_D * active) @ d.efc_J
     h = support.full_m(m, d) + h
-    h_ = jax.scipy.linalg.cho_factor(h)
-    mgrad = jax.scipy.linalg.cho_solve(h_, grad)
+    h_ = torch.linalg.cholesky(h, upper=True)
+    mgrad = torch.linalg.solve_triangular(h_, grad.unsqueeze(-1), upper=True).squeeze(-1)
   else:
     raise NotImplementedError(f'unsupported solver type: {m.opt.solver}')
 
@@ -322,15 +335,16 @@ def _linesearch(m: Model, d: Data, ctx: _Context) -> _Context:
 def solve(m: Model, d: Data) -> Data:
   """Finds forces that satisfy constraints using conjugate gradient descent."""
 
-  def cond(ctx: _Context) -> torch.Tensor:
+  def cond(ctx: _Context) -> jax.Tensor:
     improvement = _rescale(m, ctx.prev_cost - ctx.cost)
-    gradient = _rescale(m, math.norm(ctx.grad))
+    gradient = _rescale(m, torch.norm(ctx.grad))
 
     done = ctx.solver_niter >= m.opt.iterations
-    done |= improvement < m.opt.tolerance
-    done |= gradient < m.opt.tolerance
-
-    return ~done
+    done = done | (improvement < m.opt.tolerance)
+    done = done | (gradient < m.opt.tolerance)
+    while is_batchedtensor(done):
+      done = _remove_batch_dim(done, 1, 0, 0)
+    return not done.all().item()
 
   def body(ctx: _Context) -> _Context:
     ctx = _linesearch(m, d, ctx)
@@ -359,7 +373,9 @@ def solve(m: Model, d: Data) -> Data:
   if m.opt.iterations == 1:
     ctx = body(ctx)
   else:
-    ctx = jax.lax.while_loop(cond, body, ctx)
+    while cond(ctx):
+      ctx = body(ctx)
+    # ctx = jax.lax.while_loop(cond, body, ctx)
 
   d = d.replace(
       qacc_warmstart=ctx.qacc,

@@ -151,7 +151,6 @@ def fwd_actuation(m: Model, d: Data) -> Data:
       ctrl_act,
       group_by='u',
   )
-  print('force', force)
 
   if m.actuator_forcelimited.any():
     forcerange = torch.where(
@@ -161,7 +160,6 @@ def fwd_actuation(m: Model, d: Data) -> Data:
     )
     force = torch.clamp(force, forcerange[:, 0], forcerange[:, 1])
 
-  print('d.actuator_moment.T', d.actuator_moment.T)
   qfrc_actuator = d.actuator_moment.T @ force
 
   # clamp qfrc_actuator
@@ -176,14 +174,14 @@ def fwd_actuation(m: Model, d: Data) -> Data:
     )
     actfrcrange = actfrcrange[torch.tensor(ids)]
     qfrc_actuator = torch.clamp(qfrc_actuator, actfrcrange[:, 0], actfrcrange[:, 1])
-  d = d.update(dict(act_dot=act_dot, qfrc_actuator=qfrc_actuator))
+  d = d.replace(act_dot=act_dot, qfrc_actuator=qfrc_actuator)
   return d
 
 
 def fwd_acceleration(m: Model, d: Data) -> Data:
   """Add up all non-constraint forces, compute qacc_smooth."""
   qfrc_applied = d.qfrc_applied + support.xfrc_accumulate(m, d)
-  qfrc_smooth = d.qfrc_passive - d.qfrc_bias + d.qfrc_actuator + qfrc_applied
+  qfrc_smooth = d.qfrc_passive - d.qfrc_bias + d.qfrc_actuator + qfrc_applied # Ok!
   qacc_smooth = smooth.solve_m(m, d, qfrc_smooth)
   d = d.replace(qfrc_smooth=qfrc_smooth, qacc_smooth=qacc_smooth)
   return d
