@@ -13,7 +13,8 @@
 # limitations under the License.
 # ==============================================================================
 """Constraint solvers."""
-from torch._C._functorch import is_batchedtensor, _remove_batch_dim, _add_batch_dim, _vmap_increment_nesting
+from tensordict import tensorclass
+from torch._C._functorch import is_batchedtensor, _remove_batch_dim, get_unwrapped, _add_batch_dim, _vmap_increment_nesting
 
 import mujoco
 from mujoco_torch._src import constraint
@@ -21,7 +22,7 @@ from mujoco_torch._src import math
 from mujoco_torch._src import smooth
 from mujoco_torch._src import support
 # pylint: disable=g-importing-member
-from mujoco_torch._src.dataclasses import PyTreeNode
+from mujoco_torch._src.smooth import _set_at
 from mujoco_torch._src.types import Data
 from mujoco_torch._src.types import DisableBit
 from mujoco_torch._src.types import Model
@@ -30,7 +31,8 @@ from mujoco_torch._src.types import SolverType
 
 import torch
 
-class _Context(PyTreeNode):
+@tensorclass(autocast=True)
+class _Context:
   """Data updated during each solver iteration.
 
   Attributes:
@@ -53,7 +55,7 @@ class _Context(PyTreeNode):
   Jaref: torch.Tensor  # pylint: disable=invalid-name
   efc_force: torch.Tensor
   Ma: torch.Tensor  # pylint: disable=invalid-name
-  grad: torch.Tensor
+  gradient: torch.Tensor
   Mgrad: torch.Tensor  # pylint: disable=invalid-name
   search: torch.Tensor
   gauss: torch.Tensor
@@ -64,6 +66,9 @@ class _Context(PyTreeNode):
   @classmethod
   def create(cls, m: Model, d: Data, grad: bool = True) -> '_Context':
     jaref = d.efc_J @ d.qacc - d.efc_aref
+    print('jaref', jaref.shape)
+    print(d.efc_J.shape, d.qacc.shape, d.efc_aref.shape)
+
     # TODO(robotics-team): determine nv at which sparse mul is faster
     ma = support.mul_m(m, d, d.qacc)
     nv_0 = torch.zeros(m.nv)
@@ -73,7 +78,7 @@ class _Context(PyTreeNode):
         Jaref=jaref,
         efc_force=d.efc_force,
         Ma=ma,
-        grad=nv_0,
+        gradient=nv_0,
         Mgrad=nv_0,
         search=nv_0,
         gauss=0.0,
@@ -89,7 +94,8 @@ class _Context(PyTreeNode):
     return ctx
 
 
-class _LSPoint(PyTreeNode):
+@tensorclass(autocast=True)
+class _LSPoint:
   """Line search evaluation point.
 
   Attributes:
@@ -119,8 +125,8 @@ class _LSPoint(PyTreeNode):
 
     # TODO(robotics-team): change this to support friction constraints
     ne, nf, *_ = constraint.count_constraints(m)
-    active = ((ctx.Jaref + alpha * jv) < 0).at[:ne + nf].set(True)
-    quad = quad * active  # only active
+    active = _set_at(((ctx.Jaref + alpha * jv) < 0), slice(ne + nf), True)
+    quad = torch.vmap(torch.mul)(quad, active)  # only active
     quad_total = quad_gauss + torch.sum(quad, dim=0)
 
     cost = alpha * alpha * quad_total[2] + alpha * quad_total[1] + quad_total[0]
@@ -128,8 +134,8 @@ class _LSPoint(PyTreeNode):
     deriv_1 = 2 * quad_total[2] + (quad_total[2] == 0) * mujoco.mjMINVAL
     return _LSPoint(alpha=alpha, cost=cost, deriv_0=deriv_0, deriv_1=deriv_1)
 
-
-class _LSContext(PyTreeNode):
+@tensorclass(autocast=True)
+class _LSContext:
   """Data updated during each line search iteration.
 
   Attributes:
@@ -156,7 +162,14 @@ def _while_loop_scan(cond_fun, body_fun, init_val, max_iter):
     val, cond = tup
     # When cond is met, we start doing no-ops.
     # return jax.lax.cond(cond, _iter, lambda x: (x, False), val), it
-    return torch.cond(cond, _iter, lambda x: (x, False), val), it
+
+    if cond:
+      return _iter(val), it
+    return (val, False), it
+    # TODO: This breaks because torch.cond doesn't like tensorclass.
+    # # TODO: had to patch torch.cond here to validate tensor collection items (bc pytree.treeany is being
+    # #  escaped by tensorclass)
+    # return torch.cond(cond, _iter, lambda x: (x, False), (val,)), it
 
   init = (init_val, cond_fun(init_val))
   # return jax.lax.scan(_fun, init, None, length=max_iter)[0][0]
@@ -190,12 +203,18 @@ def _update_constraint(m: Model, d: Data, ctx: _Context) -> _Context:
 
   # only count active constraints
   ne, nf, *_ = constraint.count_constraints(m)
-  active = (ctx.Jaref < 0).at[:ne + nf].set(True)
+  print('ne, nf', ne, nf)
+  active = _set_at((ctx.Jaref < 0), slice(ne + nf), True)
+  print('active', active, active.shape, ctx.Jaref.shape)
 
   efc_force = d.efc_D * -ctx.Jaref * active
+  print('efc_force', efc_force)
   qfrc_constraint = d.efc_J.T @ efc_force
+  print('qfrc_constraint', qfrc_constraint)
   gauss = 0.5 * torch.dot(ctx.Ma - d.qfrc_smooth, ctx.qacc - d.qacc_smooth)
+  print('gauss', gauss)
   cost = 0.5 * torch.sum(d.efc_D * ctx.Jaref * ctx.Jaref * active) + gauss
+  print('cost', cost)
 
   ctx = ctx.replace(
       qfrc_constraint=qfrc_constraint,
@@ -230,7 +249,7 @@ def _update_gradient(m: Model, d: Data, ctx: _Context) -> _Context:
     mgrad = smooth.solve_m(m, d, grad)
   elif m.opt.solver == SolverType.NEWTON:
     ne, nf, *_ = constraint.count_constraints(m)
-    active = (ctx.Jaref < 0).at[: ne + nf].set(True)
+    active = _set_at((ctx.Jaref < 0), slice(ne + nf), True)
     h = (d.efc_J.T * d.efc_D * active) @ d.efc_J
     h = support.full_m(m, d) + h
     h_ = torch.linalg.cholesky(h, upper=True)
@@ -238,7 +257,7 @@ def _update_gradient(m: Model, d: Data, ctx: _Context) -> _Context:
   else:
     raise NotImplementedError(f'unsupported solver type: {m.opt.solver}')
 
-  ctx = ctx.replace(grad=grad, Mgrad=mgrad)
+  ctx = ctx.replace(gradient=grad, Mgrad=mgrad)
 
   return ctx
 
@@ -314,8 +333,10 @@ def _linesearch(m: Model, d: Data, ctx: _Context) -> _Context:
   p0 = point_fn(torch.tensor(0.0))
   lo = point_fn(p0.alpha - p0.deriv_0 / p0.deriv_1)
   lesser_fn = lambda x, y: torch.where(lo.deriv_0 < p0.deriv_0, x, y)
-  hi = torch.utils._pytree.tree_map(lesser_fn, p0, lo)
-  lo = torch.utils._pytree.tree_map(lesser_fn, lo, p0)
+  hi = p0.apply(lesser_fn, lo)
+  lo = lo.apply(lesser_fn, p0)
+  # hi = torch.utils._pytree.tree_map(lesser_fn, p0, lo)
+  # lo = torch.utils._pytree.tree_map(lesser_fn, lo, p0)
   ls_ctx = _LSContext(lo=lo, hi=hi, swap=torch.tensor(True), ls_iter=0)
   ls_ctx = _while_loop_scan(cond, body, ls_ctx, m.opt.ls_iterations)
 
@@ -335,25 +356,30 @@ def _linesearch(m: Model, d: Data, ctx: _Context) -> _Context:
 def solve(m: Model, d: Data) -> Data:
   """Finds forces that satisfy constraints using conjugate gradient descent."""
 
-  def cond(ctx: _Context) -> jax.Tensor:
+  def cond(ctx: _Context) -> torch.Tensor:
+    print('ctx.prev_cost', ctx.prev_cost, 'ctx.cost', ctx.cost)
     improvement = _rescale(m, ctx.prev_cost - ctx.cost)
-    gradient = _rescale(m, torch.norm(ctx.grad))
+    print('math.norm(ctx.gradient)', ctx.gradient)
+    gradient = _rescale(m, torch.norm(ctx.gradient))
 
     done = ctx.solver_niter >= m.opt.iterations
+    print('0 done', done, ctx.solver_niter)
     done = done | (improvement < m.opt.tolerance)
+    print('1 done', done, improvement)
     done = done | (gradient < m.opt.tolerance)
+    print('2 done', done, gradient)
     while is_batchedtensor(done):
-      done = _remove_batch_dim(done, 1, 0, 0)
+      done = get_unwrapped(done)
     return not done.all().item()
 
   def body(ctx: _Context) -> _Context:
     ctx = _linesearch(m, d, ctx)
-    prev_grad, prev_Mgrad = ctx.grad, ctx.Mgrad  # pylint: disable=invalid-name
+    prev_grad, prev_Mgrad = ctx.gradient, ctx.Mgrad  # pylint: disable=invalid-name
     ctx = _update_constraint(m, d, ctx)
     ctx = _update_gradient(m, d, ctx)
 
     # polak-ribiere:
-    beta = torch.dot(ctx.grad, ctx.Mgrad - prev_Mgrad)
+    beta = torch.dot(ctx.gradient, ctx.Mgrad - prev_Mgrad)
     beta = beta / torch.dot(prev_grad, prev_Mgrad).clamp_min(mujoco.mjMINVAL)
     beta = beta.clamp_min(0)
     search = -ctx.Mgrad + beta * ctx.search
@@ -373,8 +399,11 @@ def solve(m: Model, d: Data) -> Data:
   if m.opt.iterations == 1:
     ctx = body(ctx)
   else:
+    i = 0
     while cond(ctx):
+      i += 1
       ctx = body(ctx)
+    print('i', i)
     # ctx = jax.lax.while_loop(cond, body, ctx)
 
   d = d.replace(

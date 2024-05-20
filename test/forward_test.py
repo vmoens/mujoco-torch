@@ -78,7 +78,7 @@ class TestForward:
     m = test_util.load_test_file('constraints.xml')
     d = mujoco.MjData(m)
     # apply some control and xfrc input
-    d.ctrl = torch.tensor([-18, 0.59, 0.47])
+    d.ctrl = torch.tensor([-18, 0.59, 0.47], dtype=torch.get_default_dtype())
     d.xfrc_applied[0, 2] = 0.1  # torque
     d.xfrc_applied[1, 4] = 0.3  # linear force
     mujoco.mj_step(m, d, 20)  # get some dynamics going
@@ -88,8 +88,8 @@ class TestForward:
     mujoco.mj_step(m, d)
     _assert_attr_eq(d, dx, 'act')
     _assert_attr_eq(d, dx, 'time')
-    _assert_attr_eq(d, dx, 'qvel', tol=5e-4)
-    _assert_attr_eq(d, dx, 'qpos')
+    _assert_attr_eq(d, dx, 'qpos', tol=5e-4)
+    _assert_attr_eq(d, dx, 'qvel')
 
   def test_rk4(self):
     m = mujoco.MjModel.from_xml_string("""

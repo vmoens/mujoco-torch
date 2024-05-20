@@ -19,17 +19,51 @@ from mujoco_torch._src import math
 from mujoco_torch._src import scan
 from mujoco_torch._src import support
 # pylint: disable=g-importing-member
-from mujoco_torch._src.types import CamLightType
+from mujoco_torch._src.types import CamLightType, _unwrap_and_get_first
 from mujoco_torch._src.types import Data
 from mujoco_torch._src.types import DisableBit
 from mujoco_torch._src.types import JointType
 from mujoco_torch._src.types import Model
 from mujoco_torch._src.types import TrnType
 # pylint: enable=g-importing-member
-from mujoco_torch._src.math import concatenate
+from mujoco_torch._src.math import concatenate, tile
 import numpy as np
 
 import torch
+
+def _set_at(tensor, index, val):
+  # view = tensor[index]
+  # view.copy_(val)
+  if isinstance(index, tuple) and all(isinstance(idx, torch.Tensor) for idx in index):
+    if not isinstance(val, torch.Tensor):
+      return torch.index_put(tensor, index, torch.tensor(val, dtype=tensor.dtype))
+    return torch.index_put(tensor, index, val.to(tensor.dtype))
+  if isinstance(index, torch.Tensor):
+    return _set_at(tensor, (index.long(),), val)
+  index = _to_tensor_index(index, tensor.shape)
+  return _set_at(tensor, index, val)
+
+def _to_tensor_index(index, dim):
+  if isinstance(index, slice):
+    args = []
+    if index.start is not None:
+      args.append(index.start)
+    else:
+      args.append(0)
+    if index.stop is not None:
+      args.append(index.stop)
+    else:
+      args.append(dim[0])
+    if index.step is not None:
+      args.append(index.step)
+    return torch.arange(*args, dtype=torch.long)
+  if isinstance(index, (int, list)):
+    return torch.tensor(index, dtype=torch.long)
+  if isinstance(index, tuple):
+    return tuple(_to_tensor_index(idx, [dim[i]]) for i, idx in enumerate(index))
+  if isinstance(index, torch.Tensor):
+    return index.long()
+  raise NotImplementedError(type(index))
 
 def kinematics(m: Model, d: Data) -> Data:
   """Converts position/velocity from generalized coordinates to maximal."""
@@ -37,7 +71,6 @@ def kinematics(m: Model, d: Data) -> Data:
   def fn(carry, jnt_typs, jnt_pos, jnt_axis, qpos, qpos0, pos, quat):
     # calculate joint anchors, axes, body pos and quat in global frame
     # also normalize qpos while we're at it
-
     if carry is not None:
       _, _, _, parent_pos, parent_quat, _ = carry
       pos = parent_pos + math.rotate(pos, parent_quat)
@@ -47,6 +80,7 @@ def kinematics(m: Model, d: Data) -> Data:
 
     qpos_i = 0
     for i, jnt_typ in enumerate(jnt_typs):
+      jnt_typ = _unwrap_and_get_first(jnt_typ)
       if jnt_typ == JointType.FREE:
         anchor, axis = qpos[qpos_i : qpos_i + 3], torch.tensor([0.0, 0.0, 1.0])
       else:
@@ -57,11 +91,11 @@ def kinematics(m: Model, d: Data) -> Data:
       if jnt_typ == JointType.FREE:
         pos = qpos[qpos_i : qpos_i + 3]
         quat = math.normalize(qpos[qpos_i + 3 : qpos_i + 7])
-        qpos = qpos.at[qpos_i + 3 : qpos_i + 7].set(quat)
+        qpos = _set_at(qpos, slice(qpos_i + 3, qpos_i + 7), quat)
         qpos_i += 7
       elif jnt_typ == JointType.BALL:
         qloc = math.normalize(qpos[qpos_i : qpos_i + 4])
-        qpos = qpos.at[qpos_i : qpos_i + 4].set(qloc)
+        qpos = _set_at(qpos, slice(qpos_i, qpos_i + 4), qloc)
         quat = math.quat_mul(quat, qloc)
         pos = anchor - math.rotate(jnt_pos[i], quat)  # off-center rotation
         qpos_i += 4
@@ -101,7 +135,7 @@ def kinematics(m: Model, d: Data) -> Data:
 
   # TODO(erikfrey): confirm that quats are more performant for mjx than mats
   xipos, ximat = v_local_to_global(xpos, xquat, m.body_ipos, m.body_iquat)
-  d = d.replace(qpos=qpos, xanchor=xanchor, xdim=xaxis, xpos=xpos)
+  d = d.replace(qpos=qpos, xanchor=xanchor, xaxis=xaxis, xpos=xpos)
   d = d.replace(xquat=xquat, xmat=xmat, xipos=xipos, ximat=ximat)
 
   if m.ngeom:
@@ -133,16 +167,16 @@ def com_pos(m: Model, d: Data) -> Data:
   pos, mass = scan.body_tree(
       m, subtree_sum, 'bb', 'bb', d.xipos, m.body_mass, reverse=True
   )
-  cond = torch_tile(mass < mujoco.mjMINVAL, (3, 1)).T
+  cond = tile(mass < mujoco.mjMINVAL, (3, 1)).T
   # take maximum to avoid NaN in gradient of jp.where
-  subtree_com = pos / mass.clamp_min(mujoco.mjMINVAL)
+  subtree_com = torch.vmap(torch.div)(pos, mass.clamp_min(mujoco.mjMINVAL))
   subtree_com = torch.where(cond, d.xipos, subtree_com)
   d = d.replace(subtree_com=subtree_com)
 
   # map inertias to frame centered at subtree_com
   @torch.vmap
   def inert_com(inert, ximat, off, mass):
-    h = torch.linalg.cross(off, -torch.eye(3))
+    h = torch.vmap(lambda b: torch.linalg.cross(off, b))(-torch.eye(3, dtype=off.dtype))
     inert = math.matmul_unroll((ximat * inert), ximat.T)
     inert += math.matmul_unroll(h, h.T) * mass
     # cinert is triu(inert), mass * off, mass
@@ -162,17 +196,18 @@ def com_pos(m: Model, d: Data) -> Data:
 
     for i, jnt_typ in enumerate(jnt_typs):
       offset = root_com - xanchor[i]
+      jnt_typ = _unwrap_and_get_first(jnt_typ)
       if jnt_typ == JointType.FREE:
-        cdofs.append(torch.eye(3, 6, 3))  # free translation
-        cdofs.append(torch.vmap(dof_com_fn, in_axes=(0, None))(xmat.T, offset))
+        cdofs.append(torch.eye(3, 6).roll(3, 1))  # free translation
+        cdofs.append(torch.vmap(dof_com_fn, (0, None))(xmat.T, offset))
       elif jnt_typ == JointType.BALL:
-        cdofs.append(torch.vmap(dof_com_fn, in_axes=(0, None))(xmat.T, offset))
+        cdofs.append(torch.vmap(dof_com_fn, (0, None))(xmat.T, offset))
       elif jnt_typ == JointType.HINGE:
         cdof = dof_com_fn(xaxis[i], offset)
-        cdofs.append(torch.expand_dims(cdof, 0))
+        cdofs.append(torch.unsqueeze(cdof, 0))
       elif jnt_typ == JointType.SLIDE:
         cdof = concatenate((torch.zeros((3,)), xaxis[i]))
-        cdofs.append(torch.expand_dims(cdof, 0))
+        cdofs.append(torch.unsqueeze(cdof, 0))
       else:
         raise RuntimeError(f'unrecognized joint type: {jnt_typ}')
 
@@ -205,7 +240,7 @@ def camlight(m: Model, d: Data) -> Data:
   is_target_cam = (m.cam_mode == CamLightType.TARGETBODY) | (
       m.cam_mode == CamLightType.TARGETBODYCOM
   )
-  cam_mode = np.where(
+  cam_mode = torch.where(
       is_target_cam & (m.cam_targetbodyid < 0), CamLightType.FIXED, m.cam_mode
   )
 
@@ -275,7 +310,7 @@ def crb(m: Model, d: Data) -> Data:
     return crb_body
 
   crb_body = scan.body_tree(m, crb_fn, 'b', 'b', d.cinert, reverse=True)
-  crb_body = crb_body.at[0].set(0.0)
+  crb_body = _set_at(crb_body, 0, 0.0)
   d = d.replace(crb=crb_body)
 
   crb_dof = crb_body[torch.tensor(m.dof_bodyid)]
@@ -324,14 +359,14 @@ def factor_m(m: Model, d: Data) -> Data:
 
     for (b, e, madr_d, madr_ij) in updates:
       width = e - b
-      rows.append(np.arange(madr_ij, madr_ij + width))
-      madr_ijs.append(np.full((width,), madr_ij))
-      pivots.append(np.full((width,), madr_d))
-      out.append(np.arange(b, e))
-    rows = np.concatenate(rows)
-    madr_ijs = np.concatenate(madr_ijs)
-    pivots = np.concatenate(pivots)
-    out = np.concatenate(out)
+      rows.append(torch.arange(madr_ij, madr_ij + width))
+      madr_ijs.append(torch.full((width,), madr_ij))
+      pivots.append(torch.full((width,), madr_d))
+      out.append(torch.arange(b, e))
+    rows = concatenate(rows)
+    madr_ijs = concatenate(madr_ijs)
+    pivots = concatenate(pivots)
+    out = concatenate(out)
 
     # apply the update batch
     qld = qld.at[out].add(-(qld[madr_ijs] / qld[pivots]) * qld[rows])
@@ -339,7 +374,7 @@ def factor_m(m: Model, d: Data) -> Data:
     # qld = qld.at[dof_madr].set(jp.maximum(qld[dof_madr], _MJ_MINVAL))
 
   qld_diag = qld[m.dof_Madr]
-  qld = (qld / qld[torch.tensor(madr_ds)]).at[m.dof_Madr].set(qld_diag)
+  qld = (qld / _set_at(qld[torch.tensor(madr_ds)], m.dof_Madr, qld_diag))
 
   d = d.replace(qLD=qld, qLDiagInv=1 / qld_diag)
 
@@ -388,15 +423,19 @@ def com_vel(m: Model, d: Data) -> Data:
 
   # forward scan down tree: accumulate link center of mass velocity
   def fn(parent, jnt_typs, cdof, qvel):
+    # TODO: capture behaviour when qvel has no element (not to run an empty code)
     cvel = torch.zeros((6,)) if parent is None else parent[0]
 
-    cross_fn = torch.vmap(math.motion_cross, in_axes=(None, 0))
-    cdof_x_qvel = cdof * qvel
+    cross_fn = torch.vmap(math.motion_cross, (None, 0))
+    # TODO: jax deals better with tensors with an null shape. Here, vmap fails with tensors with shape (1, 0, 6) and (1, 0)
+    # cdof_x_qvel = torch.vmap(torch.mul)(cdof, qvel)
+    cdof_x_qvel = cdof * qvel.unsqueeze(-1).expand_as(cdof)
 
     dof_beg = 0
     cdof_dots = []
     for jnt_typ in jnt_typs:
       dof_end = dof_beg + JointType(jnt_typ).dof_width()
+      jnt_typ = _unwrap_and_get_first(jnt_typ)
       if jnt_typ == JointType.FREE:
         cvel += torch.sum(cdof_x_qvel[:3], dim=0)
         cdof_ang_dot = cross_fn(cvel, cdof[3:])
@@ -435,7 +474,8 @@ def rne(m: Model, d: Data) -> Data:
       else:
         cacc = concatenate((torch.zeros((3,)), -m.opt.gravity))
 
-    cacc += torch.sum(cdof_dot * qvel, dim=0)
+    # TODO: find a better way to expand qvel
+    cacc = cacc + (cdof_dot * qvel.unsqueeze(-1).expand_as(cdof_dot)).sum(dim=0)
 
     return cacc
 
@@ -465,8 +505,8 @@ def rne(m: Model, d: Data) -> Data:
 
 def _site_dof_mask(m: Model) -> np.ndarray:
   """Creates a dof mask for site transmissions."""
-  mask = np.ones((m.nu, m.nv))
-  for i in torch.nonzero(m.actuator_trnid[:, 1] != -1)[0]:
+  mask = torch.ones((m.nu, m.nv))
+  for i in torch.nonzero(m.actuator_trnid[:, 1] != -1, as_tuple=True)[0]:
     id_, refid = m.actuator_trnid[i]
     # intialize last dof address for each body
     b0 = m.body_weldid[m.site_bodyid[id_]]
@@ -511,6 +551,8 @@ def transmission(m: Model, d: Data) -> Data:
       site_xmat,
       site_quat,
   ):
+    trntype = _unwrap_and_get_first(trntype)
+    jnt_typ = _unwrap_and_get_first(jnt_typ)
     if trntype == TrnType.JOINT:
       if jnt_typ == JointType.FREE:
         length = torch.zeros(1)
@@ -528,7 +570,7 @@ def transmission(m: Model, d: Data) -> Data:
       else:
         raise RuntimeError(f'unrecognized joint type: {JointType(jnt_typ)}')
 
-      moment = torch.zeros((m.nv,)).at[m_j].set(moment)
+      moment = _set_at(torch.zeros((m.nv,)), m_j, moment)
     elif trntype == TrnType.SITE:
       length = torch.zeros(1)
       id_, refid = torch.tensor(m.site_bodyid)[trnid]
@@ -561,13 +603,16 @@ def transmission(m: Model, d: Data) -> Data:
       'uuujjquusss',
       'uu',
       m.actuator_trntype,
-      torch.tensor(m.actuator_trnid),
+      m.actuator_trnid,
+    # torch.tensor(m.actuator_trnid),
       m.actuator_gear,
       m.jnt_type,
-      torch.tensor(m.jnt_dofadr),
+      m.jnt_dofadr,
+      # torch.tensor(m.jnt_dofadr),
       d.qpos,
       has_refsite,
-      torch.tensor(site_dof_mask),
+      site_dof_mask,
+      # torch.tensor(site_dof_mask),
       d.site_xpos,
       d.site_xmat,
       site_quat,

@@ -22,13 +22,26 @@ import mujoco
 import numpy as np
 import tensordict
 
+from torch._C._functorch import is_batchedtensor, _remove_batch_dim, _add_batch_dim, _vmap_increment_nesting, current_level, maybe_get_bdim, get_unwrapped
+def _unwrap_batched(tensor: torch.Tensor) -> torch.Tensor:
+  while is_batchedtensor(tensor):
+    tensor = get_unwrapped(tensor)
+  return tensor
 
+def _unwrap_and_get_first(tensor: torch.Tensor) -> torch.Tensor:
+  # TODO: this hack could be avoided if the tensorclass was properly typed
+  tensor = _unwrap_batched(tensor)
+  tensor = tensor.reshape(-1)
+  assert tensor.unique().numel()==1
+  return tensor[0].item()
+
+torch.set_default_dtype(torch.double)
 class AutoConvertIntEnum(enum.IntEnum):
 
   @classmethod
   def _missing_(cls, value):
     if isinstance(value, torch.Tensor):
-      return cls(value.item())
+      return cls(_unwrap_and_get_first(value))
     return super()._missing_(value)
 
 class AutoConvertIntFlag(enum.IntFlag):
@@ -36,7 +49,7 @@ class AutoConvertIntFlag(enum.IntFlag):
   @classmethod
   def _missing_(cls, value):
     if isinstance(value, torch.Tensor):
-      return cls(value.item())
+      return cls(_unwrap_and_get_first(value))
     return super()._missing_(value)
 
 
@@ -545,6 +558,7 @@ class Model:
   dof_damping: torch.Tensor
   dof_invweight0: torch.Tensor
   dof_M0: torch.Tensor  # pylint:disable=invalid-name
+  # TODO: make int / array / list?
   geom_type: NonVmappableTensor
   geom_contype: NonVmappableTensor
   geom_conaffinity: NonVmappableTensor

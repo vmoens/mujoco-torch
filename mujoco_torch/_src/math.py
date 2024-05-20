@@ -15,7 +15,7 @@
 """Some useful math functions."""
 import functools
 from typing import Optional, Tuple, Union
-
+import torch._numpy
 import torch
 from torch._functorch import vmap as vmap_module
 def matmul_unroll(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -37,9 +37,9 @@ def matmul_unroll(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
       for k in range(a.shape[1]):
         s += a[i, k] * b[k, j]
       row.append(s)
-    c.append(row)
+    c.append(torch.stack(row))
 
-  return torch.tensor(c)
+  return torch.stack(c)
 
 
 def norm(
@@ -153,12 +153,12 @@ def quat_mul(u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
   ])
 
 
-def quat_mul_axis(q: torch.Tensor, dim: torch.Tensor) -> torch.Tensor:
+def quat_mul_axis(q: torch.Tensor, axis: torch.Tensor) -> torch.Tensor:
   """Multiplies a quaternion and an axis.
 
   Args:
     q: (4,) quaternion (w,x,y,z)
-    dim: (3,) axis (x,y,z)
+    axis: (3,) axis (x,y,z)
 
   Returns:
     A quaternion q * axis
@@ -380,21 +380,27 @@ def closest_segment_to_segment_points(
 
   return best_a, best_b
 
-def concatenate(data):
-  """Equivalent of jax.concatenate for PyTorch."""
-  if isinstance(data, torch.Tensor):
-    return data.flatten(0, 1)
-  return torch.cat(data)
+concatenate = torch._numpy._funcs_impl.concatenate
+# def concatenate(data):
+#   """Equivalent of jax.concatenate for PyTorch."""
+#   if isinstance(data, torch.Tensor):
+#     return data.flatten(0, 1)
+#   return torch.cat(data)
 
-def repeat(a, repeats, dim=None):
-  return torch.repeat_interleave(a, repeats, dim=dim)
-def tile(A, reps):
-  if isinstance(reps, int):
-    reps = (reps,) * A.ndim
-  return torch.tile(A, reps)
-def pad(*args, **kwargs):
-  return torch.nn.functional.pad(*args, **kwargs)
+repeat = torch._numpy._funcs_impl.repeat
+# def repeat(a, repeats, dim=None):
+#   return torch.repeat_interleave(a, repeats, dim=dim)
 
+tile = torch._numpy._funcs_impl.tile
+# def tile(A, reps):
+#   if isinstance(reps, int):
+#     reps = (reps,) * A.ndim
+#   return torch.tile(A, reps)
+pad = torch._numpy._funcs_impl.pad
+# def pad(*args, **kwargs):
+#   return torch.nn.functional.pad(*args, **kwargs)
+
+# append = torch._numpy._funcs_impl.append
 def append(arr, values, dim=None):
   values = torch.as_tensor(values)
   if dim is None:
@@ -408,17 +414,20 @@ def hstack_single(tensor):
     return tensor.flatten(0, 1)
   return tensor.transpose(0, 1).flatten(1, 2)
 
-def take(tensor, indices, dim=None):
-  if dim is None:
-    dim = 0
-    tensor = tensor.reshape(-1)
-  return torch.gather(tensor, dim, indices)
-def hstack(tensors):
-  if isinstance(tensors, torch.Tensor):
-    return hstack_single(tensors)
-  if tensors[0].ndim == 1:
-    return torch.cat(tensors)
-  return torch.cat(tensors, 1)
+take = torch._numpy._funcs_impl.take
+# def take(tensor, indices, dim=None):
+#   if dim is None:
+#     dim = 0
+#     tensor = tensor.reshape(-1)
+#   return torch.gather(tensor, dim, indices)
+
+hstack = torch._numpy._funcs_impl.hstack
+# def hstack(tensors):
+#   if isinstance(tensors, torch.Tensor):
+#     return hstack_single(tensors)
+#   if tensors[0].ndim == 1:
+#     return torch.cat(tensors)
+#   return torch.cat(tensors, 1)
 
 class _remove_batch_dim_decorator:
   def __init__(self):

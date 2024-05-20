@@ -19,7 +19,7 @@ from mujoco_torch._src.collision_driver import collision
 from mujoco_torch._src.constraint import make_constraint
 from mujoco_torch._src.device import device_get_into
 from mujoco_torch._src.device import device_put
-from mujoco_torch._src.forward import forward
+from mujoco_torch._src.forward import forward, rungekutta4
 from mujoco_torch._src.forward import step, fwd_actuation, fwd_acceleration, euler
 from mujoco_torch._src.io import make_data, put_model, put_data
 from mujoco_torch._src.passive import passive

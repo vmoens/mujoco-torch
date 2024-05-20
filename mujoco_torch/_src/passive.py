@@ -21,6 +21,8 @@ import torch
 from mujoco_torch._src import math
 from mujoco_torch._src import scan
 from mujoco_torch._src import support
+from mujoco_torch._src.math import concatenate
+from mujoco_torch._src.smooth import _set_at
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import Data
 from mujoco_torch._src.types import DisableBit
@@ -88,8 +90,8 @@ def passive(m: Model, d: Data) -> Data:
       qs = qpos_spring[qpos_i : qpos_i + jnt_typ.qpos_width()]
       qfrc = torch.zeros(jnt_typ.dof_width())
       if jnt_typ == JointType.FREE:
-        qfrc = qfrc.at[:3].set(-stiffness[i] * (q[:3] - qs[:3]))
-        qfrc = qfrc.at[3:6].set(-stiffness[i] * math.quat_sub(q[3:7], qs[3:7]))
+        qfrc = _set_at(qfrc, slice(3), -stiffness[i] * (q[:3] - qs[:3]))
+        qfrc = _set_at(qfrc, slice(3, 6), -stiffness[i] * math.quat_sub(q[3:7], qs[3:7]))
       elif jnt_typ == JointType.BALL:
         qfrc = -stiffness[i] * math.quat_sub(q, qs)
       elif jnt_typ in (

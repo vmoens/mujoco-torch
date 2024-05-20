@@ -20,7 +20,7 @@ import functorch.dim
 from functorch.dim import dims
 
 # pylint: disable=g-importing-member
-from mujoco_torch._src.types import JointType
+from mujoco_torch._src.types import JointType, _unwrap_and_get_first
 from mujoco_torch._src.types import Model
 from mujoco_torch._src.types import TrnType, is_leaf_vmap
 # pylint: enable=g-importing-member
@@ -36,6 +36,8 @@ Y = TypeVar('Y')
 
 # TODO(erikfrey): re-check if this really helps perf
 def _take(obj: Y, idx: torch.Tensor) -> Y:
+  if not obj.numel():
+    return obj.new_zeros((0, *obj.shape[1:]))
   idx = idx.to(torch.int64)
   if isinstance(obj, (torch.Tensor, functorch.dim.Tensor)):
     return obj[idx]
@@ -77,6 +79,7 @@ def _q_jointid(m: Model) -> torch.Tensor:
   """Returns the jointid for each qpos adress."""
   q_jointid = [torch.tensor([], dtype=torch.int64)]
   for i, jnt_type in enumerate(m.jnt_type):
+    jnt_type = _unwrap_and_get_first(jnt_type)
     width = {JointType.FREE: 7, JointType.BALL: 4}.get(jnt_type, 1)
     q_jointid.append(torch.full((width,), i))
   return concatenate(q_jointid)
@@ -86,9 +89,9 @@ def _index(haystack: torch.Tensor, needle: torch.Tensor) -> torch.Tensor:
   """Returns indexes in haystack for elements in needle."""
   idx = torch.argsort(haystack)
   sorted_haystack = haystack[idx]
-  # sorted_idx = np.searchsorted(sorted_haystack.numpy(), needle.numpy())
-  sorted_idx = torch.searchsorted(sorted_haystack, needle)
-  idx = take(idx, indices=sorted_idx) # mode='clip')
+  sorted_idx = torch.as_tensor(np.searchsorted(sorted_haystack.numpy(), needle.numpy()))
+  # sorted_idx = torch.searchsorted(sorted_haystack, needle)
+  idx = take(idx, indices=sorted_idx.clamp_max(idx.shape[0])) # mode='clip')
   idx[haystack[idx] != needle] = -1
 
   return idx
@@ -103,22 +106,28 @@ def _generic_vmap(f: Callable[..., Y], *args, is_leaf=is_leaf_vmap, take_first_e
     # return f(*(arg[d0] for arg in args))
     def convert(arg):
       if not is_leaf(arg):
-        if isinstance(arg, torch.Tensor):
+        if isinstance(arg, torch.Tensor) and arg.shape[0]:
           # TODO: optimize this
-          if arg.unique().numel() > 1:
-            return None, torch.Tensor(arg)
-          else:
-            return torch.Tensor(arg[0]), None
+          # if arg.unique().numel() > 1:
+          return None, torch.Tensor(arg)
+          # else:
+          #   return torch.Tensor(arg[0]), None
         # put the arg in the non-vmappable group
         return arg, None
+      elif not arg.shape[0]:
+        return arg, None
       return None, arg
-    non_vmap_args, args = zip(*(convert(arg) for arg in args), strict=True)
+    flat_args, tree_spec = torch.utils._pytree.tree_flatten(args)
+    non_vmap_flat_args, flat_args = zip(*(convert(arg) for arg in flat_args), strict=True)
+    non_vmap_args = torch.utils._pytree.tree_unflatten(non_vmap_flat_args, tree_spec)
+    args = torch.utils._pytree.tree_unflatten(flat_args, tree_spec)
   else:
     non_vmap_args, args = zip(*((torch.tensor(a), None) if not is_leaf(a) else (None, a) for a in args), strict=True)
 
   # remove empty args that we should not vmap over
-  args = tree_map(lambda vmap_arg: vmap_arg if vmap_arg is not None and vmap_arg.shape[0] else None, args)
-  in_axes = [None if a is None else 0 for a in args]
+  # args = tree_map(lambda vmap_arg: vmap_arg if vmap_arg is not None and vmap_arg.shape[0] else None, args)
+
+  in_axes = tree_map(lambda a: None if a is None else 0, args)
 
   def outer_f(*vmap_args, non_vmap_args=non_vmap_args):
     args = [non_vmap_arg if vmap_arg is None else vmap_arg for vmap_arg, non_vmap_arg in zip(vmap_args, non_vmap_args, strict=True)]
@@ -284,11 +293,10 @@ def flat(
       v, q = torch.tensor([-1]), torch.tensor([-1])
       if m.actuator_trntype[i] == TrnType.JOINT:
         # v/q are associated with the joint transmissions only
-        v = torch.nonzero(m.dof_jntid == typ_ids['j'])[:, 0]
-        q = torch.nonzero(_q_jointid(m) == typ_ids['j'])[:, 0]
+        v = torch.nonzero(m.dof_jntid == typ_ids['j'], as_tuple=True)[0]
+        q = torch.nonzero(_q_jointid(m) == typ_ids['j'], as_tuple=True)[0]
 
       typ_ids.update({'v': v, 'q': q})
-
       return typ_ids
 
     def key_fn(type_ids):
@@ -339,7 +347,7 @@ def flat(
     if any(typ_ids[v].numel() > 0 for v in out_types):
 
       f_args = []
-      for arg, typ in zip(args, in_types):
+      for i, (arg, typ) in enumerate(zip(args, in_types)):
         f_args.append(_take(arg, typ_ids[typ]))
       # y = _nvmap(f, *f_args)
       y = _generic_vmap(f, *f_args)
@@ -436,7 +444,10 @@ def body_tree(
   #      * for 'j' arguments, we group by joint type
   #      * for 'q' arguments, we group by q width
   #      * for 'v' arguments, we group by dof width
-  depths = torch.zeros(m.nbody, dtype=torch.int64)
+
+  # TODO: consider a regular list here
+  # depths = torch.zeros(m.nbody, dtype=torch.int64)
+  depths = list(range(m.nbody))
 
   # map key => body id
   key_body_ids = {}
@@ -454,11 +465,11 @@ def body_tree(
       if t == 'b':
         continue
       elif t == 'j':
-        key += (tuple(m.jnt_type[torch.nonzero(m.jnt_bodyid == id_)[:, 0]]))
+        key += (tuple(m.jnt_type[torch.nonzero(m.jnt_bodyid == id_, as_tuple=True)[0]]))
       elif t == 'v':
-        key += (len(torch.nonzero(m.dof_bodyid == id_))[:, 0],)
+        key += (len(torch.nonzero(m.dof_bodyid == id_, as_tuple=True)[0]),)
       elif t == 'q':
-        key += (len(torch.nonzero(_q_bodyid(m) == id_))[:, 0],)
+        key += (len(torch.nonzero(_q_bodyid(m) == id_, as_tuple=True)[0]),)
 
     body_ids = key_body_ids.get(key, torch.tensor([], dtype=torch.int64))
     key_body_ids[key] = append(body_ids, body_id)
@@ -484,16 +495,17 @@ def body_tree(
 
   # key => take indices
   key_in_take, key_y_take = {}, {}
+  # TODO: these stacks may be unnecessary
   for key, body_ids in key_body_ids.items():
     for i, typ in enumerate(in_types + out_types):
       if typ == 'b':
         ids = body_ids
       elif typ == 'j':
-        ids = torch.stack([torch.nonzero(m.jnt_bodyid == b)[:, 0] for b in body_ids])
+        ids = torch.stack([torch.nonzero(m.jnt_bodyid == b, as_tuple=True)[0] for b in body_ids])
       elif typ == 'v':
-        ids = torch.stack([torch.nonzero(m.dof_bodyid == b)[:, 0] for b in body_ids])
+        ids = torch.stack([torch.nonzero(m.dof_bodyid == b, as_tuple=True)[0] for b in body_ids])
       elif typ == 'q':
-        ids = torch.stack([torch.nonzero(_q_bodyid(m) == b)[:, 0] for b in body_ids])
+        ids = torch.stack([torch.nonzero(_q_bodyid(m) == b, as_tuple=True)[0] for b in body_ids])
       else:
         raise ValueError(f'Unknown in_type: {typ}')
       if i < len(in_types):

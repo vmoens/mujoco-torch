@@ -27,7 +27,7 @@ from mujoco_torch._src import smooth
 from mujoco_torch._src import solver
 from mujoco_torch._src import support
 # pylint: disable=g-importing-member
-from mujoco_torch._src.types import BiasType
+from mujoco_torch._src.types import BiasType, _unwrap_and_get_first
 from mujoco_torch._src.types import Data
 from mujoco_torch._src.types import DisableBit
 from mujoco_torch._src.types import DynType
@@ -52,13 +52,21 @@ def fwd_position(m: Model, d: Data) -> Data:
   """Position-dependent computations."""
   # TODO(robotics-simulation): tendon
   d = smooth.kinematics(m, d)
+  print('0 d.efc_J', d.efc_J.shape)
   d = smooth.com_pos(m, d)
+  print('1 d.efc_J', d.efc_J.shape)
   d = smooth.camlight(m, d)
+  print('2 d.efc_J', d.efc_J.shape)
   d = smooth.crb(m, d)
+  print('3 d.efc_J', d.efc_J.shape)
   d = smooth.factor_m(m, d)
+  print('4 d.efc_J', d.efc_J.shape)
   d = collision_driver.collision(m, d)
+  print('5 d.efc_J', d.efc_J.shape)
   d = constraint.make_constraint(m, d)
+  print('6 d.efc_J', d.efc_J.shape)
   d = smooth.transmission(m, d)
+  print('7 d.efc_J', d.efc_J.shape)
   return d
 
 
@@ -181,8 +189,14 @@ def fwd_actuation(m: Model, d: Data) -> Data:
 def fwd_acceleration(m: Model, d: Data) -> Data:
   """Add up all non-constraint forces, compute qacc_smooth."""
   qfrc_applied = d.qfrc_applied + support.xfrc_accumulate(m, d)
+  print('qfrc_applied', qfrc_applied)
   qfrc_smooth = d.qfrc_passive - d.qfrc_bias + d.qfrc_actuator + qfrc_applied # Ok!
+  print('0 d.qfrc_passive', d.qfrc_passive)
+  print('0 d.qfrc_bias', d.qfrc_bias)
+  print('0 d.qfrc_actuator', d.qfrc_actuator)
+  print('0 qfrc_smooth', qfrc_smooth)
   qacc_smooth = smooth.solve_m(m, d, qfrc_smooth)
+  print('1 qfrc_smooth', qfrc_smooth)
   d = d.replace(qfrc_smooth=qfrc_smooth, qacc_smooth=qacc_smooth)
   return d
 
@@ -194,6 +208,8 @@ def _integrate_pos(
   qs, qi, vi = [], 0, 0
 
   for jnt_typ in jnt_typs:
+    # TODO: this should use regular ints
+    jnt_typ = _unwrap_and_get_first(jnt_typ)
     if jnt_typ == JointType.FREE:
       pos = qpos[qi : qi + 3] + dt * qvel[vi : vi + 3]
       quat = math.quat_integrate(
@@ -255,7 +271,9 @@ def _advance(
 
   # advance velocities
   d = d.replace(qvel=d.qvel + qacc * m.opt.timestep)
-
+  print('m.opt.timestep', m.opt.timestep)
+  print('qacc', qacc)
+  print('d.qvel', d.qvel)
   # advance positions with qvel if given, d.qvel otherwise (semi-implicit)
   qvel = d.qvel if qvel is None else qvel
   integrate_fn = lambda *args: _integrate_pos(*args, dt=m.opt.timestep)
@@ -273,11 +291,18 @@ def euler(m: Model, d: Data) -> Data:
   qacc = d.qacc
   if not m.opt.disableflags & DisableBit.EULERDAMP:
     if support.is_sparse(m):
-      dh = d.replace(qM=d.qM.at[m.dof_Madr].add(m.opt.timestep * m.dof_damping))
+      print('0')
+      qM = d.qM[m.dof_Madr] + (m.opt.timestep * m.dof_damping)
     else:
-      dh = d.replace(qM=d.qM + torch.diag(m.opt.timestep * m.dof_damping))
+      print('1')
+      qM = d.qM + torch.diag(m.opt.timestep * m.dof_damping)
+    print('d.qM', qM)
+    dh = d.replace(qM=qM)
     dh = smooth.factor_m(m, dh)
     qfrc = d.qfrc_smooth + d.qfrc_constraint
+    print('d.qfrc_constraint', d.qfrc_constraint)  # faulty
+    print('d.qfrc_smooth', d.qfrc_smooth)
+    print('qfrc', qfrc)
     qacc = smooth.solve_m(m, dh, qfrc)
   return _advance(m, d, d.act_dot, qacc)
 
@@ -337,8 +362,7 @@ def forward(m: Model, d: Data) -> Data:
     d = d.replace(qacc=d.qacc_smooth)
     return d
 
-  d = named_scope(solver.solve)(m, d)
-
+  d = solver.solve(m, d)
   return d
 
 

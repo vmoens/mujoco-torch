@@ -165,19 +165,19 @@ def make_data(m: Union[types.Model, mujoco.MjModel]) -> types.Data:
   nefc = ne + nf + nl + nc
 
   #TODO: no need to instantiate all of that here
-  zero_0 = torch.zeros(0, dtype=torch.float)
-  zero_nv = torch.zeros(m.nv, dtype=torch.float)
-  zero_nv_6 = torch.zeros((m.nv, 6), dtype=torch.float)
-  zero_nv_nv = torch.zeros((m.nv, m.nv), dtype=torch.float)
-  zero_nbody_3 = torch.zeros((m.nbody, 3), dtype=torch.float)
-  zero_nbody_6 = torch.zeros((m.nbody, 6), dtype=torch.float)
-  zero_nbody_10 = torch.zeros((m.nbody, 10), dtype=torch.float)
-  zero_nbody_3_3 = torch.zeros((m.nbody, 3, 3), dtype=torch.float)
-  zero_nefc = torch.zeros(nefc, dtype=torch.float)
-  zero_na = torch.zeros(m.na, dtype=torch.float)
-  zero_nu = torch.zeros(m.nu, dtype=torch.float)
-  zero_njnt_3 = torch.zeros((m.njnt, 3), dtype=torch.float)
-  zero_nm = torch.zeros(m.nM, dtype=torch.float)
+  zero_0 = torch.zeros(0, dtype=torch.get_default_dtype())
+  zero_nv = torch.zeros(m.nv, dtype=torch.get_default_dtype())
+  zero_nv_6 = torch.zeros((m.nv, 6), dtype=torch.get_default_dtype())
+  zero_nv_nv = torch.zeros((m.nv, m.nv), dtype=torch.get_default_dtype())
+  zero_nbody_3 = torch.zeros((m.nbody, 3), dtype=torch.get_default_dtype())
+  zero_nbody_6 = torch.zeros((m.nbody, 6), dtype=torch.get_default_dtype())
+  zero_nbody_10 = torch.zeros((m.nbody, 10), dtype=torch.get_default_dtype())
+  zero_nbody_3_3 = torch.zeros((m.nbody, 3, 3), dtype=torch.get_default_dtype())
+  zero_nefc = torch.zeros(nefc, dtype=torch.get_default_dtype())
+  zero_na = torch.zeros(m.na, dtype=torch.get_default_dtype())
+  zero_nu = torch.zeros(m.nu, dtype=torch.get_default_dtype())
+  zero_njnt_3 = torch.zeros((m.njnt, 3), dtype=torch.get_default_dtype())
+  zero_nm = torch.zeros(m.nM, dtype=torch.get_default_dtype())
 
   # create first d to get num contacts and nc
   d = types.Data(
@@ -194,29 +194,29 @@ def make_data(m: Union[types.Model, mujoco.MjModel]) -> types.Data:
       qacc=zero_nv,
       act_dot=zero_na,
       xpos=zero_nbody_3,
-      xquat=torch.zeros((m.nbody, 4), dtype=torch.float),
+      xquat=torch.zeros((m.nbody, 4), dtype=torch.get_default_dtype()),
       xmat=zero_nbody_3_3,
       xipos=zero_nbody_3,
       ximat=zero_nbody_3_3,
       xanchor=zero_njnt_3,
       xaxis=zero_njnt_3,
-      geom_xpos=torch.zeros((m.ngeom, 3), dtype=torch.float),
-      geom_xmat=torch.zeros((m.ngeom, 3, 3), dtype=torch.float),
-      site_xpos=torch.zeros((m.nsite, 3), dtype=torch.float),
-      site_xmat=torch.zeros((m.nsite, 3, 3), dtype=torch.float),
-      cam_xpos=torch.zeros((m.ncam, 3), dtype=torch.float),
-      cam_xmat=torch.zeros((m.ncam, 3, 3), dtype=torch.float),
+      geom_xpos=torch.zeros((m.ngeom, 3), dtype=torch.get_default_dtype()),
+      geom_xmat=torch.zeros((m.ngeom, 3, 3), dtype=torch.get_default_dtype()),
+      site_xpos=torch.zeros((m.nsite, 3), dtype=torch.get_default_dtype()),
+      site_xmat=torch.zeros((m.nsite, 3, 3), dtype=torch.get_default_dtype()),
+      cam_xpos=torch.zeros((m.ncam, 3), dtype=torch.get_default_dtype()),
+      cam_xmat=torch.zeros((m.ncam, 3, 3), dtype=torch.get_default_dtype()),
       subtree_com=zero_nbody_3,
       cdof=zero_nv_6,
       cinert=zero_nbody_10,
       actuator_length=zero_nu,
-      actuator_moment=torch.zeros((m.nu, m.nv), dtype=torch.float),
+      actuator_moment=torch.zeros((m.nu, m.nv), dtype=torch.get_default_dtype()),
       crb=zero_nbody_10,
       qM=zero_nm if support.is_sparse(m) else zero_nv_nv,
       qLD=zero_nm if support.is_sparse(m) else zero_nv_nv,
       qLDiagInv=zero_nv if support.is_sparse(m) else zero_0,
       contact=types.Contact.zero(ncon),
-      efc_J=torch.zeros((nefc, m.nv), dtype=torch.float),
+      efc_J=torch.zeros((nefc, m.nv), dtype=torch.get_default_dtype()),
       efc_frictionloss=zero_nefc,
       efc_D=zero_nefc,
       actuator_velocity=zero_nu,
@@ -231,7 +231,7 @@ def make_data(m: Union[types.Model, mujoco.MjModel]) -> types.Data:
       qfrc_constraint=zero_nv,
       qfrc_inverse=zero_nv,
       efc_force=zero_nefc,
-      userdata=torch.zeros(m.nuserdata, dtype=torch.float),
+      userdata=torch.zeros(m.nuserdata, dtype=torch.get_default_dtype()),
   )
 
   return d
@@ -433,7 +433,6 @@ def put_data(m: mujoco.MjModel, d: mujoco.MjData, device=None) -> types.Data:
       fields['qLD'] = np.zeros((m.nv, m.nv))
     fields['qLDiagInv'] = np.zeros(0)
 
-  fields = TensorDict(fields).to(device=device)
+  fields = TensorDict(fields, device=device)
   fields['contact'] = _put_contact(d.contact, ncon, device=device)
-
-  return types.Data(**fields)
+  return types.Data.from_tensordict(fields)

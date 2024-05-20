@@ -22,6 +22,7 @@ from mujoco_torch._src import math
 # pylint: disable=g-importing-member
 from mujoco_torch._src.collision_base import Contact
 from mujoco_torch._src.collision_base import GeomInfo
+from mujoco_torch._src.support import vmap_compatible_index_select
 
 
 # pylint: enable=g-importing-member
@@ -160,23 +161,23 @@ def _manifold_points(
   """Chooses four points on the polygon with approximately maximal area."""
   dist_mask = torch.where(poly_mask, 0.0, -1e6)
   a_idx = torch.argmax(dist_mask)
-  a = poly[a_idx]
+  a = vmap_compatible_index_select(poly, 0, a_idx)
   # choose point b furthest from a
   b_idx = (((a - poly) ** 2).sum(dim=1) + dist_mask).argmax()
-  b = poly[b_idx]
+  b = vmap_compatible_index_select(poly, 0, b_idx)
   # choose point c furthest along the axis orthogonal to (a-b)
   ab = torch.linalg.cross(poly_norm, a - b)
   ap = a - poly
-  c_idx = (torch.abs(ap.dot(ab)) + dist_mask).argmax()
-  c = poly[c_idx]
+  c_idx = (torch.abs(torch.vmap(torch.dot, (0, None))(ap, ab)) + dist_mask).argmax()
+  c = vmap_compatible_index_select(poly, 0, c_idx)
   # choose point d furthest from the other two triangle edges
   ac = torch.linalg.cross(poly_norm, a - c)
   bc = torch.linalg.cross(poly_norm, b - c)
   bp = b - poly
-  dist_bp = torch.abs(bp.dot(bc)) + dist_mask
-  dist_ap = torch.abs(ap.dot(ac)) + dist_mask
+  dist_bp = torch.abs(torch.vmap(torch.dot, (0, None))(bp, bc)) + dist_mask
+  dist_ap = torch.abs(torch.vmap(torch.dot, (0, None))(ap, ac)) + dist_mask
   d_idx = torch.cat([dist_bp, dist_ap]).argmax() % poly.shape[0]
-  return torch.tensor([a_idx, b_idx, c_idx, d_idx])
+  return torch.stack([a_idx, b_idx, c_idx, d_idx])
 
 
 def plane_convex(plane: GeomInfo, convex: GeomInfo) -> Contact:

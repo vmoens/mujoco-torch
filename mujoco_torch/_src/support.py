@@ -18,6 +18,7 @@ from typing import Optional, Tuple, Union
 import mujoco
 from mujoco_torch._src import math
 from mujoco_torch._src import scan
+from mujoco_torch._src.smooth import _set_at
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import Data
 from mujoco_torch._src.types import JacobianType
@@ -25,7 +26,7 @@ from mujoco_torch._src.types import Model
 # pylint: enable=g-importing-member
 import torch
 
-from torch._C._functorch import is_batchedtensor, _remove_batch_dim, _add_batch_dim, _vmap_increment_nesting
+from torch._C._functorch import is_batchedtensor, _remove_batch_dim,dlevel,maybe_get_level, current_level, _add_batch_dim, get_unwrapped, _vmap_increment_nesting
 
 def is_sparse(m: Union[mujoco.MjModel, Model]) -> bool:
   """Return True if this model should create sparse mass matrices.
@@ -68,7 +69,7 @@ def make_m(
     qm = a @ b.T
     if d is not None:
       qm += torch.diag(d)
-    mask = torch.zeros((m.nv, m.nv), dtype=torch.bool).at[(i, j)].set(True)
+    mask = _set_at(torch.zeros((m.nv, m.nv), dtype=torch.bool), (i, j), True)
     qm = qm * mask
     qm = qm + torch.tril(qm, -1).T
     return qm
@@ -133,15 +134,23 @@ def mul_m(m: Model, d: Data, vec: torch.Tensor) -> torch.Tensor:
   return out
 
 def vmap_compatible_index_select(tensor, dim, index):
+  # levels = []
+  # while isinstance(index, torch.Tensor) and is_batchedtensor(index):
+  #   levels.append(maybe_get_level(index))
+  #   index = get_unwrapped(index)
+  # out = torch.index_select(tensor, dim, index)
+  # for level in levels[::-1]:
+  #   out = _add_batch_dim(out, 0, level)
+  # return out
+  unsq = index.ndim == 0
+  if unsq:
+    unsq = True
+    index = index.unsqueeze(0)
+  result = torch.index_select(tensor, dim, index)
+  if unsq:
+    result = result.squeeze(dim)
+  return result
 
-  is_batched = False
-  if isinstance(index, torch.Tensor) and is_batchedtensor(index):
-    index = _remove_batch_dim(index, 1, 0, 0)
-    is_batched = True
-  out = torch.index_select(tensor, dim, index)
-  if is_batched:
-    out = _add_batch_dim(out, 0, 1)
-  return out
 
 def expand_right(tensor, shape):
   while tensor.ndim < len(shape):
@@ -157,7 +166,7 @@ def jac(
   mask = mask[torch.tensor(m.dof_bodyid)] > 0
 
   # vmapping over index_select is broken
-  index = vmap_compatible_index_select(m.body_rootid, dim=0, index=body_id).long()
+  index = vmap_compatible_index_select(m.body_rootid, dim=0, index=body_id.long()).long()
   offset = point - vmap_compatible_index_select(d.subtree_com, dim=0, index=index)
   def inner(a, b=offset):
     return a[3:] + torch.linalg.cross(a[:3], b)

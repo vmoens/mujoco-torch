@@ -18,6 +18,8 @@ import dataclasses
 from typing import Dict, List, Optional, Tuple
 
 import torch
+from tensordict import tensorclass
+
 # pylint: disable=g-importing-member
 from mujoco_torch._src.dataclasses import PyTreeNode
 from mujoco_torch._src.types import GeomType
@@ -41,20 +43,20 @@ CandidateSet = Dict[
     List[Candidate],
 ]
 
-
-class GeomInfo(PyTreeNode):
+@tensordict.tensorclass(autocast=True)
+class GeomInfo:
   """Collision info for a geom."""
 
   geom_id: torch.Tensor
   pos: torch.Tensor
   mat: torch.Tensor
-  size: torch.Tensor
-  face: Optional[torch.Tensor] = None
-  vert: Optional[torch.Tensor] = None
-  edge_dir: Optional[torch.Tensor] = None
-  facenorm: Optional[torch.Tensor] = None
-  edge: Optional[torch.Tensor] = None
-  edge_face_normal: Optional[torch.Tensor] = None
+  geom_size: torch.Tensor
+  face: torch.Tensor = None
+  vert: torch.Tensor = None
+  edge_dir: torch.Tensor = None
+  facenorm: torch.Tensor = None
+  edge: torch.Tensor = None
+  edge_face_normal: torch.Tensor = None
 
 @tensordict.tensorclass(autocast=True)
 class SolverParams:

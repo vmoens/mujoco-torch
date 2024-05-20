@@ -74,6 +74,7 @@ def get_collision_fn(
     key: Tuple[Union[GeomType, mujoco.mjtGeom], Union[GeomType, mujoco.mjtGeom]]
 ) -> Optional[Callable[[GeomInfo, GeomInfo], collision_base.Contact]]:
   """Returns a collision function given a pair of geom types."""
+  key = tuple(int(key) for key in key)
   return _COLLISION_FUNC.get(key, None)
 
 
@@ -244,7 +245,6 @@ def _pair_info(
         d.geom_xmat[g],
         m.geom_size[g],
     )
-    in_axes = tree_map(lambda x: 0, info)
     is_mesh = m.geom_convex_face[geom[0]] is not None
     if is_mesh:
       info = info.replace(
@@ -257,19 +257,13 @@ def _pair_info(
               [m.geom_convex_edge_face_normal[i] for i in geom]
           ),
       )
-      in_axes = in_axes.replace(
-          face=0,
-          vert=0,
-          edge_dir=0,
-          facenorm=0,
-          edge=0,
-          edge_face_normal=0,
-      )
-    return info, in_axes
+    # in_axes is always 0 since we have a tensorclass
+    info.auto_batch_size_()
+    return info, (0,)
 
   info1, in_axes1 = mesh_info(geom1)
   info2, in_axes2 = mesh_info(geom2)
-  return info1, info2, [in_axes1, in_axes2]
+  return info1, info2, (in_axes1 + in_axes2)
 
 
 def _body_pair_filter(
@@ -339,7 +333,7 @@ def _collide_geoms(
     )
 
   # call contact function
-  res = torch.vmap(fn, in_axes=in_axes)(g1, g2)
+  res = torch.vmap(fn, in_axes)(g1, g2)
   dist, pos, frame = tree_map(concatenate, res)
 
   # repeat params by the number of contacts per geom pair
@@ -416,13 +410,13 @@ def ncon(m: Union[Model, mujoco.MjModel]) -> int:
 
   count = 0
   for k, v in candidates.items():
-    fn = get_collision_fn(k[0:2])
+    fn = get_collision_fn(k[:2])
     if fn is None:
       continue
     run_broadphase = _broadphase_enabled((k[0], k[1]), len(v), max_pairs)
     n_pair = max_pairs if run_broadphase else len(v)
     count += n_pair * fn.ncon  # pytype: disable=attribute-error
-
+  print('max_count, count', max_count, count)
   return min(max_count, count) if max_count > -1 else count
 
 

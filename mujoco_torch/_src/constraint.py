@@ -17,12 +17,16 @@
 from typing import Optional, Tuple, Union
 
 import mujoco
+from tensordict import tensorclass
+
 from mujoco_torch._src import collision_driver
 from mujoco_torch._src import math
 from mujoco_torch._src import support
 # pylint: disable=g-importing-member
 from mujoco_torch._src.dataclasses import PyTreeNode
-from mujoco_torch._src.types import Contact
+from mujoco_torch._src.smooth import _set_at
+from mujoco_torch._src.support import vmap_compatible_index_select
+from mujoco_torch._src.types import Contact, _unwrap_and_get_first
 from mujoco_torch._src.types import Data
 from mujoco_torch._src.types import DisableBit
 from mujoco_torch._src.types import EqType
@@ -33,7 +37,8 @@ import numpy as np
 import torch
 
 
-class _Efc(PyTreeNode):
+@tensorclass(autocast=True)
+class _Efc:
   """Support data for creating constraint matrices."""
   J: torch.Tensor
   pos: torch.Tensor
@@ -85,7 +90,7 @@ def _kbi(
 def _instantiate_equality_connect(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for connect equality constraints."""
 
-  ids = torch.nonzero(m.eq_type == EqType.CONNECT)[0]
+  ids = torch.nonzero(m.eq_type == EqType.CONNECT, as_tuple=True)[0]
 
   if (m.opt.disableflags & DisableBit.EQUALITY) or ids.size == 0:
     return None
@@ -96,8 +101,9 @@ def _instantiate_equality_connect(m: Model, d: Data) -> Optional[_Efc]:
   def fn(data, id1, id2):
     anchor1, anchor2 = data[0:3], data[3:6]
     # find global points
-    pos1 = d.xmat[id1] @ anchor1 + d.xpos[id1]
-    pos2 = d.xmat[id2] @ anchor2 + d.xpos[id2]
+    # TODO: tace back all .long() calls and make sure indices are always long
+    pos1 = vmap_compatible_index_select(d.xmat, 0, id1.long()) @ anchor1 + vmap_compatible_index_select(d.xpos, 0, id1.long())
+    pos2 = vmap_compatible_index_select(d.xmat, 0, id2.long()) @ anchor2 + vmap_compatible_index_select(d.xpos, 0, id2.long())
 
     # compute position error
     cpos = pos1 - pos2
@@ -107,23 +113,25 @@ def _instantiate_equality_connect(m: Model, d: Data) -> Optional[_Efc]:
     jacp2, _ = support.jac(m, d, pos2, id2)
     j = (jacp1 - jacp2).T
 
-    return j, cpos, torch_repeat(math.norm(cpos), 3)
+    return j, cpos, math.repeat(math.norm(cpos), 3)
 
   # concatenate to drop connect grouping dimension
-  j, pos, pos_norm = torch.utils._pytree.tree_map(concatenate, fn(data, id1, id2))
+  j, pos, pos_norm = torch.utils._pytree.tree_map(math.concatenate, fn(data, id1, id2))
   invweight = m.body_invweight0[id1, 0] + m.body_invweight0[id2, 0]
-  invweight = torch_repeat(invweight, 3)
-  solref = torch_tile(m.eq_solref[ids], (3, 1))
-  solimp = torch_tile(m.eq_solimp[ids], (3, 1))
+  invweight = math.repeat(invweight, 3)
+  solref = math.tile(m.eq_solref[ids], (3, 1))
+  solimp = math.tile(m.eq_solimp[ids], (3, 1))
   frictionloss = torch.zeros_like(pos_norm)
 
-  return _Efc(j, pos, pos_norm, invweight, solref, solimp, frictionloss)
+  result = _Efc(j, pos, pos_norm, invweight, solref, solimp, frictionloss)
+  print('_instantiate_equality_connect', result)
+  return result
 
 
 def _instantiate_equality_weld(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for weld equality constraints."""
 
-  ids = torch.nonzero(m.eq_type == EqType.WELD)[0]
+  ids = torch.nonzero(m.eq_type == EqType.WELD, as_tuple=True)[0]
 
   if (m.opt.disableflags & DisableBit.EQUALITY) or ids.size == 0:
     return None
@@ -136,8 +144,8 @@ def _instantiate_equality_weld(m: Model, d: Data) -> Optional[_Efc]:
     relpose, torquescale = data[6:10], data[10]
 
     # find global points
-    pos1 = d.xmat[id1] @ anchor2 + d.xpos[id1]
-    pos2 = d.xmat[id2] @ anchor1 + d.xpos[id2]
+    pos1 = vmap_compatible_index_select(d.xmat, 0, id1.long()) @ anchor2 + vmap_compatible_index_select(d.xpos, 0, id1.long())
+    pos2 = vmap_compatible_index_select(d.xmat, 0, id2.long()) @ anchor1 + vmap_compatible_index_select(d.xpos, 0, id2.long())
 
     # compute position error
     cpos = pos1 - pos2
@@ -149,34 +157,36 @@ def _instantiate_equality_weld(m: Model, d: Data) -> Optional[_Efc]:
     jacdifr = (jacr1 - jacr2) * torquescale
 
     # compute orientation error: neg(q1) * q0 * relpose (axis components only)
-    quat = math.quat_mul(d.xquat[id1], relpose)
-    quat1 = math.quat_inv(d.xquat[id2])
+    quat = math.quat_mul(vmap_compatible_index_select(d.xquat, 0, id1.long()), relpose)
+    quat1 = math.quat_inv(vmap_compatible_index_select(d.xquat, 0, id2.long()))
     crot = math.quat_mul(quat1, quat)[1:]  # copy axis components
 
     # correct rotation Jacobian: 0.5 * neg(q1) * (jac0-jac1) * q0 * relpose
     jac_fn = lambda j: math.quat_mul(math.quat_mul_axis(quat1, j), quat)[1:]
     jacdifr = 0.5 * torch.vmap(jac_fn)(jacdifr)
 
-    j = concatenate((jacdifp.T, jacdifr.T))
-    pos = concatenate((cpos, crot * torquescale))
+    j = math.concatenate((jacdifp.T, jacdifr.T))
+    pos = math.concatenate((cpos, crot * torquescale))
 
-    return j, pos, torch_repeat(math.norm(pos), 6)
+    return (j, pos, math.repeat(math.norm(pos), 6))
 
   # concatenate to drop weld grouping dimension
-  j, pos, pos_norm = torch.utils._pytree.tree_map(concatenate, fn(data, id1, id2))
-  invweight = m.body_invweight0[id1] + m.body_invweight0[id2]
-  invweight = torch_repeat(invweight, 3)
-  solref = torch_tile(m.eq_solref[ids], (6, 1))
-  solimp = torch_tile(m.eq_solimp[ids], (6, 1))
+  j, pos, pos_norm = torch.utils._pytree.tree_map(math.concatenate, fn(data, id1, id2))
+  invweight = vmap_compatible_index_select(m.body_invweight0, 0, id1) + vmap_compatible_index_select(m.body_invweight0, 0, id2)
+  invweight = math.repeat(invweight, 3)
+  solref = math.tile(m.eq_solref[ids], (6, 1))
+  solimp = math.tile(m.eq_solimp[ids], (6, 1))
   frictionloss = torch.zeros_like(pos_norm)
 
-  return _Efc(j, pos, pos_norm, invweight, solref, solimp, frictionloss)
+  result = _Efc(j, pos, pos_norm, invweight, solref, solimp, frictionloss)
+  print('_instantiate_equality_weld', result)
+  return result
 
 
 def _instantiate_equality_joint(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for joint equality constraints."""
 
-  ids = torch.nonzero(m.eq_type == EqType.JOINT)[0]
+  ids = torch.nonzero(m.eq_type == EqType.JOINT, as_tuple=True)[0]
 
   if (m.opt.disableflags & DisableBit.EQUALITY) or ids.size == 0:
     return None
@@ -187,15 +197,15 @@ def _instantiate_equality_joint(m: Model, d: Data) -> Optional[_Efc]:
 
   @torch.vmap
   def fn(data, id2, dofadr1, dofadr2, qposadr1, qposadr2):
-    pos1, pos2 = d.qpos[qposadr1], d.qpos[qposadr2]
-    ref1, ref2 = m.qpos0[qposadr1], m.qpos0[qposadr2]
+    pos1, pos2 = vmap_compatible_index_select(d.qpos, 0, qposadr1.long()),  vmap_compatible_index_select(d.qpos, 0, qposadr2.long())
+    ref1, ref2 = vmap_compatible_index_select(m.qpos0, 0, qposadr1.long()), vmap_compatible_index_select(m.qpos0, 0, qposadr2.long())
     pos2, ref2 = pos2 * (id2 > -1), ref2 * (id2 > -1)
 
     dif = pos2 - ref2
     dif_power = torch.pow(dif, torch.arange(0, 5))
 
     deriv = torch.dot(data[1:5], dif_power[:4] * torch.arange(1, 5))
-    j = torch.zeros((m.nv)).at[dofadr1].set(1.0).at[dofadr2].set(-deriv)
+    j = _set_at(_set_at(torch.zeros((m.nv)), dofadr1, 1.0), dofadr2, -deriv)
     pos = pos1 - ref1 - torch.dot(data[:5], dif_power)
     return j, pos
 
@@ -204,7 +214,10 @@ def _instantiate_equality_joint(m: Model, d: Data) -> Optional[_Efc]:
   solref, solimp = m.eq_solref[ids], m.eq_solimp[ids]
   frictionloss = torch.zeros_like(pos)
 
-  return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
+  result = _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
+  print('_instantiate_equality_joint', result)
+  return result
+
 
 
 def _instantiate_friction(m: Model, d: Data) -> Optional[_Efc]:
@@ -216,20 +229,20 @@ def _instantiate_friction(m: Model, d: Data) -> Optional[_Efc]:
 def _instantiate_limit_ball(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for ball joint limits."""
 
-  ids = torch.nonzero((m.jnt_type == JointType.BALL) & m.jnt_limited)[0]
+  ids = torch.nonzero((m.jnt_type == JointType.BALL) & m.jnt_limited, as_tuple=True)[0]
 
   if (m.opt.disableflags & DisableBit.LIMIT) or ids.size == 0:
     return None
 
   jnt_range = m.jnt_range[ids]
   jnt_margin = m.jnt_margin[ids]
-  qposadr = np.array([np.arange(q, q + 4) for q in m.jnt_qposadr[ids]])
-  dofadr = np.array([np.arange(d, d + 3) for d in m.jnt_dofadr[ids]])
+  qposadr = torch.stack([torch.arange(q, q + 4) for q in m.jnt_qposadr[ids]])
+  dofadr = torch.stack([torch.arange(d, d + 3) for d in m.jnt_dofadr[ids]])
 
   @torch.vmap
   def fn(jnt_range, jnt_margin, qposadr, dofadr):
     axis, angle = math.quat_to_axis_angle(d.qpos[qposadr])
-    j = torch.zeros(m.nv).at[dofadr].set(-axis)
+    j = _set_at(torch.zeros(m.nv), dofadr, -axis)
     pos = torch.amax(jnt_range) - angle - jnt_margin
     active = pos < 0
     return j * active, pos * active
@@ -239,14 +252,16 @@ def _instantiate_limit_ball(m: Model, d: Data) -> Optional[_Efc]:
   solref, solimp = m.jnt_solref[ids], m.jnt_solimp[ids]
   frictionloss = torch.zeros_like(pos)
 
-  return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
+  result = _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
+  print('_instantiate_limit_ball', result)
+  return result
 
 
 def _instantiate_limit_slide_hinge(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for slide and hinge joint limits."""
 
-  slide_hinge = np.isin(m.jnt_type, (JointType.SLIDE, JointType.HINGE))
-  ids = torch.nonzero(slide_hinge & m.jnt_limited)[0]
+  slide_hinge = torch.vmap(lambda x: (x == torch.tensor([JointType.SLIDE, JointType.HINGE])).any())(m.jnt_type)
+  ids = torch.nonzero(slide_hinge & m.jnt_limited, as_tuple=True)[0]
 
   if (m.opt.disableflags & DisableBit.LIMIT) or ids.size == 0:
     return None
@@ -258,19 +273,21 @@ def _instantiate_limit_slide_hinge(m: Model, d: Data) -> Optional[_Efc]:
 
   @torch.vmap
   def fn(jnt_range, jnt_margin, qposadr, dofadr):
-    dist_min = d.qpos[qposadr] - jnt_range[0]
-    dist_max = jnt_range[1] - d.qpos[qposadr]
-    j = torch.zeros(m.nv).at[dofadr].set((dist_min < dist_max) * 2 - 1)
+    dist_min = vmap_compatible_index_select(d.qpos, 0, qposadr.long()) - jnt_range[0]
+    dist_max = jnt_range[1] - vmap_compatible_index_select(d.qpos, 0, qposadr.long())
+    j = _set_at(torch.zeros(m.nv), dofadr, (dist_min < dist_max) * 2 - 1)
     pos = torch.minimum(dist_min, dist_max) - jnt_margin
     active = pos < 0
     return j * active, pos * active
-
   j, pos = fn(jnt_range, jnt_margin, qposadr, dofadr)
   invweight = m.dof_invweight0[dofadr]
-  solref, solimp = m.jnt_solref[ids], m.jnt_solimp[ids]
+  solref, solimp = vmap_compatible_index_select(m.jnt_solref, 0, ids), vmap_compatible_index_select(m.jnt_solimp, 0, ids)
   frictionloss = torch.zeros_like(pos)
 
-  return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
+  result = _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
+  print('_instantiate_limit_slide_hinge', result)
+  return result
+
 
 
 def _instantiate_contact(m: Model, d: Data) -> Optional[_Efc]:
@@ -283,9 +300,10 @@ def _instantiate_contact(m: Model, d: Data) -> Optional[_Efc]:
   def fn(c: Contact):
     dist = c.dist - c.includemargin
     geom_bodyid = torch.tensor(m.geom_bodyid)
-    body1, body2 = geom_bodyid[c.geom1], geom_bodyid[c.geom2]
+    body1, body2 = vmap_compatible_index_select(geom_bodyid, 0, c.geom1.long()), vmap_compatible_index_select(geom_bodyid, 0, c.geom2.long())
     diff = support.jac_dif_pair(m, d, c.pos, body1, body2)
-    t = m.body_invweight0[body1, 0] + m.body_invweight0[body2, 0]
+    t = (vmap_compatible_index_select(m.body_invweight0[:, 0], 0, body1.long()) +
+         vmap_compatible_index_select(m.body_invweight0[:, 0], 0, body2.long()))
 
     # rotate Jacobian differences to contact frame
     diff_con = c.frame @ diff.T
@@ -300,17 +318,19 @@ def _instantiate_contact(m: Model, d: Data) -> Optional[_Efc]:
 
     active = dist < 0
     j, invweight = torch.stack(js) * active, torch.stack(invweights)
-    pos = torch_repeat(dist, 4) * active
-    solref, solimp = torch_tile(c.solref, (4, 1)), torch_tile(c.solimp, (4, 1))
+    pos = math.repeat(dist, 4) * active
+    solref, solimp = math.tile(c.solref, (4, 1)), math.tile(c.solimp, (4, 1))
 
     return j, invweight, pos, solref, solimp
 
   res = fn(d.contact)
   # remove contact grouping dimension:
-  j, invweight, pos, solref, solimp = torch.utils._pytree.tree_map(concatenate, res)
+  j, invweight, pos, solref, solimp = torch.utils._pytree.tree_map(math.concatenate, res)
   frictionloss = torch.zeros_like(pos)
 
-  return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
+  result = _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
+  print('_instantiate_contact', result)
+  return result
 
 
 def count_constraints(
@@ -349,7 +369,7 @@ def make_constraint(m: Model, d: Data) -> Data:
   if m.opt.disableflags & DisableBit.CONSTRAINT:
     efcs = ()
   else:
-    efcs = tuple(efc for efc in (
+    efcs = tuple(efc.auto_batch_size_() for efc in (
         _instantiate_equality_connect(m, d),
         _instantiate_equality_weld(m, d),
         _instantiate_equality_joint(m, d),
@@ -358,6 +378,7 @@ def make_constraint(m: Model, d: Data) -> Data:
         _instantiate_limit_slide_hinge(m, d),
         _instantiate_contact(m, d),
     ) if efc is not None)
+    print(efcs)
 
   if not efcs:
     z = torch.empty(0)
@@ -365,7 +386,8 @@ def make_constraint(m: Model, d: Data) -> Data:
     d = d.replace(efc_D=z, efc_aref=z, efc_frictionloss=z)
     return d
 
-  efc = torch.utils._pytree.tree_map(lambda *x: concatenate(x), *efcs)
+  efc = torch.cat(list(efcs))
+  # efc = torch.utils._pytree.tree_map(lambda *x: math.concatenate(x), *efcs)
 
   @torch.vmap
   def fn(efc):
