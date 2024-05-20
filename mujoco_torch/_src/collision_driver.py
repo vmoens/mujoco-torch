@@ -416,7 +416,6 @@ def ncon(m: Union[Model, mujoco.MjModel]) -> int:
     run_broadphase = _broadphase_enabled((k[0], k[1]), len(v), max_pairs)
     n_pair = max_pairs if run_broadphase else len(v)
     count += n_pair * fn.ncon  # pytype: disable=attribute-error
-  print('max_count, count', max_count, count)
   return min(max_count, count) if max_count > -1 else count
 
 

@@ -124,7 +124,6 @@ def _instantiate_equality_connect(m: Model, d: Data) -> Optional[_Efc]:
   frictionloss = torch.zeros_like(pos_norm)
 
   result = _Efc(j, pos, pos_norm, invweight, solref, solimp, frictionloss)
-  print('_instantiate_equality_connect', result)
   return result
 
 
@@ -179,7 +178,6 @@ def _instantiate_equality_weld(m: Model, d: Data) -> Optional[_Efc]:
   frictionloss = torch.zeros_like(pos_norm)
 
   result = _Efc(j, pos, pos_norm, invweight, solref, solimp, frictionloss)
-  print('_instantiate_equality_weld', result)
   return result
 
 
@@ -215,7 +213,6 @@ def _instantiate_equality_joint(m: Model, d: Data) -> Optional[_Efc]:
   frictionloss = torch.zeros_like(pos)
 
   result = _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
-  print('_instantiate_equality_joint', result)
   return result
 
 
@@ -253,7 +250,6 @@ def _instantiate_limit_ball(m: Model, d: Data) -> Optional[_Efc]:
   frictionloss = torch.zeros_like(pos)
 
   result = _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
-  print('_instantiate_limit_ball', result)
   return result
 
 
@@ -285,7 +281,6 @@ def _instantiate_limit_slide_hinge(m: Model, d: Data) -> Optional[_Efc]:
   frictionloss = torch.zeros_like(pos)
 
   result = _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
-  print('_instantiate_limit_slide_hinge', result)
   return result
 
 
@@ -329,7 +324,6 @@ def _instantiate_contact(m: Model, d: Data) -> Optional[_Efc]:
   frictionloss = torch.zeros_like(pos)
 
   result = _Efc(j, pos, pos, invweight, solref, solimp, frictionloss)
-  print('_instantiate_contact', result)
   return result
 
 
@@ -378,7 +372,6 @@ def make_constraint(m: Model, d: Data) -> Data:
         _instantiate_limit_slide_hinge(m, d),
         _instantiate_contact(m, d),
     ) if efc is not None)
-    print(efcs)
 
   if not efcs:
     z = torch.empty(0)

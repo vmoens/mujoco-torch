@@ -66,8 +66,6 @@ class _Context:
   @classmethod
   def create(cls, m: Model, d: Data, grad: bool = True) -> '_Context':
     jaref = d.efc_J @ d.qacc - d.efc_aref
-    print('jaref', jaref.shape)
-    print(d.efc_J.shape, d.qacc.shape, d.efc_aref.shape)
 
     # TODO(robotics-team): determine nv at which sparse mul is faster
     ma = support.mul_m(m, d, d.qacc)
@@ -203,18 +201,12 @@ def _update_constraint(m: Model, d: Data, ctx: _Context) -> _Context:
 
   # only count active constraints
   ne, nf, *_ = constraint.count_constraints(m)
-  print('ne, nf', ne, nf)
   active = _set_at((ctx.Jaref < 0), slice(ne + nf), True)
-  print('active', active, active.shape, ctx.Jaref.shape)
 
   efc_force = d.efc_D * -ctx.Jaref * active
-  print('efc_force', efc_force)
   qfrc_constraint = d.efc_J.T @ efc_force
-  print('qfrc_constraint', qfrc_constraint)
   gauss = 0.5 * torch.dot(ctx.Ma - d.qfrc_smooth, ctx.qacc - d.qacc_smooth)
-  print('gauss', gauss)
   cost = 0.5 * torch.sum(d.efc_D * ctx.Jaref * ctx.Jaref * active) + gauss
-  print('cost', cost)
 
   ctx = ctx.replace(
       qfrc_constraint=qfrc_constraint,
@@ -357,17 +349,12 @@ def solve(m: Model, d: Data) -> Data:
   """Finds forces that satisfy constraints using conjugate gradient descent."""
 
   def cond(ctx: _Context) -> torch.Tensor:
-    print('ctx.prev_cost', ctx.prev_cost, 'ctx.cost', ctx.cost)
     improvement = _rescale(m, ctx.prev_cost - ctx.cost)
-    print('math.norm(ctx.gradient)', ctx.gradient)
     gradient = _rescale(m, torch.norm(ctx.gradient))
 
     done = ctx.solver_niter >= m.opt.iterations
-    print('0 done', done, ctx.solver_niter)
     done = done | (improvement < m.opt.tolerance)
-    print('1 done', done, improvement)
     done = done | (gradient < m.opt.tolerance)
-    print('2 done', done, gradient)
     while is_batchedtensor(done):
       done = get_unwrapped(done)
     return not done.all().item()
@@ -399,11 +386,8 @@ def solve(m: Model, d: Data) -> Data:
   if m.opt.iterations == 1:
     ctx = body(ctx)
   else:
-    i = 0
     while cond(ctx):
-      i += 1
       ctx = body(ctx)
-    print('i', i)
     # ctx = jax.lax.while_loop(cond, body, ctx)
 
   d = d.replace(

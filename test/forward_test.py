@@ -84,6 +84,8 @@ class TestForward:
     mujoco.mj_step(m, d, 20)  # get some dynamics going
 
     # dx = torch.compile(mujoco_torch.step)(mujoco_torch.put_model(m), mujoco_torch.put_data(m, d))
+    print('model', mujoco_torch.put_model(m))
+    print('data', mujoco_torch.put_data(m, d))
     dx = mujoco_torch.step(mujoco_torch.put_model(m), mujoco_torch.put_data(m, d))
     mujoco.mj_step(m, d)
     _assert_attr_eq(d, dx, 'act')
