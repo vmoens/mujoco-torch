@@ -390,6 +390,7 @@ def count_constraints(m: Model, d: Data) -> Tuple[int, int, int, int]:
   return ne, nf, nl, nc
 
 
+@torch.compiler.disable
 def make_constraint(m: Model, d: Data) -> Data:
   """Creates constraint jacobians and other supporting data."""
 

@@ -52,11 +52,6 @@ def _tree_replace(
   )
 
 
-# Property attribute names that need special __getattribute__ handling.
-# Populated after MjTensorClass is created (see below).
-_PROPERTY_ATTRS: set = set()
-
-
 def _collect_conflicting_attrs(bases):
   """Collect attribute names from bases that would conflict with dataclass fields.
 
@@ -128,49 +123,9 @@ class MjTensorClass(
     return dataclasses.fields(cls)
 
 
-# Populate _PROPERTY_ATTRS now that MjTensorClass exists.  This set is used
-# by __getattribute__ to decide which inherited properties to shadow.
-for _cls in MjTensorClass.__mro__:
-  for _name, _val in _cls.__dict__.items():
-    if not _name.startswith('_') and isinstance(_val, property):
-      _PROPERTY_ATTRS.add(_name)
-
-# Override __getattribute__ so that field names shadowing TensorClass
-# *properties* (e.g. ``grad``, ``names``) return the stored field value
-# instead of the inherited property.  We intentionally skip inherited
-# *methods* like ``size`` and ``dim`` -- those must stay callable because
-# PyTorch internals (e.g. torch.vmap) invoke ``arg.size(d)`` on TensorClass
-# instances.  Fields that collide with methods should be renamed (e.g.
-# ``geom_size``).
-#
-# IMPORTANT: this override is NOT installed on MjTensorClass itself.
-# A custom __getattribute__ causes graph breaks in torch.compile because
-# dynamo cannot inline dynamic attribute lookups through Python-level
-# __getattribute__ overrides.  This cascades into the __setattr__ →
-# _set_str chain becoming separate dynamo frames that guard on the
-# string key, causing O(N) recompilations for N unique field names.
-#
-# Instead, only the specific subclass(es) that actually have field-name
-# collisions with TensorClass properties (currently only Model.names)
-# should install this override.  See install_getattribute_override().
-
-
-def _mj_getattribute(self, name):
-  if name in _PROPERTY_ATTRS:
-    fields = type(self).__dataclass_fields__
-    if name in fields:
-      td = object.__getattribute__(self, '__dict__').get('_tensordict')
-      if td is not None and name in td.keys():
-        return td[name]
-  return object.__getattribute__(self, name)
-
-
-def install_getattribute_override(cls):
-  """Install __getattribute__ override on a specific MjTensorClass subclass.
-
-  Only needed for classes that have field names colliding with TensorClass
-  properties (e.g. ``names``).  Do NOT install on the base MjTensorClass —
-  it breaks torch.compile by introducing graph breaks on every attribute
-  access.
-  """
-  cls.__getattribute__ = _mj_getattribute
+# NOTE: Field-name / TensorClass-property collisions (e.g. Model.names)
+# are resolved with a targeted property descriptor installed on the specific
+# subclass — see types.py after the Model definition.  We intentionally do
+# NOT install a custom __getattribute__ because any override on a class
+# causes graph breaks in torch.compile on *every* attribute access, which
+# cascades into O(N) recompilations for N unique field names.

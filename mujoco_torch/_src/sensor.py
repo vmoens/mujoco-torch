@@ -46,6 +46,7 @@ def _apply_cutoff(
   return torch.vmap(fn)(sensor, cutoff)
 
 
+@torch.compiler.disable
 def sensor_pos(m: Model, d: Data) -> Data:
   """Compute position-dependent sensors values."""
   if m.opt.disableflags & DisableBit.SENSOR:
@@ -212,6 +213,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
   return d.replace(sensordata=sensordata)
 
 
+@torch.compiler.disable
 def sensor_vel(m: Model, d: Data) -> Data:
   """Compute velocity-dependent sensors values."""
   if m.opt.disableflags & DisableBit.SENSOR:
@@ -294,6 +296,7 @@ def sensor_vel(m: Model, d: Data) -> Data:
   return d.replace(sensordata=sensordata)
 
 
+@torch.compiler.disable
 def sensor_acc(m: Model, d: Data) -> Data:
   """Compute acceleration/force-dependent sensors values."""
   if m.opt.disableflags & DisableBit.SENSOR:

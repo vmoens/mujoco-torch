@@ -20,7 +20,7 @@ MODEL_XML = (
     epath.resource_path("mujoco_torch") / "test_data" / "ant.xml"
 ).read_text()
 
-NSTEPS = 200
+NSTEPS = 1000
 SEED = 42
 np.random.seed(SEED)
 torch.manual_seed(SEED)
@@ -97,10 +97,10 @@ dx_comp = mujoco_torch.device_put(d_torch_ref)
 # warm-up / compile — run a few steps so all shape variants are cached
 print("  (warm-up trace + compile …)")
 t_compile_start = time.perf_counter()
-for _ in range(3):
+for _ in range(5):
     dx_comp = step_compiled(mx, dx_comp)
 t_compile = time.perf_counter() - t_compile_start
-print(f"  warm-up compile time ({3} steps): {t_compile:.1f} s")
+print(f"  warm-up compile time ({5} steps): {t_compile:.1f} s")
 
 dx_comp = mujoco_torch.device_put(d_torch_ref)
 t0 = time.perf_counter()

@@ -20,7 +20,7 @@ from typing import Optional, Sequence, Tuple
 import mujoco
 import numpy as np
 import torch
-from mujoco_torch._src.dataclasses import MjTensorClass, install_getattribute_override  # pylint: disable=g-importing-member
+from mujoco_torch._src.dataclasses import MjTensorClass  # pylint: disable=g-importing-member
 
 
 class DisableBit(enum.IntFlag):
@@ -732,9 +732,18 @@ class Model(MjTensorClass):
   tendon_hasfrictionloss: np.ndarray
 
 
-# Model.names collides with TensorDict.names property — install the
-# __getattribute__ override only on this class, not the base MjTensorClass.
-install_getattribute_override(Model)
+# Model.names collides with TensorDict.names property.  A __getattribute__
+# override would fix this but causes graph breaks on EVERY attribute access,
+# which makes torch.compile skip entire frames (e.g. _advance, _euler).
+# Instead, shadow just the ``names`` property with a targeted descriptor
+# that reads/writes the stored field value directly.
+def _model_names_get(self):
+  return self._tensordict['names']
+
+def _model_names_set(self, value):
+  self._tensordict['names'] = value
+
+Model.names = property(_model_names_get, _model_names_set)
 
 
 class Contact(MjTensorClass):

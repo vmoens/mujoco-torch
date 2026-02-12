@@ -444,6 +444,7 @@ def _get_collision_cache(m: Model) -> Tuple:
   return result
 
 
+@torch.compiler.disable
 def collision(m: Model, d: Data) -> Data:
   """Collides geometries."""
   collision_groups, ncon_, max_cp = _get_collision_cache(m)

@@ -366,6 +366,7 @@ def _get_flat_cache(m, in_types, out_types, group_by):
   return cache
 
 
+@torch.compiler.disable
 def flat(
     m: Model,
     f: Callable[..., Y],
@@ -561,6 +562,7 @@ def _get_body_tree_cache(m, in_types, out_types, reverse):
   return cache
 
 
+@torch.compiler.disable
 def body_tree(
     m: Model,
     f: Callable[..., Y],
