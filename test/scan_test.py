@@ -212,14 +212,14 @@ class ScanTest(absltest.TestCase):
     )
 
     np.testing.assert_array_equal(gear, m.actuator_gear)
-    np.testing.assert_array_equal(jnt_typ, m.jnt_type[m.actuator_trnid])
+    np.testing.assert_array_equal(jnt_typ, m.jnt_type[m.actuator_trnid[:, 0]])
     np.testing.assert_array_equal(act, torch.tensor([1.4, 1.1]))
     expected_vadr = np.concatenate(
-        [np.nonzero(m.dof_jntid == trnid)[0] for trnid in m.actuator_trnid]
+        [np.nonzero(m.dof_jntid == trnid)[0] for trnid in m.actuator_trnid[:, 0]]
     )
     np.testing.assert_array_equal(vadr, expected_vadr)
     expected_qadr = np.concatenate(
-        [np.nonzero(scan._q_jointid(m) == i)[0] for i in m.actuator_trnid]
+        [np.nonzero(scan._q_jointid(m) == i)[0] for i in m.actuator_trnid[:, 0]]
     )
     np.testing.assert_array_equal(qadr, expected_qadr)
 

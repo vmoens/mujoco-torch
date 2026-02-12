@@ -28,7 +28,7 @@ from mujoco_torch._src import device
 from mujoco_torch._src import test_util
 from mujoco_torch._src import types
 # pylint: disable=g-importing-member
-from mujoco_torch._src.dataclasses import PyTreeNode
+from mujoco_torch._src.dataclasses import MjTensorClass
 
 
 def _assert_eq(testcase, a, b, attr=None, name=None):
@@ -36,9 +36,11 @@ def _assert_eq(testcase, a, b, attr=None, name=None):
     return
 
   if attr:
-    a, b = getattr(a, attr), getattr(b, attr)
+    # Mujoco uses 'dim' for contact dimension; we use 'contact_dim'
+    b_attr = device._FIELD_TARGET_MAP.get((type(a), attr), attr)
+    a, b = getattr(a, attr), getattr(b, b_attr)
 
-  if isinstance(a, PyTreeNode):
+  if isinstance(a, MjTensorClass):
     for field in dataclasses.fields(a):
       _assert_eq(testcase, a, b, field.name, type(a).__name__)
     return
@@ -91,7 +93,7 @@ class DeviceTest(parameterized.TestCase):
     # create mjx_data and batch it
     dx = mujoco_torch.make_data(mx)
     dx = torch.utils._pytree.tree_map(
-        lambda x: torch.repeat(x, batch_size).reshape((batch_size,) + x.shape),
+        lambda x: x.unsqueeze(0).expand((batch_size,) + x.shape).contiguous(),
         dx,
     )
     ds = [mujoco.MjData(m) for _ in range(batch_size - 1)]
@@ -101,7 +103,7 @@ class DeviceTest(parameterized.TestCase):
 
     ds = [mujoco.MjData(m) for _ in range(batch_size)]
     device.device_get_into(ds, dx)
-    dx = torch.device_get(dx)  # faster indexing for testing
+    # dx is already on CPU, no need for device_get
     for i in range(batch_size):
       _assert_eq(self, torch.utils._pytree.tree_map(lambda x, i=i: x[i], dx), ds[i])
 
@@ -131,7 +133,7 @@ class ValidateInputTest(absltest.TestCase):
 
   def test_trn(self):
     m = test_util.load_test_file('ant.xml')
-    m.actuator_trntype[0] = mujoco.mjtTrn.mjTRN_SITE
+    m.actuator_trntype[0] = mujoco.mjtTrn.mjTRN_TENDON
     with self.assertRaises(NotImplementedError):
       mujoco_torch.device_put(m)
 

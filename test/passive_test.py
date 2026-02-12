@@ -23,6 +23,7 @@ from absl.testing import absltest
 from absl.testing import parameterized
 from etils import epath
 import mujoco_torch
+from mujoco_torch._src.types import DisableBit
 
 
 def _assert_attr_eq(a, b, attr, step, fname, atol=1e-4, rtol=1e-4):
@@ -50,10 +51,10 @@ class PassiveTest(parameterized.TestCase):
     mx = mujoco_torch.device_put(m)
     dx = mujoco_torch.make_data(mx)
 
-    passive_jit_fn = torch.compile(mujoco_torch.passive)
+    passive_jit_fn = mujoco_torch.passive
 
     for i in range(100):
-      qpos, qvel = d.qpos.copy(), d.qvel.copy()
+      qpos, qvel = torch.tensor(d.qpos.copy()), torch.tensor(d.qvel.copy())
       mujoco.mj_step(m, d)
       dx = passive_jit_fn(mx, dx.replace(qpos=qpos, qvel=qvel))
       _assert_attr_eq(d, dx, 'qfrc_passive', i, fname)
@@ -72,7 +73,7 @@ class PassiveTest(parameterized.TestCase):
     m.opt.viscosity = np.random.uniform()
     m.opt.wind = np.random.uniform()
 
-    passive_jit_fn = torch.compile(mujoco_torch.passive)
+    passive_jit_fn = mujoco_torch.passive
 
     mx = mujoco_torch.device_put(m)
     d = mujoco.MjData(m)
@@ -88,9 +89,7 @@ class PassiveTest(parameterized.TestCase):
   def test_disable_passive(self):
     m = mujoco.MjModel.from_xml_string("""
         <mujoco>
-          <option density="1" viscosity="2" wind="0.1 0.2 0.3">
-            <flag passive="disable"/>
-          </option>
+          <option density="1" viscosity="2" wind="0.1 0.2 0.3"/>
           <worldbody>
             <body>
               <joint damping="1" axis="1 0 0" type="ball"/>
@@ -99,12 +98,13 @@ class PassiveTest(parameterized.TestCase):
           </worldbody>
         </mujoco>
         """)
+    m.opt.disableflags |= (DisableBit.SPRING | DisableBit.DAMPER)
     mx = mujoco_torch.device_put(m)
     d = mujoco.MjData(m)
     dx = mujoco_torch.device_put(d)
     dx = dx.replace(qvel=torch.ones(mx.nv))
 
-    passive_jit_fn = torch.compile(mujoco_torch.passive)
+    passive_jit_fn = mujoco_torch.passive
     dx = passive_jit_fn(mx, dx)
     np.testing.assert_equal(dx.qfrc_passive, np.zeros(mx.nv))
 

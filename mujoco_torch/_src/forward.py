@@ -13,19 +13,33 @@
 # limitations under the License.
 # ==============================================================================
 """Forward step functions."""
-import functools
 from typing import Optional, Sequence
 
 import mujoco
 # pylint: enable=g-importing-member
 import numpy as np
-# from torch import numpy as torch
 import torch
+from torch._higher_order_ops.scan import scan as _torch_scan
+
+
+def torch_scan(f, init, xs, dim=0):
+  """Scan that dispatches to torch higher-order op when compiling."""
+  if torch.compiler.is_compiling():
+    return _torch_scan(f, init, xs, dim=dim)
+  carry = init
+  ys = []
+  for i in range(xs.shape[dim]):
+    x_i = xs.select(dim, i)
+    carry, y = f(carry, x_i)
+    ys.append(y)
+  return carry, torch.stack(ys, dim=dim) if ys else torch.zeros(())
 from mujoco_torch._src import collision_driver
 from mujoco_torch._src import constraint
+from mujoco_torch._src import derivative
 from mujoco_torch._src import math
 from mujoco_torch._src import passive
 from mujoco_torch._src import scan
+from mujoco_torch._src import sensor
 from mujoco_torch._src import smooth
 from mujoco_torch._src import solver
 from mujoco_torch._src import support
@@ -48,41 +62,31 @@ _RK4_A = np.array([
 _RK4_B = np.array([1.0 / 6.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0])
 
 
-def named_scope(fn, name: str = ''):
-  @functools.wraps(fn)
-  def wrapper(*args, **kwargs):
-    # with torch.named_scope(name or getattr(fn, '__name__')):
-    res = fn(*args, **kwargs)
-    return res
-
-  return wrapper
-
-
-@named_scope
 def _position(m: Model, d: Data) -> Data:
   """Position-dependent computations."""
   # TODO(robotics-simulation): tendon
   d = smooth.kinematics(m, d)
   d = smooth.com_pos(m, d)
   d = smooth.crb(m, d)
-  d = smooth.factor_m(m, d, d.qM)
+  d = smooth.factor_m(m, d)
   d = collision_driver.collision(m, d)
   d = constraint.make_constraint(m, d)
   d = smooth.transmission(m, d)
   return d
 
 
-@named_scope
 def _velocity(m: Model, d: Data) -> Data:
   """Velocity-dependent computations."""
-  d = d.replace(actuator_velocity=d.actuator_moment @ d.qvel)
+  actuator_moment = d.actuator_moment
+  if actuator_moment.ndim == 1 and m.nu == 0:
+    actuator_moment = actuator_moment.reshape(0, m.nv)
+  d = d.replace(actuator_velocity=actuator_moment @ d.qvel)
   d = smooth.com_vel(m, d)
   d = passive.passive(m, d)
   d = smooth.rne(m, d)
   return d
 
 
-@named_scope
 def _actuation(m: Model, d: Data) -> Data:
   """Actuation-dependent computations."""
   if not m.nu or m.opt.disableflags & DisableBit.ACTUATION:
@@ -94,7 +98,7 @@ def _actuation(m: Model, d: Data) -> Data:
   ctrl = d.ctrl
   if not m.opt.disableflags & DisableBit.CLAMPCTRL:
     ctrlrange = torch.where(
-        m.actuator_ctrllimited[:, None],
+        torch.as_tensor(m.actuator_ctrllimited[:, None], dtype=torch.bool),
         m.actuator_ctrlrange,
         torch.tensor([-torch.inf, torch.inf]),
     )
@@ -130,7 +134,7 @@ def _actuation(m: Model, d: Data) -> Data:
   ctrl_act = ctrl
   if m.na:
     act_last_dim = d.act[m.actuator_actadr + m.actuator_actnum - 1]
-    ctrl_act = torch.where(m.actuator_actadr == -1, ctrl, act_last_dim)
+    ctrl_act = torch.where(torch.as_tensor(m.actuator_actadr == -1), ctrl, act_last_dim)
 
   def get_force(*args):
     gain_t, gain_p, bias_t, bias_p, len_, vel, ctrl_act = args
@@ -165,7 +169,7 @@ def _actuation(m: Model, d: Data) -> Data:
       group_by='u',
   )
   forcerange = torch.where(
-      m.actuator_forcelimited[:, None],
+      torch.as_tensor(m.actuator_forcelimited[:, None], dtype=torch.bool),
       m.actuator_forcerange,
       torch.tensor([-torch.inf, torch.inf]),
   )
@@ -175,21 +179,20 @@ def _actuation(m: Model, d: Data) -> Data:
 
   # clamp qfrc_actuator
   actfrcrange = torch.where(
-      m.jnt_actfrclimited[:, None],
+      torch.as_tensor(m.jnt_actfrclimited[:, None], dtype=torch.bool),
       m.jnt_actfrcrange,
       torch.tensor([-torch.inf, torch.inf]),
   )
   ids = sum(
       ([i] * JointType(j).dof_width() for i, j in enumerate(m.jnt_type)), []
   )
-  actfrcrange = torch.take(actfrcrange, torch.tensor(ids), axis=0)
+  actfrcrange = actfrcrange[torch.tensor(ids)]
   qfrc_actuator = torch.clamp(qfrc_actuator, actfrcrange[:, 0], actfrcrange[:, 1])
 
   d = d.replace(act_dot=act_dot, qfrc_actuator=qfrc_actuator)
   return d
 
 
-@named_scope
 def _acceleration(m: Model, d: Data) -> Data:
   """Add up all non-constraint forces, compute qacc_smooth."""
   qfrc_applied = d.qfrc_applied + support.xfrc_accumulate(m, d)
@@ -199,7 +202,6 @@ def _acceleration(m: Model, d: Data) -> Data:
   return d
 
 
-@named_scope
 def _integrate_pos(
     jnt_typs: Sequence[str], qpos: torch.Tensor, qvel: torch.Tensor, dt: torch.Tensor
 ) -> torch.Tensor:
@@ -228,7 +230,6 @@ def _integrate_pos(
   return torch.cat(qs) if qs else torch.empty((0,))
 
 
-@named_scope
 def _advance(
     m: Model,
     d: Data,
@@ -241,7 +242,7 @@ def _advance(
   if m.na:
     act = d.act + act_dot * m.opt.timestep
     actrange = torch.where(
-        m.actuator_actlimited[:, None],
+        torch.as_tensor(m.actuator_actlimited[:, None], dtype=torch.bool),
         m.actuator_actrange,
         torch.tensor([-torch.inf, torch.inf]),
     )
@@ -262,40 +263,45 @@ def _advance(
   return d.replace(act=act, qpos=qpos, time=time)
 
 
-@named_scope
 def _euler(m: Model, d: Data) -> Data:
   """Euler integrator, semi-implicit in velocity."""
   # integrate damping implicitly
   qacc = d.qacc
   if not m.opt.disableflags & DisableBit.EULERDAMP:
-    # TODO(robotics-simulation): can this be done with a smaller perf hit
-    mh = torch.scatter_add(d.qM, dim=0, index=torch.tensor(m.dof_Madr, dtype=torch.long), src=m.opt.timestep * m.dof_damping)
-    dh = smooth.factor_m(m, d, mh)
+    if support.is_sparse(m):
+      qM = d.qM.clone()
+      madr = torch.tensor(m.dof_Madr, dtype=torch.long, device=d.qM.device)
+      qM = qM.index_add(0, madr, m.opt.timestep * m.dof_damping)
+    else:
+      qM = d.qM + torch.diag(m.opt.timestep * m.dof_damping)
+    dh = d.replace(qM=qM)
+    dh = smooth.factor_m(m, dh)
     qfrc = d.qfrc_smooth + d.qfrc_constraint
     qacc = smooth.solve_m(m, dh, qfrc)
   return _advance(m, d, d.act_dot, qacc)
 
 
-@named_scope
 def _rungekutta4(m: Model, d: Data) -> Data:
   """Runge-Kutta explicit order 4 integrator."""
   d_t0 = d
   # pylint: disable=invalid-name
   A, B = _RK4_A, _RK4_B
-  C = torch.tril(A).sum(axis=0)  # C(i) = sum_j A(i,j)
+  A_t = torch.tensor(A, dtype=d.qpos.dtype, device=d.qpos.device)
+  B_t = torch.tensor(B, dtype=d.qpos.dtype, device=d.qpos.device)
+  C = torch.tril(A_t).sum(dim=0)  # C(i) = sum_j A(i,j)
   T = d.time + C * m.opt.timestep
   # pylint: enable=invalid-name
 
   kqvel = d.qvel  # intermediate RK solution
   # RK solutions sum
   qvel, qacc, act_dot = torch.utils._pytree.tree_map(
-      lambda k: B[0] * k, (kqvel, d.qacc, d.act_dot)
+      lambda k: B_t[0] * k, (kqvel, d.qacc, d.act_dot)
   )
   integrate_fn = lambda *args: _integrate_pos(*args, dt=m.opt.timestep)
 
   def f(carry, x):
     qvel, qacc, act_dot, kqvel, d = carry
-    a, b, t = x  # tableau numbers
+    a, b, t = x[0], x[1], x[2]  # tableau numbers
     dqvel, dqacc, dact_dot = torch.utils._pytree.tree_map(
         lambda k: a * k, (kqvel, d.qacc, d.act_dot)
     )
@@ -306,38 +312,55 @@ def _rungekutta4(m: Model, d: Data) -> Data:
     d = d.replace(qpos=kqpos, qvel=kqvel, act=kact, time=t)
     d = forward(m, d)
 
-    qvel += b * kqvel
-    qacc += b * d.qacc
-    act_dot += b * d.act_dot
+    qvel = qvel + b * kqvel
+    qacc = qacc + b * d.qacc
+    act_dot = act_dot + b * d.act_dot
 
-    return (qvel, qacc, act_dot, kqvel, d), None
+    return (qvel, qacc, act_dot, kqvel, d), torch.zeros(())
 
-  abt = torch.vstack([torch.diag(A), B[1:4], T]).T
-  out, _ = torch.lax.scan(f, (qvel, qacc, act_dot, kqvel, d), abt, unroll=3)
-  qvel, qacc, act_dot, *_ = out
+  abt = torch.stack([torch.diag(A_t), B_t[1:4], T], dim=1)
+  init = (qvel, qacc, act_dot, kqvel, d)
+  carry, _ = torch_scan(f, init, abt, dim=0)
+  qvel, qacc, act_dot, *_ = carry
 
   d = _advance(m, d_t0, act_dot, qacc, qvel)
   return d
 
 
-@named_scope
 def forward(m: Model, d: Data) -> Data:
   """Forward dynamics."""
   d = _position(m, d)
+  d = sensor.sensor_pos(m, d)
   d = _velocity(m, d)
+  d = sensor.sensor_vel(m, d)
   d = _actuation(m, d)
   d = _acceleration(m, d)
 
-  if d.efc_J.size == 0:
+  if d.efc_J.numel() == 0:
     d = d.replace(qacc=d.qacc_smooth)
     return d
 
-  d = named_scope(solver.solve)(m, d)
+  d = solver.solve(m, d)
+  d = sensor.sensor_acc(m, d)
 
   return d
 
 
-@named_scope
+def _implicit(m: Model, d: Data) -> Data:
+  """Integrates fully implicit in velocity."""
+  qderiv = derivative.deriv_smooth_vel(m, d)
+
+  qacc = d.qacc
+  if qderiv is not None:
+    qm = support.full_m(m, d) if support.is_sparse(m) else d.qM.clone()
+    qm = qm - m.opt.timestep * qderiv
+    L = torch.linalg.cholesky(qm)
+    qfrc = d.qfrc_smooth + d.qfrc_constraint
+    qacc = torch.cholesky_solve(qfrc.unsqueeze(-1), L).squeeze(-1)
+
+  return _advance(m, d, d.act_dot, qacc)
+
+
 def step(m: Model, d: Data) -> Data:
   """Advance simulation."""
   d = forward(m, d)
@@ -346,7 +369,19 @@ def step(m: Model, d: Data) -> Data:
     d = _euler(m, d)
   elif m.opt.integrator == IntegratorType.RK4:
     d = _rungekutta4(m, d)
+  elif m.opt.integrator == IntegratorType.IMPLICITFAST:
+    d = _implicit(m, d)
   else:
     raise NotImplementedError(f'integrator {m.opt.integrator} not implemented.')
 
   return d
+
+
+# Public aliases
+fwd_position = _position
+fwd_velocity = _velocity
+fwd_actuation = _actuation
+fwd_acceleration = _acceleration
+euler = _euler
+rungekutta4 = _rungekutta4
+implicit = _implicit

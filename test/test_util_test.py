@@ -22,7 +22,7 @@ from mujoco_torch._src import test_util
 class TestUtilTest(absltest.TestCase):
 
   def test_files_in_test_data_match(self):
-    directory = epath.resource_path('mujoco.mjx') / 'test_data'
+    directory = epath.resource_path('mujoco_torch') / 'test_data'
     files = set([f.name for f in directory.glob('*.xml')])
     self.assertSetEqual(
         files,

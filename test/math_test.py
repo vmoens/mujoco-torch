@@ -56,9 +56,9 @@ class OrthoganalsTest(parameterized.TestCase):
     np.testing.assert_almost_equal(torch.linalg.norm(a), 1)
     np.testing.assert_almost_equal(torch.linalg.norm(b), 1)
     np.testing.assert_almost_equal(torch.linalg.norm(c), 1)
-    self.assertAlmostEqual(np.abs(a.dot(b)), 0, 6)
-    self.assertAlmostEqual(np.abs(b.dot(c)), 0, 6)
-    self.assertAlmostEqual(np.abs(a.dot(c)), 0, 6)
+    self.assertAlmostEqual(np.abs(a.dot(b)).item(), 0, 6)
+    self.assertAlmostEqual(np.abs(b.dot(c)).item(), 0, 6)
+    self.assertAlmostEqual(np.abs(a.dot(c)).item(), 0, 6)
 
 
 def _minimize(fn, sample_fn, lb, ub, tol, max_iter=20, seed=42):
@@ -134,56 +134,56 @@ class ClosestSegmentSegmentPointsTest(parameterized.TestCase):
     b0 = torch.tensor([0.85599262, 0.61736299, 0.9843583])
     b1 = torch.tensor([1.84270939, 0.92891793, 1.36343326])
     best_a, best_b = math.closest_segment_to_segment_points(a0, a1, b0, b1)
-    self.assertSequenceAlmostEqual(best_a, [1.09063, 0.85404, 0.63351], 5)
-    self.assertSequenceAlmostEqual(best_b, [0.99596, 0.66156, 1.03813], 5)
+    self.assertSequenceAlmostEqual(best_a.tolist(), [1.09063, 0.85404, 0.63351], 5)
+    self.assertSequenceAlmostEqual(best_b.tolist(), [0.99596, 0.66156, 1.03813], 5)
 
   def test_intersecting_segments(self):
     """Tests segments that intersect."""
     a0, a1 = torch.tensor([0.0, 0.0, -1.0]), torch.tensor([0.0, 0.0, 1.0])
     b0, b1 = torch.tensor([-1.0, 0.0, 0.0]), torch.tensor([1.0, 0.0, 0.0])
     best_a, best_b = math.closest_segment_to_segment_points(a0, a1, b0, b1)
-    self.assertSequenceAlmostEqual(best_a, [0.0, 0.0, 0.0], 5)
-    self.assertSequenceAlmostEqual(best_b, [0.0, 0.0, 0.0], 5)
+    self.assertSequenceAlmostEqual(best_a.tolist(), [0.0, 0.0, 0.0], 5)
+    self.assertSequenceAlmostEqual(best_b.tolist(), [0.0, 0.0, 0.0], 5)
 
   def test_intersecting_lines(self):
     """Tests that intersecting lines get clipped."""
     a0, a1 = torch.tensor([0.2, 0.2, 0.0]), torch.tensor([1.0, 1.0, 0.0])
     b0, b1 = torch.tensor([0.2, 0.4, 0.0]), torch.tensor([1.0, 2.0, 0.0])
     best_a, best_b = math.closest_segment_to_segment_points(a0, a1, b0, b1)
-    self.assertSequenceAlmostEqual(best_a, [0.3, 0.3, 0.0], 2)
-    self.assertSequenceAlmostEqual(best_b, [0.2, 0.4, 0.0], 2)
+    self.assertSequenceAlmostEqual(best_a.tolist(), [0.3, 0.3, 0.0], 2)
+    self.assertSequenceAlmostEqual(best_b.tolist(), [0.2, 0.4, 0.0], 2)
 
   def test_parallel_segments(self):
     """Tests that parallel segments have closest points at the midpoint."""
     a0, a1 = torch.tensor([0.0, 0.0, -1.0]), torch.tensor([0.0, 0.0, 1.0])
-    b0, b1 = torch.array([1.0, 0.0, -1.0]), torch.array([1.0, 0.0, 1.0])
+    b0, b1 = torch.tensor([1.0, 0.0, -1.0]), torch.tensor([1.0, 0.0, 1.0])
     best_a, best_b = math.closest_segment_to_segment_points(a0, a1, b0, b1)
-    self.assertSequenceAlmostEqual(best_a, [0.0, 0.0, 0.0], 5)
-    self.assertSequenceAlmostEqual(best_b, [1.0, 0.0, 0.0], 5)
+    self.assertSequenceAlmostEqual(best_a.tolist(), [0.0, 0.0, 0.0], 5)
+    self.assertSequenceAlmostEqual(best_b.tolist(), [1.0, 0.0, 0.0], 5)
 
   def test_parallel_offset_segments(self):
     """Tests that offset parallel segments are close at segment endpoints."""
-    a0, a1 = torch.array([0.0, 0.0, -1.0]), torch.array([0.0, 0.0, 1.0])
-    b0, b1 = torch.array([1.0, 0.0, 1.0]), torch.array([1.0, 0.0, 3.0])
+    a0, a1 = torch.tensor([0.0, 0.0, -1.0]), torch.tensor([0.0, 0.0, 1.0])
+    b0, b1 = torch.tensor([1.0, 0.0, 1.0]), torch.tensor([1.0, 0.0, 3.0])
     best_a, best_b = math.closest_segment_to_segment_points(a0, a1, b0, b1)
-    self.assertSequenceAlmostEqual(best_a, [0.0, 0.0, 1.0], 5)
-    self.assertSequenceAlmostEqual(best_b, [1.0, 0.0, 1.0], 5)
+    self.assertSequenceAlmostEqual(best_a.tolist(), [0.0, 0.0, 1.0], 5)
+    self.assertSequenceAlmostEqual(best_b.tolist(), [1.0, 0.0, 1.0], 5)
 
   def test_zero_length_segments(self):
     """Test that zero length segments don't return NaNs."""
-    a0, a1 = torch.array([0.0, 0.0, -1.0]), torch.array([0.0, 0.0, -1.0])
-    b0, b1 = torch.array([1.0, 0.0, 0.1]), torch.array([1.0, 0.0, 0.1])
+    a0, a1 = torch.tensor([0.0, 0.0, -1.0]), torch.tensor([0.0, 0.0, -1.0])
+    b0, b1 = torch.tensor([1.0, 0.0, 0.1]), torch.tensor([1.0, 0.0, 0.1])
     best_a, best_b = math.closest_segment_to_segment_points(a0, a1, b0, b1)
-    self.assertSequenceAlmostEqual(best_a, [0.0, 0.0, -1.0], 5)
-    self.assertSequenceAlmostEqual(best_b, [1.0, 0.0, 0.1], 5)
+    self.assertSequenceAlmostEqual(best_a.tolist(), [0.0, 0.0, -1.0], 5)
+    self.assertSequenceAlmostEqual(best_b.tolist(), [1.0, 0.0, 0.1], 5)
 
   def test_overlapping_segments(self):
     """Tests that perfectly overlapping segments intersect at the midpoints."""
-    a0, a1 = torch.array([0.0, 0.0, -1.0]), torch.array([0.0, 0.0, 1.0])
-    b0, b1 = torch.array([0.0, 0.0, -1.0]), torch.array([0.0, 0.0, 1.0])
+    a0, a1 = torch.tensor([0.0, 0.0, -1.0]), torch.tensor([0.0, 0.0, 1.0])
+    b0, b1 = torch.tensor([0.0, 0.0, -1.0]), torch.tensor([0.0, 0.0, 1.0])
     best_a, best_b = math.closest_segment_to_segment_points(a0, a1, b0, b1)
-    self.assertSequenceAlmostEqual(best_a, [0.0, 0.0, 0.0], 5)
-    self.assertSequenceAlmostEqual(best_b, [0.0, 0.0, 0.0], 5)
+    self.assertSequenceAlmostEqual(best_a.tolist(), [0.0, 0.0, 0.0], 5)
+    self.assertSequenceAlmostEqual(best_b.tolist(), [0.0, 0.0, 0.0], 5)
 
   params = list(zip(np.repeat(np.arange(10), 10), np.tile(np.arange(10), 10)))
 
@@ -192,10 +192,13 @@ class ClosestSegmentSegmentPointsTest(parameterized.TestCase):
     a0, a1 = _get_rand_line_segment(i)
     b0, b1 = _get_rand_line_segment(j)
     expected = _closest_segment_to_segment_points(a0, a1, b0, b1)
-    ans = math.closest_segment_to_segment_points(a0, a1, b0, b1)
+    ans = math.closest_segment_to_segment_points(
+        torch.tensor(a0), torch.tensor(a1),
+        torch.tensor(b0), torch.tensor(b1),
+    )
     expected_dist = (expected[0] - expected[1]).dot(expected[0] - expected[1])
     test_dist = (ans[0] - ans[1]).dot(ans[0] - ans[1])
-    self.assertAlmostEqual(expected_dist, test_dist, 4)
+    self.assertAlmostEqual(expected_dist.item(), test_dist.item(), 4)
 
 
 if __name__ == "__main__":
