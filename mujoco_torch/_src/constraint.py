@@ -315,7 +315,8 @@ def _instantiate_contact(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for contacts."""
 
   _, _, _, ncon_m, _ = constraint_sizes(m)
-  if (m.opt.disableflags & DisableBit.CONTACT) or ncon_m == 0:
+  actual_ncon = d.contact.dist.shape[0]
+  if (m.opt.disableflags & DisableBit.CONTACT) or ncon_m == 0 or actual_ncon == 0:
     return None
 
   @torch.vmap
@@ -417,7 +418,11 @@ def make_constraint(m: Model, d: Data) -> Data:
 
   ne, nf, nl, ncon, nefc = constraint_sizes(m)
   ns = ne + nf + nl
-  d = d.tree_replace({'contact.efc_address': torch.arange(ns, ns + ncon * 4, 4)})
+  # Use actual data contact count for efc_address; device_put on a fresh
+  # MjData may produce 0 contacts while the model expects more.
+  actual_ncon = d.contact.dist.shape[0]
+  efc_address = torch.arange(ns, ns + actual_ncon * 4, 4)
+  d = d.tree_replace({'contact.efc_address': efc_address})
 
   if m.opt.disableflags & DisableBit.CONSTRAINT:
     efcs = ()

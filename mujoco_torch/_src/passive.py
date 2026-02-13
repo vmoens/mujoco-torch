@@ -55,15 +55,14 @@ def _inertia_box_fluid_model(
   lfrc_vel = lvel[3:] * -3.0 * torch.pi * diam * m.opt.viscosity
 
   # add lift and drag force and torque
-  scale_vel = torch.tensor(
+  scale_vel = torch.stack(
       [box[1] * box[2], box[0] * box[2], box[0] * box[1]],
-      dtype=box.dtype, device=box.device
   )
-  scale_ang = torch.tensor([
+  scale_ang = torch.stack([
       box[0] * (box[1] ** 4 + box[2] ** 4),
       box[1] * (box[0] ** 4 + box[2] ** 4),
       box[2] * (box[0] ** 4 + box[1] ** 4),
-  ], dtype=box.dtype, device=box.device)
+  ])
   lfrc_vel = lfrc_vel - 0.5 * m.opt.density * scale_vel * torch.abs(lvel[3:]) * lvel[3:]
   lfrc_ang = lfrc_ang - (
       1.0 * m.opt.density * scale_ang * torch.abs(lvel[:3]) * lvel[:3] / 64.0
