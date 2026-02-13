@@ -22,9 +22,27 @@ import torch
 from torch._higher_order_ops.while_loop import while_loop as _torch_while_loop
 
 
-def while_loop(cond_fn, body_fn, carried_inputs):
-  """While loop that dispatches to torch higher-order op when compiling."""
-  if torch.compiler.is_compiling():
+def _inside_functorch() -> bool:
+  """Return True when executing inside a functorch transform (vmap, grad, …)."""
+  return torch._C._functorch.peek_interpreter_stack() is not None
+
+
+def while_loop(cond_fn, body_fn, carried_inputs, max_iter=None):
+  """While loop that dispatches appropriately depending on context.
+
+  * ``torch.compile`` or ``torch.vmap`` → ``torch._higher_order_ops.while_loop``
+    (the higher-order op has both compile and vmap dispatch rules as of
+    torch 2.11; the vmap rule runs until all batch elements converge,
+    freezing finished elements with ``torch.where``).
+  * eager → plain Python ``while``
+
+  Args:
+    cond_fn:  ``(*carried) -> bool`` – loop condition.
+    body_fn:  ``(*carried) -> carried`` – loop body.
+    carried_inputs: initial carry (tuple of tensors / NamedTuples).
+    max_iter: unused, kept for backward compatibility.
+  """
+  if torch.compiler.is_compiling() or _inside_functorch():
     # Wrap body to clone all output tensors, eliminating input-to-output
     # aliasing (required by torch._higher_order_ops.while_loop when carry
     # fields pass through unchanged).
@@ -35,6 +53,7 @@ def while_loop(cond_fn, body_fn, carried_inputs):
           lambda t: t.clone() if isinstance(t, torch.Tensor) else t, result,
       )
     return _torch_while_loop(cond_fn, cloning_body, carried_inputs)
+
   val = carried_inputs
   while cond_fn(*val):
     val = body_fn(*val)
@@ -287,8 +306,9 @@ def solve(m: Model, d: Data) -> Data:
   qacc_smooth = d.qacc_smooth.clone()
   qacc_warmstart = d.qacc_warmstart.clone()
   qfrc_constraint = d.qfrc_constraint.clone()
-  ne_nf = int(d.ne) + int(d.nf)
-  nefc = int(d.nefc)
+  from mujoco_torch._src.constraint import constraint_sizes
+  ne, nf, nl, ncon_m, nefc = constraint_sizes(m)
+  ne_nf = ne + nf
 
   # ---- Pre-compute mass matrix closures (no m/d access inside loop) ---------
   dense_M = _make_dense_m(m, d) if use_dense else torch.empty(0, 0)
@@ -434,7 +454,7 @@ def solve(m: Model, d: Data) -> Data:
     hi = torch.utils._pytree.tree_map(lesser_fn, p0, lo)
     lo = torch.utils._pytree.tree_map(lesser_fn, lo, p0)
     ls_ctx = _LSContext(lo=lo, hi=hi, swap=torch.tensor(True), ls_iter=torch.tensor(0))
-    ls_ctx = while_loop(ls_cond, ls_body, (ls_ctx,))[0]
+    ls_ctx = while_loop(ls_cond, ls_body, (ls_ctx,), max_iter=ls_iterations)[0]
 
     # move to new solution if improved
     lo, hi = ls_ctx.lo, ls_ctx.hi
@@ -481,7 +501,7 @@ def solve(m: Model, d: Data) -> Data:
   if iterations == 1:
     ctx = body(ctx)[0]
   else:
-    ctx = while_loop(cond, body, (ctx,))[0]
+    ctx = while_loop(cond, body, (ctx,), max_iter=iterations)[0]
 
   d = d.replace(
       qacc_warmstart=ctx.qacc,

@@ -19,7 +19,6 @@ from typing import Optional, Union
 import mujoco
 import numpy as np
 import torch
-from mujoco_torch._src import collision_driver
 from mujoco_torch._src import constraint
 from mujoco_torch._src import device
 from mujoco_torch._src.types import Contact
@@ -114,12 +113,8 @@ def make_data(m: Union[Model, mujoco.MjModel]) -> Data:
   if isinstance(m, mujoco.MjModel):
     m = put_model(m)
 
-  # Get constraint counts and contact info
-  ncon = collision_driver.ncon(m)
-  # count_constraints needs d.ncon for contact count; use minimal placeholder
-  _d = type('_Dummy', (), {'ncon': ncon})()
-  ne, nf, nl, nc = constraint.count_constraints(m, _d)
-  nefc = int(ne + nf + nl + nc)
+  # Get constraint counts purely from Model (no Data needed).
+  ne, nf, nl, ncon, nefc = constraint.constraint_sizes(m)
   ns = ne + nf + nl
 
   # Build contact dim and efc_address (mujoco_torch uses contact_dim=3 for all, 4 efc rows per contact)
@@ -168,11 +163,11 @@ def make_data(m: Union[Model, mujoco.MjModel]) -> Data:
   }
 
   d = Data(
-      ne=ne,
-      nf=nf,
-      nl=nl,
-      nefc=nefc,
-      ncon=ncon,
+      ne=torch.tensor(ne, dtype=torch.int32),
+      nf=torch.tensor(nf, dtype=torch.int32),
+      nl=torch.tensor(nl, dtype=torch.int32),
+      nefc=torch.tensor(nefc, dtype=torch.int32),
+      ncon=torch.tensor(ncon, dtype=torch.int32),
       contact=contact,
       **public_fields,
       **zero_impl,

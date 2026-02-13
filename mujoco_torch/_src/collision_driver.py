@@ -23,6 +23,7 @@ import numpy as np
 # from torch import numpy as torch
 import torch
 from mujoco_torch._src import collision_types
+from mujoco_torch._src import support
 from mujoco_torch._src.dataclasses import MjTensorClass
 # pylint: disable=g-importing-member
 from mujoco_torch._src.collision_types import FunctionKey
@@ -449,7 +450,7 @@ def collision(m: Model, d: Data) -> Data:
   """Collides geometries."""
   collision_groups, ncon_, max_cp = _get_collision_cache(m)
   if ncon_ == 0:
-    return d.replace(contact=Contact.zero(), ncon=0)
+    return d.replace(contact=Contact.zero(), ncon=torch.tensor(0, dtype=torch.int32))
 
   contacts = []
   for fn, geom_types, candidates in collision_groups:
@@ -470,10 +471,13 @@ def collision(m: Model, d: Data) -> Data:
   if ncon_ != contact.dist.shape[0]:
     raise RuntimeError('Number of contacts does not match ncon.')
 
-  # TODO(robotics-simulation): move this logic to device_put
-  ns = int(d.ne) + int(d.nf) + int(d.nl)
+  # Compute constraint sizes purely from Model (not Data) so this works
+  # inside torch.vmap where Data fields may be batched NonTensorStack.
+  from mujoco_torch._src.constraint import constraint_sizes
+  ne, nf, nl, _, _ = constraint_sizes(m)
+  ns = ne + nf + nl
   contact = contact.replace(efc_address=torch.arange(ns, ns + ncon_ * 4, 4))
   # TODO(robotics-simulation): add support for other friction dimensions
   contact = contact.replace(contact_dim=torch.full((ncon_,), 3, dtype=torch.int32))
 
-  return d.replace(contact=contact, ncon=ncon_)
+  return d.replace(contact=contact, ncon=torch.tensor(ncon_, dtype=torch.int32))

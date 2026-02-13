@@ -314,7 +314,8 @@ def _instantiate_limit_slide_hinge(m: Model, d: Data) -> Optional[_Efc]:
 def _instantiate_contact(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for contacts."""
 
-  if (m.opt.disableflags & DisableBit.CONTACT) or d.ncon == 0:
+  _, _, _, ncon_m, _ = constraint_sizes(m)
+  if (m.opt.disableflags & DisableBit.CONTACT) or ncon_m == 0:
     return None
 
   @torch.vmap
@@ -349,7 +350,7 @@ def _instantiate_contact(m: Model, d: Data) -> Optional[_Efc]:
 
   contact = d.contact
   # Ensure batch_size matches the leading tensor dimension for vmap.
-  if contact.batch_size != torch.Size([d.ncon]):
+  if contact.batch_size != torch.Size([ncon_m]):
     contact = contact.clone(recurse=False)
     contact.auto_batch_size_()
   res = fn(contact)
@@ -362,10 +363,18 @@ def _instantiate_contact(m: Model, d: Data) -> Optional[_Efc]:
   return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
 
 
-def count_constraints(m: Model, d: Data) -> Tuple[int, int, int, int]:
-  """Returns equality, friction, limit, and contact constraint counts."""
+def constraint_sizes(m: Model) -> Tuple[int, int, int, int, int]:
+  """Compute (ne, nf, nl, ncon, nefc) purely from Model (no Data needed).
+
+  All constraint / contact counts are deterministic functions of the model
+  geometry and options.  Computing them from Model rather than Data avoids
+  ``int(tensor)`` / ``.item()`` calls that are incompatible with
+  ``torch.vmap``.
+  """
+  from mujoco_torch._src import collision_driver  # avoid circular at module level
+
   if m.opt.disableflags & DisableBit.CONSTRAINT:
-    return 0, 0, 0, 0
+    return 0, 0, 0, 0, 0
 
   if m.opt.disableflags & DisableBit.EQUALITY:
     ne = 0
@@ -383,20 +392,31 @@ def count_constraints(m: Model, d: Data) -> Tuple[int, int, int, int]:
     nl = int(m.jnt_limited.sum())
 
   if m.opt.disableflags & DisableBit.CONTACT:
-    nc = 0
+    ncon_ = 0
   else:
-    nc = int(d.ncon) * 4
+    ncon_ = collision_driver.ncon(m)
 
-  return ne, nf, nl, nc
+  nc = ncon_ * 4
+  nefc = ne + nf + nl + nc
+  return ne, nf, nl, ncon_, nefc
+
+
+def count_constraints(m: Model, d: Data) -> Tuple[int, int, int, int]:
+  """Returns equality, friction, limit, and contact constraint counts.
+
+  .. deprecated:: Use :func:`constraint_sizes` instead which does not
+     require a ``Data`` instance and is compatible with ``torch.vmap``.
+  """
+  ne, nf, nl, ncon_, nefc = constraint_sizes(m)
+  return ne, nf, nl, ncon_ * 4
 
 
 @torch.compiler.disable
 def make_constraint(m: Model, d: Data) -> Data:
   """Creates constraint jacobians and other supporting data."""
 
-  ns = sum(count_constraints(m, d)[:-1])
-  # TODO(robotics-simulation): make device_put set nefc/efc_address instead
-  ncon = int(d.ncon)
+  ne, nf, nl, ncon, nefc = constraint_sizes(m)
+  ns = ne + nf + nl
   d = d.tree_replace({'contact.efc_address': torch.arange(ns, ns + ncon * 4, 4)})
 
   if m.opt.disableflags & DisableBit.CONSTRAINT:
@@ -415,7 +435,7 @@ def make_constraint(m: Model, d: Data) -> Data:
   if not efcs:
     z = torch.empty(0)
     d = d.replace(efc_J=torch.empty((0, m.nv)))
-    d = d.replace(efc_D=z, efc_aref=z, efc_frictionloss=z, nefc=0)
+    d = d.replace(efc_D=z, efc_aref=z, efc_frictionloss=z, nefc=torch.tensor(0, dtype=torch.int32))
     return d
 
   efc = torch.cat(list(efcs))
@@ -429,6 +449,6 @@ def make_constraint(m: Model, d: Data) -> Data:
 
   aref, r = fn(efc)
   d = d.replace(efc_J=efc.J, efc_D=1 / r, efc_aref=aref)
-  d = d.replace(efc_frictionloss=efc.frictionloss, nefc=r.shape[0])
+  d = d.replace(efc_frictionloss=efc.frictionloss, nefc=torch.tensor(r.shape[0], dtype=torch.int32))
 
   return d

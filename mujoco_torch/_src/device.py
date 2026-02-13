@@ -339,7 +339,7 @@ def device_get_into(result, value):
   else:
     if isinstance(result, mujoco.MjData):
       mujoco._functions._realloc_con_efc(  # pylint: disable=protected-access
-          result, ncon=value.ncon, nefc=value.nefc
+          result, ncon=int(value.ncon), nefc=int(value.nefc)
       )
 
     for f in dataclasses.fields(value):  # type: ignore

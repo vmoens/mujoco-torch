@@ -879,12 +879,13 @@ class Data(MjTensorClass):
   """
   # solver statistics:
   solver_niter: torch.Tensor
-  # sizes (variable in MJ, constant in MJX)
-  ne: int
-  nf: int
-  nl: int
-  nefc: int
-  ncon: int
+  # sizes (variable in MJ, constant in MJX).
+  # Stored as 0-d int32 tensors so that torch.vmap can batch/unbatch them.
+  ne: torch.Tensor
+  nf: torch.Tensor
+  nl: torch.Tensor
+  nefc: torch.Tensor
+  ncon: torch.Tensor
   # global properties:
   time: torch.Tensor
   # state:

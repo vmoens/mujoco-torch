@@ -26,6 +26,19 @@ from mujoco_torch._src.types import Model
 # pylint: enable=g-importing-member
 
 
+def to_int(x) -> int:
+  """Extract a Python int from a tensor that may be inside torch.vmap.
+
+  Inside vmap, calling ``int(tensor)`` / ``.item()`` is not supported.
+  This helper flattens the tensor first and takes element [0], which is
+  safe because the values wrapped here (ne, nf, ncon, …) are model-level
+  constants identical across all batch elements.
+  """
+  if isinstance(x, int):
+    return x
+  return int(x.flatten()[0])
+
+
 def is_sparse(m: Union[mujoco.MjModel, Model]) -> bool:
   """Return True if this model should create sparse mass matrices."""
   if m.opt.jacobian == JacobianType.AUTO:
