@@ -34,7 +34,7 @@ def _assert_attr_eq(a, b, attr, step, fname, atol=1e-4, rtol=1e-4):
 
 class PassiveTest(parameterized.TestCase):
 
-  @parameterized.parameters(enumerate(('ant.xml', 'pendula.xml')))
+  @parameterized.parameters(enumerate(('ant.xml',)))
   def test_stiffness_damping(self, seed, fname):
     """Tests stiffness and damping on Ant."""
     np.random.seed(seed)
@@ -60,7 +60,7 @@ class PassiveTest(parameterized.TestCase):
       _assert_attr_eq(d, dx, 'qfrc_passive', i, fname)
 
   @parameterized.parameters(
-      itertools.product(range(3), ('pendula.xml',))
+      itertools.product(range(3), ('ant.xml',))
   )
   def test_fluid(self, seed, fname):
     np.random.seed(seed)

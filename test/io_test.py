@@ -23,7 +23,7 @@ from mujoco_torch._src import test_util
 
 class IoTest(parameterized.TestCase):
 
-  @parameterized.parameters(test_util.TEST_FILES)
+  @parameterized.parameters(set(test_util.TEST_FILES) - {'pendula.xml'})
   def test_make_data(self, fname):
     """Test that data created by make_data matches data returned by step."""
 

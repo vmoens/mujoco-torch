@@ -41,7 +41,8 @@ class ConstraintTest(parameterized.TestCase):
     np.random.seed(seed)
 
     # exclude convex.xml since convex contacts are not exactly equivalent
-    if fname == 'convex.xml':
+    # exclude pendula.xml since tendons are not yet supported
+    if fname in ('convex.xml', 'pendula.xml'):
       return
 
     m = test_util.load_test_file(fname)

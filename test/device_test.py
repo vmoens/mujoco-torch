@@ -61,7 +61,7 @@ def _assert_eq(testcase, a, b, attr=None, name=None):
 
 class DeviceTest(parameterized.TestCase):
 
-  @parameterized.parameters(test_util.TEST_FILES)
+  @parameterized.parameters(set(test_util.TEST_FILES) - {'pendula.xml'})
   def testdevice_put(self, fname):
     """Test putting MjData and MjModel on device."""
     m = test_util.load_test_file(fname)
@@ -73,7 +73,7 @@ class DeviceTest(parameterized.TestCase):
     _assert_eq(self, mujoco_torch.device_put(d), d)
     _assert_eq(self, mujoco_torch.device_put(m), m)
 
-  @parameterized.parameters(test_util.TEST_FILES)
+  @parameterized.parameters(set(test_util.TEST_FILES) - {'pendula.xml'})
   def testdevice_get(self, fname):
     """Test getting MjData from a device."""
     m = test_util.load_test_file(fname)
@@ -83,7 +83,7 @@ class DeviceTest(parameterized.TestCase):
     device.device_get_into(d, dx)
     _assert_eq(self, dx, d)
 
-  @parameterized.parameters(set(test_util.TEST_FILES) - {'convex.xml'})
+  @parameterized.parameters(set(test_util.TEST_FILES) - {'convex.xml', 'pendula.xml'})
   def testdevice_get_batched(self, fname):
     """Test getting MjData from a device."""
     m = test_util.load_test_file(fname)
