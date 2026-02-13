@@ -153,7 +153,6 @@
     <motor gear="150" joint="joint15" name="act6"/>
     <motor gear="150" joint="joint16" name="act7"/>
     <motor gear="150" joint="joint17" name="act8"/>
-    <position tendon="tendon_2" kp="100"/>
     <motor gear="2 3 4" jointinparent="joint1"/>
     <motor gear="5 6 7 8 9 10" jointinparent="freejoint"/>
   </actuator>
