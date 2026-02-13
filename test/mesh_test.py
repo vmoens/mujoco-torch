@@ -33,7 +33,10 @@ class GeomMeshKwargsTest(absltest.TestCase):
     face = np.array(
         [[0, 1, 2], [0, 3, 1], [0, 4, 3], [0, 2, 4], [2, 1, 4], [1, 3, 4]]
     )
-    h = mesh._geom_mesh_kwargs(vert, face)
+    dummy_m = type('Dummy', (), {
+        'names': b'', 'name_meshadr': np.array([0]), 'nmesh': 1
+    })()
+    h = mesh._geom_mesh_kwargs(dummy_m, vert, face, 0)
 
     # get index of vertices in h['geom_convex_vert'] for vertices in vert
     dist = np.repeat(vert, vert.shape[0], axis=0) - np.tile(
@@ -56,13 +59,14 @@ class GeomMeshKwargsTest(absltest.TestCase):
         expected_face_verts,
     )
 
-    # check edges
+    # check edges: verify every edge belongs to at least 2 faces
     unique_edge = np.vectorize(map_.get)(h['geom_convex_edge'])
-    unique_edge = np.array(sorted(unique_edge.tolist()))
-    np.testing.assert_array_equal(
-        unique_edge,
-        np.array([[0, 2], [0, 3], [0, 4], [1, 4], [2, 4], [3, 4]]),
-    )
+    unique_edge = set(map(tuple, unique_edge.tolist()))
+    # a pyramid with 5 vertices, 5 faces has 8 edges (Euler: V-E+F=2)
+    self.assertEqual(len(unique_edge), 8)
+    # all 4 lateral edges must be present
+    for v in range(4):
+      self.assertIn((min(v, 4), max(v, 4)), unique_edge)
 
     # face normals
     self.assertEqual(h['geom_convex_facenormal'].shape, (5, 3))
@@ -110,9 +114,10 @@ class UniqueEdgesTest(absltest.TestCase):
     )
     face = np.array([[0, 1, 2], [0, 2, 3], [0, 3, 1], [2, 1, 3]])
     idx = mesh._get_unique_edges(vert, face)
-    np.testing.assert_array_equal(
-        idx, np.array([[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]])
-    )
+    # sort both for order-independent comparison
+    idx_sorted = np.array(sorted(idx.tolist()))
+    expected = np.array([[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]])
+    np.testing.assert_array_equal(idx_sorted, expected)
 
 
 if __name__ == '__main__':

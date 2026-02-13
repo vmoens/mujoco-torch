@@ -16,8 +16,40 @@
 
 from typing import Optional, Tuple, Union
 
-# from torch import numpy as torch
+import mujoco
 import torch
+
+
+def safe_div(
+    num: Union[float, torch.Tensor], den: Union[float, torch.Tensor]
+) -> Union[float, torch.Tensor]:
+  """Safe division for case where denominator is zero."""
+  return num / (den + mujoco.mjMINVAL * (den == 0))
+
+
+def matmul_unroll(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+  """Calculates a @ b via explicit cell value operations.
+
+  This is faster than generic matmul for small matrices (e.g. 3x3, 4x4).
+
+  Args:
+    a: left hand of matmul operand
+    b: right hand of matmul operand
+
+  Returns:
+    the matrix product of the inputs.
+  """
+  c = []
+  for i in range(a.shape[0]):
+    row = []
+    for j in range(b.shape[1]):
+      s = 0.0
+      for k in range(a.shape[1]):
+        s += a[i, k] * b[k, j]
+      row.append(s)
+    c.append(row)
+
+  return torch.stack([torch.stack(row) for row in c])
 
 
 def norm(
@@ -25,22 +57,20 @@ def norm(
 ) -> torch.Tensor:
   """Calculates a linalg.norm(x) that's safe for gradients at x=0.
 
-  Avoids a poorly defined gradient for jnp.linal.norm(0) see
-  https://github.com/google/jax/issues/3058 for details
+  Avoids a poorly defined gradient for linalg.norm(0) see
+  https://github.com/jax-ml/jax/issues/3058 for details
   Args:
-    x: A jnp.array
+    x: A torch.Tensor
     axis: The axis along which to compute the norm
 
   Returns:
     Norm of the array x.
   """
-  # cannot vmap over torch.allclose
-  # is_zero = torch.allclose(x, torch.zeros_like(x))
-  is_zero = abs(x) < torch.finfo(x.dtype).resolution
+  is_zero = torch.all(x == 0)
   # temporarily swap x with ones if is_zero, then swap back
   x = torch.where(is_zero, torch.ones_like(x), x)
-  n = torch.linalg.norm(x, axis=axis)
-  n = torch.where(is_zero, 0.0, n)
+  n = torch.linalg.norm(x, dim=axis)
+  n = torch.where(is_zero, torch.zeros_like(n), n)
   return n
 
 
@@ -50,7 +80,7 @@ def normalize_with_norm(
   """Normalizes an array.
 
   Args:
-    x: A jnp.array
+    x: A torch.Tensor
     axis: The axis along which to compute the norm
 
   Returns:
@@ -67,7 +97,7 @@ def normalize(
   """Normalizes an array.
 
   Args:
-    x: A jnp.array
+    x: A torch.Tensor
     axis: The axis along which to compute the norm
 
   Returns:
@@ -94,7 +124,7 @@ def rotate(vec: torch.Tensor, quat: torch.Tensor) -> torch.Tensor:
   return r
 
 
-def quat_inv(q: torch.tensor) -> torch.tensor:
+def quat_inv(q: torch.Tensor) -> torch.Tensor:
   """Calculates the inverse of quaternion q.
 
   Args:
@@ -103,7 +133,7 @@ def quat_inv(q: torch.tensor) -> torch.tensor:
   Returns:
     The inverse of q, where qmult(q, inv_quat(q)) = [1, 0, 0, 0].
   """
-  return q * torch.tensor([1, -1, -1, -1])
+  return q * torch.tensor([1, -1, -1, -1], dtype=q.dtype, device=q.device)
 
 
 def quat_sub(u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
@@ -188,9 +218,7 @@ def axis_angle_to_quat(axis: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
     A quaternion that rotates around axis by angle
   """
   s, c = torch.sin(angle * 0.5), torch.cos(angle * 0.5)
-  # return torch.insert(axis * s, 0, c)
-  out = axis * s
-  return torch.cat([torch.zeros_like(out[:1]), out])
+  return torch.cat([c.unsqueeze(0), axis * s])
 
 
 def quat_integrate(q: torch.Tensor, v: torch.Tensor, dt: torch.Tensor) -> torch.Tensor:
@@ -214,9 +242,14 @@ def inert_mul(i: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
   """
   tri_id = torch.tensor([[0, 3, 4], [3, 1, 5], [4, 5, 2]])  # cinert inr order
   inr, pos, mass = i[tri_id], i[6:9], i[9]
-  ang = torch.vmap(torch.dot, (0, None))(inr, v[:3]) + torch.dot(pos, v[3:])
+  ang = torch.mv(inr, v[:3]) + torch.linalg.cross(pos, v[3:])
   vel = mass * v[3:] - torch.linalg.cross(pos, v[:3])
   return torch.cat((ang, vel))
+
+
+def sign(x: torch.Tensor) -> torch.Tensor:
+  """Returns the sign of x in the set {-1, 1}."""
+  return torch.where(x < 0, -1, 1)
 
 
 def transform_motion(vel: torch.Tensor, offset: torch.Tensor, rotmat: torch.Tensor):
@@ -269,7 +302,8 @@ def motion_cross_force(v, f):
 
 def orthogonals(a: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
   """Returns orthogonal vectors `b` and `c`, given a vector `a`."""
-  y, z = torch.tensor([0, 1, 0], dtype=a.dtype, device=a.device), torch.tensor([0, 0, 1], dtype=a.dtype, device=a.device)
+  y = torch.tensor([0, 1, 0], dtype=a.dtype, device=a.device)
+  z = torch.tensor([0, 0, 1], dtype=a.dtype, device=a.device)
   b = torch.where((-0.5 < a[1]) & (a[1] < 0.5), y, z)
   b = b - a * a.dot(b)
   # normalize b. however if a is a zero vector, zero b as well.
@@ -353,6 +387,10 @@ def closest_segment_to_segment_points(
 
   return best_a, best_b
 
+
 def concatenate(data):
-  """Equivalent of jax.concatenate for PyTorch."""
-  return torch.cat([x.reshape(-1) for x in data])
+  """Equivalent of jnp.concatenate for PyTorch pytrees."""
+  filtered = [x for x in data if x is not None]
+  if not filtered:
+    return None
+  return torch.cat(filtered, dim=0)

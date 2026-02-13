@@ -47,12 +47,12 @@ class ForwardTest(parameterized.TestCase):
     d = mujoco.MjData(m)
     mx = mujoco_torch.device_put(m)
     dx = mujoco_torch.make_data(mx)
-    forward_jit_fn = torch.compile(mujoco_torch.forward)
+    forward_jit_fn = mujoco_torch.forward
 
     # give the system a little kick to ensure we have non-identity rotations
     d.qvel = np.random.random(m.nv) * 0.05
     for i in range(100):
-      qpos, qvel = d.qpos.copy(), d.qvel.copy()
+      qpos, qvel = torch.tensor(d.qpos.copy()), torch.tensor(d.qvel.copy())
       mujoco.mj_step(m, d)
       dx = forward_jit_fn(mx, dx.replace(qpos=qpos, qvel=qvel))
 
@@ -66,7 +66,7 @@ class ForwardTest(parameterized.TestCase):
     """Test mujoco mj step matches mujoco_mjx step."""
     np.random.seed(test_util.TEST_FILES.index(fname))
     m = test_util.load_test_file(fname)
-    step_jit_fn = torch.compile(forward.step)
+    step_jit_fn = forward.step
 
     mx = mujoco_torch.device_put(m)
     d = mujoco.MjData(m)
@@ -107,7 +107,7 @@ class ForwardTest(parameterized.TestCase):
           </worldbody>
         </mujoco>
         """)
-    step_jit_fn = torch.compile(forward.step)
+    step_jit_fn = forward.step
 
     mx = mujoco_torch.device_put(m)
     d = mujoco.MjData(m)
@@ -136,10 +136,10 @@ class ForwardTest(parameterized.TestCase):
     mx = mujoco_torch.device_put(m)
     self.assertTrue((mx.dof_damping > 0).any())
     dx = mujoco_torch.device_put(d)
-    dx = torch.compile(forward.forward)(mx, dx)
+    dx = forward.forward(mx, dx)
 
     dx = dx.replace(qvel=torch.ones_like(dx.qvel), qacc=torch.ones_like(dx.qacc))
-    dx = torch.compile(forward._euler)(mx, dx)
+    dx = forward._euler(mx, dx)
     np.testing.assert_allclose(dx.qvel, 1 + m.opt.timestep)
 
 

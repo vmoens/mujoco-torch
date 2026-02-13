@@ -26,6 +26,7 @@ import torch
 from mujoco_torch._src import collision_driver
 from mujoco_torch._src import mesh
 from mujoco_torch._src import types
+from mujoco_torch._src.dataclasses import MjTensorClass
 
 _MJ_TYPE_ATTR = {
     mujoco.mjtBias: (mujoco.MjModel.actuator_biastype,),
@@ -68,7 +69,8 @@ _TRANSFORMS = {
     (types.Data, 'ximat'): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
     (types.Data, 'xmat'): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
     (types.Data, 'geom_xmat'): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
-    (types.Model, 'actuator_trnid'): lambda x: x[:, 0],
+    (types.Data, 'site_xmat'): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
+    (types.Data, 'cam_xmat'): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
     (types.Contact, 'frame'): (
         lambda x: x.reshape(x.shape[:-1] + (3, 3))  # pylint: disable=g-long-lambda
         if x is not None and x.shape[0] else torch.zeros((0, 3, 3))
@@ -79,33 +81,87 @@ _INVERSE_TRANSFORMS = {
     (types.Data, 'ximat'): lambda x: x.reshape(x.shape[:-2] + (9,)),
     (types.Data, 'xmat'): lambda x: x.reshape(x.shape[:-2] + (9,)),
     (types.Data, 'geom_xmat'): lambda x: x.reshape(x.shape[:-2] + (9,)),
+    (types.Data, 'site_xmat'): lambda x: x.reshape(x.shape[:-2] + (9,)),
+    (types.Data, 'cam_xmat'): lambda x: x.reshape(x.shape[:-2] + (9,)),
+    # actuator_moment is (nu, nv) in torch, but (nu,) diagonal in MJ.
+    # Extract the diagonal (nonzero per row) for MuJoCo format.
+    (types.Data, 'actuator_moment'): lambda x: (
+        x.amax(dim=-1) if x.ndim >= 2 else x
+    ),
     (types.Contact, 'frame'): (
         lambda x: x.reshape(x.shape[:-2] + (9,))  # pylint: disable=g-long-lambda
         if x is not None and x.shape[0] else torch.zeros((0, 9))
     ),
 }
 
-_DERIVED = mesh.DERIVED.union(
+# MuJoCo uses 'dim' for contact dimension; we use 'contact_dim' to avoid conflict with m.opt.dim
+_FIELD_SOURCE_MAP = {(types.Contact, 'contact_dim'): 'dim'}  # device_put: read from Mujoco's 'dim'
+_FIELD_TARGET_MAP = {(types.Contact, 'contact_dim'): 'dim'}  # device_get_into: write to Mujoco's 'dim'
+
+_DERIVED = mesh.DERIVED.union({
     # efc_J is dense in MJX, sparse in MJ. ignore for now.
-    {(types.Data, 'efc_J'), (types.Option, 'has_fluid_params')}
-)
+    (types.Data, 'efc_J'),
+    # actuator_moment is (nu,) in MJ but (nu, nv) in torch
+    (types.Data, 'actuator_moment'),
+    # qM, qLD have different sparse formats in MJ vs torch
+    (types.Data, 'qM'),
+    (types.Data, 'qLD'),
+    (types.Option, 'has_fluid_params'),
+    # Torch-impl derived model fields
+    (types.Model, 'mesh_convex'),
+    (types.Model, 'dof_hasfrictionloss'),
+    (types.Model, 'geom_rbound_hfield'),
+    (types.Model, 'tendon_hasfrictionloss'),
+})
 
 def _device_put_torch(x):
     if x is None:
         return
     try:
+        # Python scalar floats: use float64 to match DEFAULT_DTYPE precision
+        if isinstance(x, float):
+            return torch.tensor(x, dtype=torch.float64)
+        # Use torch.tensor() to copy data (torch.as_tensor shares memory
+        # with numpy arrays, which can be mutated by MuJoCo in-place)
         return torch.tensor(x)
-    except RuntimeError:
+    except (RuntimeError, TypeError):
         return torch.empty(x.shape if isinstance(x, np.ndarray) else len(x))
 
 torch.device_put = _device_put_torch
 
 def _model_derived(value: mujoco.MjModel) -> Dict[str, Any]:
-  return {k: torch.device_put(v) for k, v in mesh.get(value).items()}
+  mesh_kwargs = mesh.get(value)
+  result = {}
+  for k, v in mesh_kwargs.items():
+    result[k] = tuple(
+        torch.tensor(x) if x is not None else None for x in v
+    )
+  # mesh_convex: one ConvexMesh per mesh
+  result['mesh_convex'] = tuple(mesh.convex(value, i) for i in range(value.nmesh))
+  result['dof_hasfrictionloss'] = np.array(value.dof_frictionloss > 0)
+  result['geom_rbound_hfield'] = np.array(value.geom_rbound)
+  result['tendon_hasfrictionloss'] = np.array(value.tendon_frictionloss > 0)
+  return result
 
 
 def _data_derived(value: mujoco.MjData) -> Dict[str, Any]:
-  return {'efc_J': torch.device_put(value.efc_J)}
+  nv = value.qvel.shape[0]
+  nu = value.ctrl.shape[0]
+  nM = value.qM.shape[0]
+  # MuJoCo stores actuator_moment as (nu,), we need (nu, nv) dense
+  actuator_moment = torch.zeros((nu, nv), dtype=torch.float64)
+  if nu > 0:
+    m_data = np.array(value.actuator_moment)
+    actuator_moment = torch.as_tensor(
+        np.diag(m_data) if nu == nv else np.zeros((nu, nv)),
+        dtype=torch.float64,
+    )
+  return {
+      'efc_J': torch.device_put(value.efc_J),
+      'actuator_moment': actuator_moment,
+      'qM': torch.as_tensor(value.qM.copy(), dtype=torch.float64),
+      'qLD': torch.as_tensor(value.qM.copy(), dtype=torch.float64),  # same sparse format as qM
+  }
 
 
 def _option_derived(value: types.Option) -> Dict[str, Any]:
@@ -204,7 +260,8 @@ def device_put(value):
     if (clz, f.name) in _DERIVED:
       continue
 
-    field_value = getattr(value, f.name)
+    source_name = _FIELD_SOURCE_MAP.get((clz, f.name), f.name)
+    field_value = getattr(value, source_name)
     if (clz, f.name) in _TRANSFORMS:
       field_value = _TRANSFORMS[(clz, f.name)](field_value)
 
@@ -223,6 +280,8 @@ def device_put(value):
   elif isinstance(value, mujoco.MjOption):
     derived_kwargs = _option_derived(value)
 
+  if issubclass(clz, MjTensorClass):
+    init_kwargs['batch_size'] = []
   return clz(**init_kwargs, **derived_kwargs)  # type: ignore
 
 
@@ -251,7 +310,13 @@ def device_get_into(result, value):
     RuntimeError: if result length doesn't match data batch size
   """
 
-  value = torch.device_get(value)
+  # In PyTorch, tensors are already accessible from CPU; no device_get needed.
+  # Just ensure all tensors are detached and on CPU.
+  from torch.utils._pytree import tree_map
+  value = tree_map(
+      lambda x: x.detach().cpu() if isinstance(x, torch.Tensor) else x,
+      value,
+  )
 
   if isinstance(result, list):
     array_shapes = [s.shape for s in torch.utils._pytree.tree_flatten(value)[0]]
@@ -274,7 +339,7 @@ def device_get_into(result, value):
   else:
     if isinstance(result, mujoco.MjData):
       mujoco._functions._realloc_con_efc(  # pylint: disable=protected-access
-          result, ncon=value.ncon, nefc=value.nefc
+          result, ncon=int(value.ncon), nefc=int(value.nefc)
       )
 
     for f in dataclasses.fields(value):  # type: ignore
@@ -286,11 +351,28 @@ def device_get_into(result, value):
       if (type(value), f.name) in _INVERSE_TRANSFORMS:
         field_value = _INVERSE_TRANSFORMS[(type(value), f.name)](field_value)
 
+      result_name = _FIELD_TARGET_MAP.get((type(value), f.name), f.name)
+
       if type(field_value) in _TYPE_MAP.values():
-        device_get_into(getattr(result, f.name), field_value)
+        device_get_into(getattr(result, result_name), field_value)
+        continue
+
+      # Convert torch tensors to numpy for MuJoCo compatibility
+      if isinstance(field_value, torch.Tensor):
+        field_value = field_value.detach().cpu().numpy()
+
+      # Skip fields with incompatible shapes (e.g. different sparse formats)
+      import numpy as np
+      result_field = getattr(result, result_name, None)
+      if (
+          result_field is not None
+          and hasattr(result_field, 'shape')
+          and hasattr(field_value, 'shape')
+          and result_field.shape != field_value.shape
+      ):
         continue
 
       try:
-        setattr(result, f.name, field_value)
-      except AttributeError:
-        getattr(result, f.name)[:] = field_value
+        setattr(result, result_name, field_value)
+      except (AttributeError, ValueError):
+        getattr(result, result_name)[:] = field_value

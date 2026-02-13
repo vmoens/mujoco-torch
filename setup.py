@@ -1,12 +1,23 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
     name='mujoco-torch',
     version='0.1.0',
-    packages=['mujoco_torch', 'mujoco_torch._src', 'mujoco_torch.benchmark'],
-    url='',
-    license='',
+    packages=find_packages(),
+    url='https://github.com/vmoens/mujoco-torch',
+    license='Apache-2.0',
     author='vmoens',
     author_email='',
-    description=''
+    description='MuJoCo MJX ported to PyTorch',
+    python_requires='>=3.10',
+    install_requires=[
+        'torch>=2.1',
+        'mujoco>=3.0',
+        'numpy',
+        'tensordict>=0.11',
+        'absl-py',
+        'etils',
+        'scipy',
+        'trimesh',
+    ],
 )

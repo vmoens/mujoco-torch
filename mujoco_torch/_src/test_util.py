@@ -329,6 +329,6 @@ def create_mjcf(
 
 def load_test_file(name: str) -> mujoco.MjModel:
   """Loads a mujoco.MjModel based on the file name."""
-  path = epath.resource_path('mujoco.mjx') / 'test_data' / name
+  path = epath.resource_path('mujoco_torch') / 'test_data' / name
   m = mujoco.MjModel.from_xml_path(path.as_posix())
   return m

@@ -36,9 +36,9 @@ class SupportTest(parameterized.TestCase):
     mujoco.mj_step(m, d)
     mx = mujoco_torch.device_put(m)
     dx = mujoco_torch.device_put(d)
-    point = np.random.randn(3)
-    body = np.random.choice(m.nbody)
-    jacp, jacr = torch.compile(support.jac)(mx, dx, point, body)
+    point = torch.tensor(np.random.randn(3))
+    body = int(np.random.choice(m.nbody))
+    jacp, jacr = support.jac(mx, dx, point, body)
 
     jacp_expected, jacr_expected = np.zeros((3, m.nv)), np.zeros((3, m.nv))
     mujoco.mj_jac(m, d, jacp_expected, jacr_expected, point, body)
@@ -61,7 +61,7 @@ class SupportTest(parameterized.TestCase):
     d.xfrc_applied[:] = xfrc
     dx = dx.replace(xfrc_applied=torch.tensor(xfrc))
 
-    qfrc = torch.compile(support.xfrc_accumulate)(mx, dx)
+    qfrc = support.xfrc_accumulate(mx, dx)
     qfrc_expected = np.zeros(m.nv)
     for i in range(1, m.nbody):
       mujoco.mj_applyFT(

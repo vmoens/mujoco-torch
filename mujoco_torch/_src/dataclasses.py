@@ -12,124 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Wrapper that automatically registers dataclass as a Jax PyTree."""
+"""MjTensorClass: TensorClass base for mujoco-torch data structures."""
 
 import copy
 import dataclasses
-import typing
-from typing import Sequence, TypeVar
+from typing import Any, Dict, Optional, Sequence, Tuple
 
-import numpy as np
 import torch
-
-_T = TypeVar('_T')
-
-
-def dataclass(clz: _T) -> _T:
-  """Wraps a dataclass with metadata for which fields are pytrees.
-
-  This is based off flax.struct.dataclass, but instead of using field
-  descriptors to specify which fields are pytrees, we follow a simple rule:
-  a leaf field is a pytree node if and only if it's a torch.Tensor
-
-  Args:
-    clz: the class to register as a dataclass
-
-  Returns:
-    the resulting dataclass, registered with Jax
-  """
-  data_clz = dataclasses.dataclass(frozen=True)(clz)
-  meta_fields, data_fields = [], []
-  for field in dataclasses.fields(data_clz):
-    if any((
-        field.type is torch.Tensor,
-        dataclasses.is_dataclass(field.type),
-        torch.Tensor in typing.get_args(field.type),
-    )):
-      data_fields.append(field)
-    else:
-      meta_fields.append(field)
-
-  def replace(self, **updates):
-    """"Returns a new object replacing the specified fields with new values."""
-    return dataclasses.replace(self, **updates)
-
-  data_clz.replace = replace
-
-  def iterate_clz_with_keys(x):
-    # numpy arrays are not hashable, so convert them to tuples for jit cache
-    to_tup = lambda x: tuple(x) if len(x.shape) == 1 else tuple(map(to_tup, x))
-
-    def to_meta(field, obj):
-      val = getattr(obj, field.name)
-      return to_tup(val) if isinstance(val, np.ndarray) else val
-
-    def to_data(field, obj):
-      # return (field.name, getattr(obj, field.name))
-      return getattr(obj, field.name)
-      # import torch
-      # return (torch.tree_util.GetAttrKey(field.name), getattr(obj, field.name))
-
-    data = tuple(to_data(f, x) for f in data_fields)
-    meta = tuple(to_meta(f, x) for f in meta_fields)
-    return data, meta
-
-  def clz_from_iterable(data, meta):
-    def from_meta(field, meta):
-      if field.type is np.ndarray:
-        return (field.name, np.array(meta))
-      else:
-        return (field.name, meta)
-
-    from_data = lambda field, meta: (field.name, meta)
-    meta_args = tuple(from_meta(f, m) for f, m in zip(meta_fields, meta))
-    data_args = tuple(from_data(f, m) for f, m in zip(data_fields, data))
-    return data_clz(**dict(meta_args + data_args))
-
-  torch.utils._pytree.register_pytree_node(
-      data_clz, flatten_fn=iterate_clz_with_keys, unflatten_fn=clz_from_iterable
-  )
-  # torch.utils._pytree.register_pytree_with_keys(
-  #     data_clz, iterate_clz_with_keys, clz_from_iterable
-  # )
-
-  return data_clz
-
-
-TNode = TypeVar('TNode', bound='PyTreeNode')
-
-
-class PyTreeNode:
-  """Base class for dataclasses that should act like a JAX pytree node.
-
-  This base class additionally avoids type checking errors when using PyType.
-  """
-
-  def __init_subclass__(cls):
-    dataclass(cls)
-
-  def __init__(self, *args, **kwargs):
-    # stub for pytype
-    raise NotImplementedError
-
-  def replace(self: TNode, **overrides) -> TNode:
-    # stub for pytype
-    raise NotImplementedError
-
-  def tree_replace(
-      self, params,
-  ) -> 'PyTreeNode':
-    new = self
-    for k, v in params.items():
-      new = _tree_replace(new, k.split('.'), v)
-    return new
+from tensordict import TensorClass
+from tensordict.tensorclass import _TensorClassMeta
 
 
 def _tree_replace(
-    base: PyTreeNode,
+    base: 'MjTensorClass',
     attr: Sequence[str],
-    val,
-) -> PyTreeNode:
+    val: Optional[torch.Tensor],
+) -> 'MjTensorClass':
   """Sets attributes in a struct.dataclass with values."""
   if not attr:
     return base
@@ -152,3 +50,82 @@ def _tree_replace(
   return base.replace(
       **{attr[0]: _tree_replace(getattr(base, attr[0]), attr[1:], val)}
   )
+
+
+def _collect_conflicting_attrs(bases):
+  """Collect attribute names from bases that would conflict with dataclass fields.
+
+  Any non-underscore attribute (method, property, descriptor) inherited from
+  a base class looks like a "default" to the dataclass machinery and would
+  cause field-ordering errors when a later field has no default.
+  """
+  attrs = set()
+  for base in bases:
+    for cls in base.__mro__:
+      for attr_name, attr_val in cls.__dict__.items():
+        if not attr_name.startswith('_'):
+          attrs.add(attr_name)
+  return attrs
+
+
+class _MjMeta(_TensorClassMeta):
+  """Metaclass that shadows conflicting TensorClass attributes before
+  the dataclass decorator runs, so that field names like ``size``, ``grad``,
+  ``names``, or ``dim`` don't trigger ordering errors."""
+
+  def __new__(mcs, name, bases, namespace, **kwargs):
+    if any(getattr(b, '_is_mj_base', False) for b in bases):
+      conflicting = _collect_conflicting_attrs(bases)
+      annotations = namespace.get('__annotations__', {})
+      for field_name in annotations:
+        if field_name not in namespace and field_name in conflicting:
+          namespace[field_name] = dataclasses.field()
+    return super().__new__(mcs, name, bases, namespace, **kwargs)
+
+
+class MjTensorClass(
+    TensorClass["nocast", "shadow"], metaclass=_MjMeta,
+):
+  """TensorClass base for mujoco-torch data structures.
+
+  Provides backward-compatible ``replace()`` and ``tree_replace()`` methods
+  that mirror the PyTreeNode API.
+
+  Uses ``shadow`` mode and a custom metaclass so that field names like
+  ``size``, ``grad``, or ``dim`` do not conflict with TensorDict's
+  reserved attributes.
+  """
+
+  _is_mj_base = True
+
+  def replace(self, **kwargs: Any) -> 'MjTensorClass':
+    """Return a shallow copy with the given fields replaced."""
+    clone = self.clone(recurse=False)
+    # Write directly to the internal dict to avoid per-key _set_str calls.
+    # The standard setattr path goes through __setattr__ → _set → set_tensor
+    # → _set_str, each of which becomes a separate dynamo frame that guards
+    # on the key string. Using a single dict.update() avoids O(N)
+    # recompilations for N unique keys.
+    clone._tensordict._tensordict.update(kwargs)
+    return clone
+
+  def tree_replace(
+      self, params: Dict[str, Optional[torch.Tensor]],
+  ) -> 'MjTensorClass':
+    """Replace nested fields using dot-separated key paths."""
+    new = self
+    for k, v in params.items():
+      new = _tree_replace(new, k.split('.'), v)
+    return new
+
+  @classmethod
+  def fields(cls) -> Tuple[dataclasses.Field, ...]:
+    return dataclasses.fields(cls)
+
+
+# NOTE: Field-name / TensorClass-property collisions (e.g. Model.names)
+# are resolved with a targeted property descriptor installed on the specific
+# subclass — see types.py after the Model definition.  We intentionally do
+# NOT install a custom __getattribute__ because any override on a class
+# causes graph breaks in torch.compile on *every* attribute access, which
+# cascades into O(N) recompilations for N unique field names.

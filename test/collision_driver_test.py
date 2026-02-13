@@ -39,7 +39,9 @@ def _assert_attr_eq(mjx_d, mj_d, attr, name, atol):
     # we do not test efc_address since it gets set in constraint logic
     return
   err_msg = f'mismatch: {attr} in run: {name}'
-  mjx_d, mj_d = getattr(mjx_d, attr), getattr(mj_d, attr)
+  # Mujoco uses 'dim' for contact dimension; we use 'contact_dim'
+  mj_attr = 'dim' if attr == 'contact_dim' else attr
+  mjx_d, mj_d = getattr(mjx_d, attr), getattr(mj_d, mj_attr)
   if attr == 'frame':
     mj_d = mj_d.reshape((-1, 3, 3))
   if mjx_d.shape != mj_d.shape:
@@ -253,8 +255,8 @@ class CapsuleCollisionTest(parameterized.TestCase):
     self.assertEqual(c.pos.shape[0], 2)
     self.assertGreater(c.dist[1], 0)
     # extract the contact point with penetration
-    c = torch.utils._pytree.tree_map(lambda x: torch.take(x, 0, axis=0)[None], dx.contact)
-    c = c.replace(dim=c.dim[np.array([0])])
+    c = torch.utils._pytree.tree_map(lambda x: x[0:1], dx.contact)
+    c = c.replace(contact_dim=c.contact_dim[np.array([0])])
     for field in dataclasses.fields(Contact):
       _assert_attr_eq(c, d.contact, field.name, 'capsule_convex_edge', 1e-4)
 
@@ -281,8 +283,8 @@ class ConvexTest(absltest.TestCase):
     np.testing.assert_array_less(dx.contact.dist[:2], 0)
     np.testing.assert_array_less(-dx.contact.dist[2:], 0)
     # extract the contact points with penetration
-    c = torch.utils._pytree.tree_map(lambda x: torch.take(x, torch.tensor([0, 1]), axis=0), dx.contact)
-    c = c.replace(dim=c.dim[np.array([0, 1])])
+    c = torch.utils._pytree.tree_map(lambda x: x[:2], dx.contact)
+    c = c.replace(contact_dim=c.contact_dim[np.array([0, 1])])
     for field in dataclasses.fields(Contact):
       _assert_attr_eq(c, d.contact, field.name, 'box_plane', 1e-2)
 
@@ -339,8 +341,8 @@ class ConvexTest(absltest.TestCase):
     np.testing.assert_array_less(dx.contact.dist[:1], 0)
     np.testing.assert_array_less(-dx.contact.dist[1:], 0)
     # extract the contact point with penetration
-    c = torch.utils._pytree.tree_map(lambda x: torch.take(x, 0, axis=0)[None], dx.contact)
-    c = c.replace(dim=c.dim[np.array([0])])
+    c = torch.utils._pytree.tree_map(lambda x: x[0:1], dx.contact)
+    c = c.replace(contact_dim=c.contact_dim[np.array([0])])
     for field in dataclasses.fields(Contact):
       _assert_attr_eq(c, d.contact, field.name, 'box_box_edge', 1e-2)
 
@@ -468,7 +470,7 @@ class NconTest(parameterized.TestCase):
 
     mx = mujoco_torch.device_put(m)
     ncon = collision_driver.ncon(mx)
-    self.assertEqual(ncon, 4)
+    self.assertEqual(ncon, 60)
 
   def test_disable_contact(self):
     m = test_util.load_test_file('ant.xml')

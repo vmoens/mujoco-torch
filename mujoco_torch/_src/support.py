@@ -13,30 +13,134 @@
 # limitations under the License.
 # ==============================================================================
 """Engine support functions."""
-from typing import Tuple
+from typing import Optional, Tuple, Union
 
+import mujoco
+import numpy as np
 import torch
-# from torch import numpy as torch
 from mujoco_torch._src import scan
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import Data
+from mujoco_torch._src.types import JacobianType
 from mujoco_torch._src.types import Model
-
-
 # pylint: enable=g-importing-member
+
+
+def to_int(x) -> int:
+  """Extract a Python int from a tensor that may be inside torch.vmap.
+
+  Inside vmap, calling ``int(tensor)`` / ``.item()`` is not supported.
+  This helper flattens the tensor first and takes element [0], which is
+  safe because the values wrapped here (ne, nf, ncon, …) are model-level
+  constants identical across all batch elements.
+  """
+  if isinstance(x, int):
+    return x
+  return int(x.flatten()[0])
+
+
+def is_sparse(m: Union[mujoco.MjModel, Model]) -> bool:
+  """Return True if this model should create sparse mass matrices."""
+  if m.opt.jacobian == JacobianType.AUTO:
+    return m.nv >= 60
+  return m.opt.jacobian == JacobianType.SPARSE
+
+
+def make_m(
+    m: Model,
+    a: torch.Tensor,
+    b: torch.Tensor,
+    d: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+  """Computes M = a @ b.T + diag(d)."""
+
+  ij = []
+  for i in range(m.nv):
+    j = i
+    while j > -1:
+      ij.append((i, j))
+      j = m.dof_parentid[j]
+
+  i, j = (torch.tensor(x, dtype=torch.long, device=a.device) for x in zip(*ij))
+
+  if not is_sparse(m):
+    qm = a @ b.T
+    if d is not None:
+      qm = qm + torch.diag(d)
+    mask = torch.zeros((m.nv, m.nv), dtype=torch.bool, device=a.device)
+    mask[(i, j)] = True
+    qm = qm * mask
+    qm = qm + torch.tril(qm, -1).T
+    return qm
+
+  a_i = a[i]
+  b_j = b[j]
+  qm = torch.vmap(torch.dot)(a_i, b_j)
+
+  if d is not None:
+    qm = qm.clone()
+    qm[torch.tensor(m.dof_Madr)] = qm[torch.tensor(m.dof_Madr)] + d
+
+  return qm
+
+
+def full_m(m: Model, d: Data) -> torch.Tensor:
+  """Reconstitute dense mass matrix from qM."""
+
+  if not is_sparse(m):
+    return d.qM
+
+  ij = []
+  for i in range(m.nv):
+    j = i
+    while j > -1:
+      ij.append((i, j))
+      j = m.dof_parentid[j]
+
+  i, j = (torch.tensor(x, dtype=torch.long, device=d.qM.device) for x in zip(*ij))
+
+  mat = torch.zeros((m.nv, m.nv), dtype=d.qM.dtype, device=d.qM.device)
+  mat[(i, j)] = d.qM
+  mat = mat + torch.triu(mat, 1).T
+
+  return mat
+
+
+def local_to_global(
+    world_pos: torch.Tensor,
+    world_quat: torch.Tensor,
+    local_pos: torch.Tensor,
+    local_quat: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+  """Converts local position/orientation to world frame."""
+  from mujoco_torch._src import math
+  pos = world_pos + math.rotate(local_pos, world_quat)
+  mat = math.quat_to_mat(math.quat_mul(world_quat, local_quat))
+  return pos, mat
+
 
 def vmap_compatible_index_select(tensor, dim, index):
   from torch._C._functorch import is_batchedtensor, _remove_batch_dim, _add_batch_dim, maybe_get_level
 
+  scalar_index = not isinstance(index, torch.Tensor) and isinstance(index, (int, np.integer))
+  if not isinstance(index, torch.Tensor):
+    index = torch.tensor([index]).long() if scalar_index else torch.as_tensor(index).long()
+
   is_batched = False
-  if isinstance(index, torch.Tensor) and is_batchedtensor(index):
+  if is_batchedtensor(index):
     # _remove_batch_dim(batched_output, vmap_level, batch_size, out_dim)
     lvl = maybe_get_level(index)
     index = _remove_batch_dim(index, lvl, 0, 0)
     is_batched = True
+
+  squeeze_out = not is_batched and index.ndim == 0
+  if index.ndim == 0:
+    index = index.unsqueeze(0)
   out = torch.index_select(tensor, dim, index)
   if is_batched:
     out = _add_batch_dim(out, 0, lvl)
+  elif scalar_index or squeeze_out:
+    out = out.squeeze(dim)
   return out
 
 def jac(
@@ -44,7 +148,8 @@ def jac(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
   """Compute pair of (NV, 3) Jacobians of global point attached to body."""
   fn = lambda carry, b: b if carry is None else b + carry
-  mask = (torch.arange(m.nbody) == body_id) * 1
+  device = point.device if isinstance(point, torch.Tensor) else None
+  mask = (torch.arange(m.nbody, device=device) == body_id) * 1
   mask = scan.body_tree(m, fn, 'b', 'b', mask, reverse=True)
   mask = mask[torch.tensor(m.dof_bodyid)] > 0
 
@@ -81,6 +186,8 @@ def apply_ft(
 ) -> torch.Tensor:
   """Apply Cartesian force and torque."""
   jacp, jacr = jac(m, d, point, body_id)
+  force = force.to(jacp.dtype)
+  torque = torque.to(jacr.dtype)
   return jacp @ force + jacr @ torque
 
 

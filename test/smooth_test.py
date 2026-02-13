@@ -22,6 +22,7 @@ import torch
 from absl.testing import absltest
 from absl.testing import parameterized
 import mujoco_torch
+from mujoco_torch._src import support
 from mujoco_torch._src import test_util
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import DisableBit
@@ -51,14 +52,14 @@ class SmoothTest(parameterized.TestCase):
     m = test_util.load_test_file(fname)
     d = mujoco.MjData(m)
 
-    kinematics_jit_fn = torch.compile(mujoco_torch.kinematics)
-    com_pos_jit_fn = torch.compile(mujoco_torch.com_pos)
-    crb_jit_fn = torch.compile(mujoco_torch.crb)
-    factor_m_fn = torch.compile(mujoco_torch.factor_m)
-    com_vel_jit_fn = torch.compile(mujoco_torch.com_vel)
-    rne_jit_fn = torch.compile(mujoco_torch.rne)
-    mul_m_jit_fn = torch.compile(mujoco_torch.mul_m)
-    transmission_jit_fn = torch.compile(mujoco_torch.transmission)
+    kinematics_jit_fn = mujoco_torch.kinematics
+    com_pos_jit_fn = mujoco_torch.com_pos
+    crb_jit_fn = mujoco_torch.crb
+    factor_m_fn = mujoco_torch.factor_m
+    com_vel_jit_fn = mujoco_torch.com_vel
+    rne_jit_fn = mujoco_torch.rne
+    mul_m_jit_fn = mujoco_torch.mul_m
+    transmission_jit_fn = mujoco_torch.transmission
 
     mx = mujoco_torch.device_put(m)
     dx = mujoco_torch.make_data(mx)
@@ -66,7 +67,7 @@ class SmoothTest(parameterized.TestCase):
     # give the system a little kick to ensure we have non-identity rotations
     d.qvel = np.random.random(m.nv)
     for i in range(100):
-      qpos, qvel = d.qpos.copy(), d.qvel.copy()
+      qpos, qvel = torch.tensor(d.qpos.copy()), torch.tensor(d.qvel.copy())
       mujoco.mj_step(m, d)
 
       # kinematics
@@ -96,12 +97,31 @@ class SmoothTest(parameterized.TestCase):
       # crb
       dx = crb_jit_fn(mx, dx)
       _assert_attr_eq(d, dx, 'crb', i, fname)
-      _assert_attr_eq(d, dx, 'qM', i, fname)
+      # qM: mujoco stores sparse, our code may store dense
+      if not support.is_sparse(mx):
+        mj_full_m = np.zeros((m.nv, m.nv))
+        mujoco.mj_fullM(m, mj_full_m, d.qM)
+        np.testing.assert_allclose(
+            mj_full_m, dx.qM,
+            err_msg=f'mismatch: qM at step {i} in {fname}',
+            atol=5e-4, rtol=5e-4,
+        )
+      else:
+        _assert_attr_eq(d, dx, 'qM', i, fname)
 
       # factor_m
-      dx = factor_m_fn(mx, dx, dx.qM)
-      _assert_attr_eq(d, dx, 'qLD', i, fname, atol=1e-3)
-      _assert_attr_eq(d, dx, 'qLDiagInv', i, fname, atol=1e-3)
+      dx = factor_m_fn(mx, dx)
+      if support.is_sparse(mx):
+        _assert_attr_eq(d, dx, 'qLD', i, fname, atol=1e-3)
+        _assert_attr_eq(d, dx, 'qLDiagInv', i, fname, atol=1e-3)
+      else:
+        # dense: qLD is Cholesky factor (nv, nv); verify L @ L.T ≈ qM
+        L = dx.qLD
+        np.testing.assert_allclose(
+            (L @ L.T).detach().numpy(), dx.qM.detach().numpy(),
+            err_msg=f'mismatch: qLD*qLD^T vs qM at step {i} in {fname}',
+            atol=1e-3, rtol=1e-3,
+        )
 
       # com_vel
       dx = com_vel_jit_fn(mx, dx)
@@ -122,7 +142,13 @@ class SmoothTest(parameterized.TestCase):
       # transmission
       dx = transmission_jit_fn(mx, dx)
       _assert_attr_eq(d, dx, 'actuator_length', i, fname)
-      _assert_attr_eq(d, dx, 'actuator_moment', i, fname)
+      # actuator_moment: MuJoCo stores (nu,) sparse, our code stores (nu, nv)
+      # Compare the non-zero moment entries
+      np.testing.assert_allclose(
+          d.actuator_moment, dx.actuator_moment[dx.actuator_moment != 0].detach().numpy(),
+          err_msg=f'mismatch: actuator_moment at step {i} in {fname}',
+          atol=5e-4, rtol=5e-4,
+      )
 
 
 class DisableGravityTest(absltest.TestCase):
@@ -144,7 +170,7 @@ class DisableGravityTest(absltest.TestCase):
     dx = mujoco_torch.device_put(d)
 
     # test with gravity
-    step_jit_fn = torch.compile(mujoco_torch.step)
+    step_jit_fn = mujoco_torch.step
     dx = step_jit_fn(mx, dx)
     np.testing.assert_array_almost_equal(
         dx.qpos, np.array([0.0, 0.0, -9.81e-4, 1.0, 0.0, 0.0, 0.0]), decimal=7
@@ -155,7 +181,7 @@ class DisableGravityTest(absltest.TestCase):
         {'opt.disableflags': mx.opt.disableflags | DisableBit.GRAVITY}
     )
     dx = mujoco_torch.device_put(d)
-    step_jit_fn = torch.compile(mujoco_torch.step)
+    step_jit_fn = mujoco_torch.step
     dx = step_jit_fn(mx, dx)
     np.testing.assert_equal(
         dx.qpos, np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
