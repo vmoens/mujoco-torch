@@ -27,7 +27,7 @@ from mujoco_torch._src import test_util
 
 class SupportTest(parameterized.TestCase):
 
-  @parameterized.parameters(set(test_util.TEST_FILES) - {'convex.xml', 'pendula.xml'})
+  @parameterized.parameters(set(test_util.TEST_FILES) - {'convex.xml'})
   def test_jac(self, fname):
     np.random.seed(0)
 

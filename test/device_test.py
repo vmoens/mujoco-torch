@@ -61,7 +61,7 @@ def _assert_eq(testcase, a, b, attr=None, name=None):
 
 class DeviceTest(parameterized.TestCase):
 
-  @parameterized.parameters(set(test_util.TEST_FILES) - {'pendula.xml'})
+  @parameterized.parameters(test_util.TEST_FILES)
   def testdevice_put(self, fname):
     """Test putting MjData and MjModel on device."""
     m = test_util.load_test_file(fname)
@@ -73,7 +73,7 @@ class DeviceTest(parameterized.TestCase):
     _assert_eq(self, mujoco_torch.device_put(d), d)
     _assert_eq(self, mujoco_torch.device_put(m), m)
 
-  @parameterized.parameters(set(test_util.TEST_FILES) - {'pendula.xml'})
+  @parameterized.parameters(test_util.TEST_FILES)
   def testdevice_get(self, fname):
     """Test getting MjData from a device."""
     m = test_util.load_test_file(fname)
@@ -83,7 +83,7 @@ class DeviceTest(parameterized.TestCase):
     device.device_get_into(d, dx)
     _assert_eq(self, dx, d)
 
-  @parameterized.parameters(set(test_util.TEST_FILES) - {'convex.xml', 'pendula.xml'})
+  @parameterized.parameters(set(test_util.TEST_FILES) - {'convex.xml'})
   def testdevice_get_batched(self, fname):
     """Test getting MjData from a device."""
     m = test_util.load_test_file(fname)
@@ -133,7 +133,7 @@ class ValidateInputTest(absltest.TestCase):
 
   def test_trn(self):
     m = test_util.load_test_file('ant.xml')
-    m.actuator_trntype[0] = mujoco.mjtTrn.mjTRN_TENDON
+    m.actuator_trntype[0] = mujoco.mjtTrn.mjTRN_SLIDERCRANK
     with self.assertRaises(NotImplementedError):
       mujoco_torch.device_put(m)
 
@@ -201,8 +201,8 @@ class ValidateInputTest(absltest.TestCase):
         </tendon>
       </mujoco>
     """)
-    with self.assertRaises(NotImplementedError):
-      mujoco_torch.device_put(m)
+    mx = mujoco_torch.device_put(m)
+    self.assertEqual(mx.ntendon, 1)
 
 
 if __name__ == '__main__':

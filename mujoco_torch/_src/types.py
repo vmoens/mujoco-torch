@@ -234,8 +234,9 @@ class TrnType(enum.IntEnum):
   """
   JOINT = mujoco.mjtTrn.mjTRN_JOINT
   JOINTINPARENT = mujoco.mjtTrn.mjTRN_JOINTINPARENT
+  TENDON = mujoco.mjtTrn.mjTRN_TENDON
   SITE = mujoco.mjtTrn.mjTRN_SITE
-  # unsupported: TENDON, SLIDERCRANK, BODY
+  # unsupported: SLIDERCRANK, BODY
 
 
 class DynType(enum.IntEnum):

@@ -34,7 +34,7 @@ def _assert_attr_eq(a, b, attr, step, fname, atol=1e-4, rtol=1e-4):
 
 class PassiveTest(parameterized.TestCase):
 
-  @parameterized.parameters(enumerate(('ant.xml',)))
+  @parameterized.parameters(enumerate(('ant.xml', 'pendula.xml')))
   def test_stiffness_damping(self, seed, fname):
     """Tests stiffness and damping on Ant."""
     np.random.seed(seed)
@@ -49,18 +49,18 @@ class PassiveTest(parameterized.TestCase):
     d.qvel = np.random.random(m.nv)  # random kick
 
     mx = mujoco_torch.device_put(m)
-    dx = mujoco_torch.make_data(mx)
 
     passive_jit_fn = mujoco_torch.passive
 
     for i in range(100):
       qpos, qvel = torch.tensor(d.qpos.copy()), torch.tensor(d.qvel.copy())
       mujoco.mj_step(m, d)
+      dx = mujoco_torch.device_put(d)
       dx = passive_jit_fn(mx, dx.replace(qpos=qpos, qvel=qvel))
       _assert_attr_eq(d, dx, 'qfrc_passive', i, fname)
 
   @parameterized.parameters(
-      itertools.product(range(3), ('ant.xml',))
+      itertools.product(range(3), ('pendula.xml',))
   )
   def test_fluid(self, seed, fname):
     np.random.seed(seed)

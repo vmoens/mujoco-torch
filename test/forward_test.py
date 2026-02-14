@@ -37,7 +37,7 @@ def _assert_attr_eq(a, b, attr, step, fname, atol=1e-3, rtol=1e-3):
 class ForwardTest(parameterized.TestCase):
 
   @parameterized.parameters(
-      filter(lambda s: s not in ('equality.xml', 'pendula.xml'), test_util.TEST_FILES)
+      filter(lambda s: s not in ('equality.xml',), test_util.TEST_FILES)
   )
   def test_forward(self, fname):
     """Test mujoco mj forward function matches mujoco_mjx forward function."""
@@ -60,7 +60,7 @@ class ForwardTest(parameterized.TestCase):
       _assert_attr_eq(d, dx, 'qacc_smooth', i, fname)
 
   @parameterized.parameters(
-      filter(lambda s: s not in ('equality.xml', 'pendula.xml'), test_util.TEST_FILES)
+      filter(lambda s: s not in ('equality.xml',), test_util.TEST_FILES)
   )
   def test_step(self, fname):
     """Test mujoco mj step matches mujoco_mjx step."""

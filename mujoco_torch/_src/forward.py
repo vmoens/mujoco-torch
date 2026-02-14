@@ -64,10 +64,11 @@ _RK4_B = np.array([1.0 / 6.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0])
 
 def _position(m: Model, d: Data) -> Data:
   """Position-dependent computations."""
-  # TODO(robotics-simulation): tendon
   d = smooth.kinematics(m, d)
   d = smooth.com_pos(m, d)
+  d = smooth.tendon(m, d)
   d = smooth.crb(m, d)
+  d = smooth.tendon_armature(m, d)
   d = smooth.factor_m(m, d)
   d = collision_driver.collision(m, d)
   d = constraint.make_constraint(m, d)
@@ -80,7 +81,10 @@ def _velocity(m: Model, d: Data) -> Data:
   actuator_moment = d.actuator_moment
   if actuator_moment.ndim == 1 and m.nu == 0:
     actuator_moment = actuator_moment.reshape(0, m.nv)
-  d = d.replace(actuator_velocity=actuator_moment @ d.qvel)
+  kwargs = {'actuator_velocity': actuator_moment @ d.qvel}
+  if m.ntendon:
+    kwargs['ten_velocity'] = d.ten_J @ d.qvel
+  d = d.replace(**kwargs)
   d = smooth.com_vel(m, d)
   d = passive.passive(m, d)
   d = smooth.rne(m, d)
@@ -176,6 +180,10 @@ def _actuation(m: Model, d: Data) -> Data:
   force = torch.clamp(force, forcerange[:, 0], forcerange[:, 1])
 
   qfrc_actuator = d.actuator_moment.T @ force
+
+  # actuator-level gravity compensation
+  if bool((m.body_gravcomp != 0).any()):
+    qfrc_actuator = qfrc_actuator + d.qfrc_gravcomp * m.jnt_actgravcomp[m.dof_jntid]
 
   # clamp qfrc_actuator
   actfrcrange = torch.where(

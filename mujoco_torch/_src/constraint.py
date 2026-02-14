@@ -311,6 +311,33 @@ def _instantiate_limit_slide_hinge(m: Model, d: Data) -> Optional[_Efc]:
   return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
 
 
+def _instantiate_limit_tendon(m: Model, d: Data) -> Optional[_Efc]:
+  """Calculates constraint rows for tendon limits."""
+  tendon_id = np.nonzero(m.tendon_limited)[0]
+
+  if (m.opt.disableflags & DisableBit.LIMIT) or tendon_id.size == 0:
+    return None
+
+  length = d.ten_length[tendon_id]
+  j = d.ten_J[tendon_id]
+  range_ = m.tendon_range[tendon_id]
+  margin = m.tendon_margin[tendon_id]
+  invweight = m.tendon_invweight0[tendon_id]
+  solref = m.tendon_solref_lim[tendon_id]
+  solimp = m.tendon_solimp_lim[tendon_id]
+
+  dist_min = length - range_[:, 0]
+  dist_max = range_[:, 1] - length
+  pos = torch.minimum(dist_min, dist_max) - margin
+  active = (pos < 0).to(j.dtype)
+  sign = ((dist_min < dist_max).to(j.dtype) * 2 - 1) * active
+  j = j * sign.unsqueeze(1)
+  pos = pos * active
+  frictionloss = torch.zeros_like(pos)
+
+  return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
+
+
 def _instantiate_contact(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for contacts."""
 
@@ -390,7 +417,7 @@ def constraint_sizes(m: Model) -> Tuple[int, int, int, int, int]:
   if m.opt.disableflags & DisableBit.LIMIT:
     nl = 0
   else:
-    nl = int(m.jnt_limited.sum())
+    nl = int(m.jnt_limited.sum()) + int(m.tendon_limited.sum())
 
   if m.opt.disableflags & DisableBit.CONTACT:
     ncon_ = 0
@@ -434,6 +461,7 @@ def make_constraint(m: Model, d: Data) -> Data:
         _instantiate_friction(m, d),
         _instantiate_limit_ball(m, d),
         _instantiate_limit_slide_hinge(m, d),
+        _instantiate_limit_tendon(m, d),
         _instantiate_contact(m, d),
     ) if efc is not None)
 
