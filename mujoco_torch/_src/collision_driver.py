@@ -344,10 +344,10 @@ def _collide_geoms(
       solref=params.solref,
       solreffriction=params.solreffriction,
       solimp=params.solimp,
+      contact_dim=torch.zeros(dist.shape[0], dtype=torch.int32),
       geom1=geom1,
       geom2=geom2,
       geom=torch.stack([geom1, geom2], dim=-1),
-      contact_dim=torch.zeros(dist.shape[0], dtype=torch.int32),
       efc_address=torch.full((dist.shape[0],), -1, dtype=torch.int64),
       batch_size=[dist.shape[0]],
   )

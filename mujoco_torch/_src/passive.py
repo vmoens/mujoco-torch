@@ -55,15 +55,14 @@ def _inertia_box_fluid_model(
   lfrc_vel = lvel[3:] * -3.0 * torch.pi * diam * m.opt.viscosity
 
   # add lift and drag force and torque
-  scale_vel = torch.tensor(
+  scale_vel = torch.stack(
       [box[1] * box[2], box[0] * box[2], box[0] * box[1]],
-      dtype=box.dtype, device=box.device
   )
-  scale_ang = torch.tensor([
+  scale_ang = torch.stack([
       box[0] * (box[1] ** 4 + box[2] ** 4),
       box[1] * (box[0] ** 4 + box[2] ** 4),
       box[2] * (box[0] ** 4 + box[1] ** 4),
-  ], dtype=box.dtype, device=box.device)
+  ])
   lfrc_vel = lfrc_vel - 0.5 * m.opt.density * scale_vel * torch.abs(lvel[3:]) * lvel[3:]
   lfrc_ang = lfrc_ang - (
       1.0 * m.opt.density * scale_ang * torch.abs(lvel[:3]) * lvel[:3] / 64.0
@@ -117,26 +116,22 @@ def _spring_damper(m: Model, d: Data) -> torch.Tensor:
   if not m.opt.disableflags & DisableBit.DAMPER:
     qfrc = qfrc - m.dof_damping * d.qvel
 
-  # tendon-level springs (if ten_length, ten_J exist)
-  if hasattr(d, 'ten_length') and hasattr(d, 'ten_J') and m.ntendon and not m.opt.disableflags & DisableBit.SPRING:
+  # tendon-level springs
+  if m.ntendon and not m.opt.disableflags & DisableBit.SPRING:
     below = m.tendon_lengthspring[:, 0] - d.ten_length
     above = m.tendon_lengthspring[:, 1] - d.ten_length
     frc_spring = torch.where(below > 0, m.tendon_stiffness * below, torch.zeros_like(below))
     frc_spring = torch.where(above < 0, m.tendon_stiffness * above, frc_spring)
   else:
-    frc_spring = torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device) if m.ntendon else torch.zeros(0, device=d.qpos.device)
+    frc_spring = torch.zeros(max(m.ntendon, 0), dtype=d.qpos.dtype, device=d.qpos.device)
 
   # tendon-level dampers
-  if m.ntendon and hasattr(d, 'ten_velocity'):
-    frc_damper = (
-        -m.tendon_damping * d.ten_velocity
-        if not m.opt.disableflags & DisableBit.DAMPER
-        else torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device)
-    )
+  if m.ntendon and not m.opt.disableflags & DisableBit.DAMPER:
+    frc_damper = -m.tendon_damping * d.ten_velocity
   else:
-    frc_damper = torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device) if m.ntendon else torch.zeros(0, device=d.qpos.device)
+    frc_damper = torch.zeros(max(m.ntendon, 0), dtype=d.qpos.dtype, device=d.qpos.device)
 
-  if m.ntendon and hasattr(d, 'ten_J') and frc_spring.shape[0] > 0:
+  if m.ntendon:
     qfrc = qfrc + d.ten_J.T @ (frc_spring + frc_damper)
 
   return qfrc

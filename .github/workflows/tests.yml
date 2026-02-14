@@ -1,0 +1,23 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: setup.py
+      - name: Install CPU-only PyTorch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install mujoco-torch with test deps
+        run: pip install -e ".[test]"
+      - name: Run tests
+        run: pytest test/ -x -v

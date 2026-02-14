@@ -133,7 +133,7 @@ class ValidateInputTest(absltest.TestCase):
 
   def test_trn(self):
     m = test_util.load_test_file('ant.xml')
-    m.actuator_trntype[0] = mujoco.mjtTrn.mjTRN_TENDON
+    m.actuator_trntype[0] = mujoco.mjtTrn.mjTRN_SLIDERCRANK
     with self.assertRaises(NotImplementedError):
       mujoco_torch.device_put(m)
 
@@ -201,8 +201,8 @@ class ValidateInputTest(absltest.TestCase):
         </tendon>
       </mujoco>
     """)
-    with self.assertRaises(NotImplementedError):
-      mujoco_torch.device_put(m)
+    mx = mujoco_torch.device_put(m)
+    self.assertEqual(mx.ntendon, 1)
 
 
 if __name__ == '__main__':

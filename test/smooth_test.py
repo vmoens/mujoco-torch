@@ -94,6 +94,11 @@ class SmoothTest(parameterized.TestCase):
       _assert_attr_eq(d, dx, 'cinert', i, fname)
       _assert_attr_eq(d, dx, 'cdof', i, fname)
 
+      # tendon
+      if m.ntendon:
+        dx = mujoco_torch.tendon(mx, dx)
+        _assert_attr_eq(d, dx, 'ten_length', i, fname)
+
       # crb
       dx = crb_jit_fn(mx, dx)
       _assert_attr_eq(d, dx, 'crb', i, fname)
@@ -142,12 +147,17 @@ class SmoothTest(parameterized.TestCase):
       # transmission
       dx = transmission_jit_fn(mx, dx)
       _assert_attr_eq(d, dx, 'actuator_length', i, fname)
-      # actuator_moment: MuJoCo stores (nu,) sparse, our code stores (nu, nv)
-      # Compare the non-zero moment entries
-      np.testing.assert_allclose(
-          d.actuator_moment, dx.actuator_moment[dx.actuator_moment != 0].detach().numpy(),
-          err_msg=f'mismatch: actuator_moment at step {i} in {fname}',
-          atol=5e-4, rtol=5e-4,
+      # actuator_moment: MuJoCo stores sparse, our code stores (nu, nv) dense
+      moment = np.zeros((m.nu, m.nv))
+      mujoco.mju_sparse2dense(
+          moment,
+          d.actuator_moment,
+          d.moment_rownnz,
+          d.moment_rowadr,
+          d.moment_colind,
+      )
+      _assert_eq(
+          moment, dx.actuator_moment, 'actuator_moment', i, fname
       )
 
 

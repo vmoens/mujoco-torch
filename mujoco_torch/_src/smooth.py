@@ -25,6 +25,8 @@ from mujoco_torch._src.types import Data
 from mujoco_torch._src.types import DisableBit
 from mujoco_torch._src.types import JointType
 from mujoco_torch._src.types import Model
+from mujoco_torch._src.types import TrnType
+from mujoco_torch._src.types import WrapType
 # pylint: enable=g-importing-member
 
 
@@ -470,47 +472,121 @@ def rne(m: Model, d: Data, flg_acc: bool = False) -> Data:
   return d
 
 
+def tendon(m: Model, d: Data) -> Data:
+  """Computes tendon lengths and moments (Jacobian)."""
+  if not m.ntendon:
+    return d
+
+  # process joint (fixed) tendons
+  (wrap_id_jnt,) = np.nonzero(m.wrap_type == WrapType.JOINT)
+
+  if wrap_id_jnt.size == 0:
+    d = d.replace(
+        ten_length=torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device),
+        ten_J=torch.zeros((m.ntendon, m.nv), dtype=d.qpos.dtype, device=d.qpos.device),
+    )
+    return d
+
+  (tendon_id_jnt,) = np.nonzero(np.isin(m.tendon_adr, wrap_id_jnt))
+
+  ntendon_jnt = tendon_id_jnt.size
+  wrap_objid_jnt = m.wrap_objid[wrap_id_jnt]
+  tendon_num_jnt = m.tendon_num[tendon_id_jnt]
+
+  # moment_jnt[i] = wrap_prm (coefficient) for each wrap element
+  moment_jnt = torch.tensor(m.wrap_prm[wrap_id_jnt], dtype=d.qpos.dtype, device=d.qpos.device)
+  qpos_vals = d.qpos[m.jnt_qposadr[wrap_objid_jnt]]
+
+  # tendon length = sum of (coefficient * joint position) per tendon
+  segment_ids = torch.tensor(
+      np.repeat(np.arange(ntendon_jnt), tendon_num_jnt),
+      dtype=torch.long, device=d.qpos.device,
+  )
+  ten_length = torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device)
+  ten_length_jnt = torch.zeros(ntendon_jnt, dtype=d.qpos.dtype, device=d.qpos.device)
+  ten_length_jnt = ten_length_jnt.index_add(0, segment_ids, moment_jnt * qpos_vals)
+  ten_length[tendon_id_jnt] = ten_length_jnt
+
+  # tendon Jacobian: ten_J[tendon_id, dof_adr] = wrap_prm (coefficient)
+  ten_J = torch.zeros((m.ntendon, m.nv), dtype=d.qpos.dtype, device=d.qpos.device)
+  adr_moment_jnt = np.repeat(tendon_id_jnt, tendon_num_jnt)
+  dofadr_moment_jnt = m.jnt_dofadr[wrap_objid_jnt]
+  ten_J[adr_moment_jnt, dofadr_moment_jnt] = moment_jnt
+
+  d = d.replace(ten_length=ten_length, ten_J=ten_J)
+  return d
+
+
+def tendon_armature(m: Model, d: Data) -> Data:
+  """Add tendon armature to qM."""
+  if not m.ntendon:
+    return d
+
+  # JTAJ = J^T @ diag(armature) @ J
+  JTAJ = d.ten_J.T @ (d.ten_J * m.tendon_armature.unsqueeze(1))
+
+  if support.is_sparse(m):
+    ij = []
+    for i in range(m.nv):
+      j = i
+      while j > -1:
+        ij.append((i, j))
+        j = m.dof_parentid[j]
+    i_idx, j_idx = zip(*ij)
+    i_idx = torch.tensor(i_idx, dtype=torch.long, device=d.qM.device)
+    j_idx = torch.tensor(j_idx, dtype=torch.long, device=d.qM.device)
+    JTAJ = JTAJ[(i_idx, j_idx)]
+
+  return d.replace(qM=d.qM + JTAJ)
+
+
 def transmission(m: Model, d: Data) -> Data:
   """Computes actuator/transmission lengths and moments."""
   if not m.nu:
     return d
 
-  def fn(gear, jnt_typ, m_i, m_j, qpos):
-    # handles joint transmissions only
+  length = torch.zeros(m.nu, dtype=d.qpos.dtype, device=d.qpos.device)
+  moment = torch.zeros((m.nu, m.nv), dtype=d.qpos.dtype, device=d.qpos.device)
+
+  for i in range(m.nu):
+    trntype = m.actuator_trntype[i]
+    gear = m.actuator_gear[i]
+    trnid = m.actuator_trnid[i, 0]
+
+    if trntype == TrnType.TENDON:
+      length[i] = d.ten_length[trnid] * gear[0]
+      moment[i] = d.ten_J[trnid] * gear[0]
+      continue
+
+    jnt_typ = JointType(m.jnt_type[trnid])
+    dofadr = m.jnt_dofadr[trnid]
+    qposadr = m.jnt_qposadr[trnid]
+
     if jnt_typ == JointType.FREE:
-      length = torch.zeros(1, dtype=gear.dtype, device=gear.device)
-      moment = gear
-      m_i = torch.repeat_interleave(m_i.unsqueeze(0), 6).squeeze(0)
-      m_j = m_j + torch.arange(6, dtype=m_j.dtype, device=m_j.device)
+      qpos = d.qpos[qposadr : qposadr + 7]
+      if trntype == TrnType.JOINTINPARENT:
+        quat_neg = math.quat_inv(qpos[3:])
+        gearaxis = math.rotate(gear[3:], quat_neg)
+        moment[i, dofadr : dofadr + 3] = gear[:3]
+        moment[i, dofadr + 3 : dofadr + 6] = gearaxis
+      else:
+        moment[i, dofadr : dofadr + 6] = gear[:6]
     elif jnt_typ == JointType.BALL:
-      axis, _ = math.quat_to_axis_angle(qpos)
-      length = torch.dot(axis, gear[:3]).unsqueeze(0)
-      moment = gear[:3]
-      m_i = torch.repeat_interleave(m_i.unsqueeze(0), 3).squeeze(0)
-      m_j = m_j + torch.arange(3, dtype=m_j.dtype, device=m_j.device)
+      qpos = d.qpos[qposadr : qposadr + 4]
+      axis, angle = math.quat_to_axis_angle(qpos)
+      gearaxis = gear[:3]
+      if trntype == TrnType.JOINTINPARENT:
+        quat_neg = math.quat_inv(qpos)
+        gearaxis = math.rotate(gear[:3], quat_neg)
+      length[i] = torch.dot(axis * angle, gearaxis)
+      moment[i, dofadr : dofadr + 3] = gearaxis
     elif jnt_typ in (JointType.SLIDE, JointType.HINGE):
-      length = qpos * gear[0]
-      moment = gear[:1]
-      m_i, m_j = m_i.unsqueeze(0), m_j.unsqueeze(0)
+      qpos_val = d.qpos[qposadr]
+      length[i] = qpos_val * gear[0]
+      moment[i, dofadr] = gear[0]
     else:
       raise RuntimeError(f'unrecognized joint type: {jnt_typ}')
-    return length, moment, m_i, m_j
 
-  length, m_val, m_i, m_j = scan.flat(
-      m,
-      fn,
-      'ujujq',
-      'uvvv',
-      m.actuator_gear,
-      m.jnt_type,
-      torch.arange(m.nu),
-      torch.tensor(m.jnt_dofadr),
-      d.qpos,
-      group_by='u',
-  )
-  moment = torch.zeros((m.nu, m.nv), dtype=m_val.dtype, device=m_val.device)
-  moment[m_i.long(), m_j.long()] = m_val
-  length = length.reshape((m.nu,))
   d = d.replace(actuator_length=length, actuator_moment=moment)
   return d
 

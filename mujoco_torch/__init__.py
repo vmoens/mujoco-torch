@@ -66,6 +66,8 @@ from mujoco_torch._src.smooth import kinematics
 from mujoco_torch._src.smooth import mul_m
 from mujoco_torch._src.smooth import rne
 from mujoco_torch._src.smooth import solve_m
+from mujoco_torch._src.smooth import tendon
+from mujoco_torch._src.smooth import tendon_armature
 from mujoco_torch._src.smooth import transmission
 
 # Solver

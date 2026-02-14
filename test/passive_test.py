@@ -49,13 +49,13 @@ class PassiveTest(parameterized.TestCase):
     d.qvel = np.random.random(m.nv)  # random kick
 
     mx = mujoco_torch.device_put(m)
-    dx = mujoco_torch.make_data(mx)
 
     passive_jit_fn = mujoco_torch.passive
 
     for i in range(100):
       qpos, qvel = torch.tensor(d.qpos.copy()), torch.tensor(d.qvel.copy())
       mujoco.mj_step(m, d)
+      dx = mujoco_torch.device_put(d)
       dx = passive_jit_fn(mx, dx.replace(qpos=qpos, qvel=qvel))
       _assert_attr_eq(d, dx, 'qfrc_passive', i, fname)
 
