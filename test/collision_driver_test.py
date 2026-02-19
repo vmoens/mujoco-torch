@@ -513,5 +513,81 @@ class TopKContactTest(absltest.TestCase):
         self.assertEqual(dx_top_k.ncon, 2)
 
 
+def _collide_hfield(mjcf, hfield_data_value=0.5):
+    """Like _collide but sets hfield data before device_put."""
+    m = mujoco.MjModel.from_xml_string(mjcf)
+    m.hfield_data[:] = hfield_data_value
+    mx = mujoco_torch.device_put(m)
+    d = mujoco.MjData(m)
+    dx = mujoco_torch.device_put(d)
+    mujoco.mj_step(m, d)
+    dx = mujoco_torch.kinematics(mx, dx)
+    dx = mujoco_torch.collision(mx, dx)
+    return d, dx
+
+
+class HFieldCollisionTest(parameterized.TestCase):
+    """Tests hfield collision functions."""
+
+    _HFIELD_SPHERE = """
+    <mujoco>
+      <asset>
+        <hfield name="terrain" nrow="4" ncol="4"
+                size="1 1 0.5 0.1"/>
+      </asset>
+      <worldbody>
+        <geom type="hfield" hfield="terrain"/>
+        <body pos="0 0 0.35">
+          <joint type="free"/>
+          <geom type="sphere" size="0.15"/>
+        </body>
+      </worldbody>
+    </mujoco>
+    """
+
+    _HFIELD_CAPSULE = """
+    <mujoco>
+      <asset>
+        <hfield name="terrain" nrow="10" ncol="10"
+                size="1 1 0.5 0.1"/>
+      </asset>
+      <worldbody>
+        <geom type="hfield" hfield="terrain"/>
+        <body pos="0 0 0.31">
+          <joint type="free"/>
+          <geom fromto="-0.1 0 0 0.1 0 0"
+                size="0.08" type="capsule"/>
+        </body>
+      </worldbody>
+    </mujoco>
+    """
+
+    @parameterized.parameters(
+        ("hfield_sphere", _HFIELD_SPHERE),
+        ("hfield_capsule", _HFIELD_CAPSULE),
+    )
+    def test_hfield(self, name, mjcf):
+        d, dx = _collide_hfield(mjcf)
+        valid = dx.contact.dist < 0
+        n_valid = valid.sum().item()
+        self.assertGreater(n_valid, 0)
+        best = dx.contact.dist.argmin()
+        mj_best = np.argmin(d.contact.dist[: d.ncon])
+        np.testing.assert_allclose(
+            dx.contact.dist[best].numpy(),
+            d.contact.dist[mj_best],
+            atol=1e-2,
+            err_msg=f"dist in {name}",
+        )
+        mjx_n = dx.contact.frame[best, 0, :].numpy()
+        mj_n = d.contact.frame[mj_best].reshape(3, 3)[0]
+        np.testing.assert_allclose(
+            np.abs(mjx_n),
+            np.abs(mj_n),
+            atol=5e-2,
+            err_msg=f"normal in {name}",
+        )
+
+
 if __name__ == "__main__":
     absltest.main()

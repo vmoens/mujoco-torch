@@ -345,15 +345,20 @@ def hfield_prism(vert: torch.Tensor) -> ConvexInfo:
 
 
 def hfield(m: mujoco.MjModel | Model, data_id: int) -> HFieldInfo:
-    adr = m.hfield_adr[data_id]
-    nrow, ncol = m.hfield_nrow[data_id], m.hfield_ncol[data_id]
+    adr = int(m.hfield_adr[data_id])
+    nrow = int(m.hfield_nrow[data_id])
+    ncol = int(m.hfield_ncol[data_id])
+    raw = m.hfield_data[adr : adr + nrow * ncol]
+    if isinstance(raw, torch.Tensor):
+        raw = raw.numpy()
+    data = np.array(raw).reshape((ncol, nrow), order="F")
     h = HFieldInfo(
         torch.zeros(3, dtype=torch.float64),
         torch.eye(3, dtype=torch.float64),
-        hfield_size=m.hfield_size[data_id],
+        hfield_size=np.asarray(m.hfield_size[data_id]),
         nrow=nrow,
         ncol=ncol,
-        hfield_data=torch.tensor(m.hfield_data[adr : adr + nrow * ncol].reshape((ncol, nrow), order="F")),
+        hfield_data=torch.tensor(data, dtype=torch.float64),
         batch_size=[],
     )
     return h
@@ -420,9 +425,15 @@ def get(m: mujoco.MjModel) -> dict[str, Sequence[np.ndarray | None]]:
             ).reshape(-1, 4)
             key = (hash(vert.data.tobytes()), hash(face.data.tobytes()))
             meshid = -1  # box has no mesh
+        elif typ == GeomType.HFIELD:
+            kwargs = {k: kwargs[k] + [None] for k in _DERIVED_ARGS}
+            continue
         elif dataid >= 0:
             vert, face = verts[dataid], faces[dataid]
-            key = (hash(vert.data.tobytes()), hash(face.data.tobytes()))
+            key = (
+                hash(vert.data.tobytes()),
+                hash(face.data.tobytes()),
+            )
             meshid = dataid
         else:
             kwargs = {k: kwargs[k] + [None] for k in _DERIVED_ARGS}

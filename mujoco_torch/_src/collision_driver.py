@@ -26,7 +26,9 @@ import numpy as np
 import torch
 
 from mujoco_torch._src import collision_types
+from mujoco_torch._src import mesh as mesh_module
 from mujoco_torch._src.collision_convex import capsule_convex, convex_convex, plane_convex, sphere_convex
+from mujoco_torch._src.collision_hfield import hfield_capsule, hfield_convex, hfield_sphere
 from mujoco_torch._src.collision_primitive import (
     capsule_capsule,
     plane_capsule,
@@ -99,6 +101,10 @@ _COLLISION_FUNC = {
     (GeomType.PLANE, GeomType.CAPSULE): plane_capsule,
     (GeomType.PLANE, GeomType.BOX): plane_convex,
     (GeomType.PLANE, GeomType.MESH): plane_convex,
+    (GeomType.HFIELD, GeomType.SPHERE): hfield_sphere,
+    (GeomType.HFIELD, GeomType.CAPSULE): hfield_capsule,
+    (GeomType.HFIELD, GeomType.BOX): hfield_convex,
+    (GeomType.HFIELD, GeomType.MESH): hfield_convex,
     (GeomType.SPHERE, GeomType.SPHERE): sphere_sphere,
     (GeomType.SPHERE, GeomType.CAPSULE): sphere_capsule,
     (GeomType.SPHERE, GeomType.BOX): sphere_convex,
@@ -273,6 +279,119 @@ def _body_pair_filter(m: Model | mujoco.MjModel, b1: int, b2: int) -> bool:
     return False
 
 
+def _hfield_subgrid_size(m: Model, hfield_data_id: int, geom_rbound: float) -> tuple[int, int]:
+    """Computes subgrid size for hfield collision based on object bounding radius."""
+    hfield_size = m.hfield_size[hfield_data_id]
+    nrow = int(m.hfield_nrow[hfield_data_id])
+    ncol = int(m.hfield_ncol[hfield_data_id])
+    xtick = 2.0 * float(hfield_size[0]) / (ncol - 1)
+    ytick = 2.0 * float(hfield_size[1]) / (nrow - 1)
+    xbound = int(np.ceil(2 * geom_rbound / xtick)) + 1
+    xbound = min(xbound, ncol)
+    ybound = int(np.ceil(2 * geom_rbound / ytick)) + 1
+    ybound = min(ybound, nrow)
+    return (xbound, ybound)
+
+
+def _collide_hfield_geoms(
+    m: Model,
+    d: Data,
+    candidates: Sequence[Candidate],
+    fn: Callable,
+) -> Contact:
+    """Collides hfield geom pairs individually (no vmap)."""
+    typ_cands: dict[tuple[bool, bool], list[Candidate]] = {}
+    for c in candidates:
+        typ = (c.ipair > -1, c.geomp > -1)
+        typ_cands.setdefault(typ, []).append(c)
+
+    geom1_ids: list[int] = []
+    geom2_ids: list[int] = []
+    dims: list[int] = []
+    params: list[SolverParams] = []
+    all_dist: list[torch.Tensor] = []
+    all_pos: list[torch.Tensor] = []
+    all_frame: list[torch.Tensor] = []
+
+    for (pair, priority), cands in typ_cands.items():
+        if pair:
+            p = _pair_params(m, cands)
+        elif priority:
+            p = _priority_params(m, cands)
+        else:
+            p = _dynamic_params(m, cands)
+        params.append(p)
+
+        for c in cands:
+            geom1_ids.append(c.geom1)
+            geom2_ids.append(c.geom2)
+            dims.append(c.dim)
+
+            g1, g2 = c.geom1, c.geom2
+            hfield_data_id = int(m.geom_dataid[g1])
+            h_info = mesh_module.hfield(m, hfield_data_id)
+            h_info = h_info.replace(
+                pos=d.geom_xpos[g1].to(torch.float64),
+                mat=d.geom_xmat[g1].to(torch.float64),
+            )
+
+            obj_info = GeomInfo(
+                d.geom_xpos[g2],
+                d.geom_xmat[g2],
+                geom_size=m.geom_size[g2],
+                batch_size=[],
+            )
+            if m.geom_convex_face[g2] is not None:
+                obj_info = obj_info.replace(
+                    face=m.geom_convex_face[g2],
+                    vert=m.geom_convex_vert[g2],
+                    edge=m.geom_convex_edge[g2],
+                    facenorm=m.geom_convex_facenormal[g2],
+                )
+
+            rbound = float(m.geom_rbound_hfield[g2])
+            subgrid_size = _hfield_subgrid_size(m, hfield_data_id, rbound)
+            dist_i, pos_i, frame_i = fn(h_info, obj_info, subgrid_size)
+            all_dist.append(dist_i)
+            all_pos.append(pos_i)
+            all_frame.append(frame_i)
+
+    dist = torch.cat(all_dist)
+    pos = torch.cat(all_pos)
+    frame = torch.cat(all_frame)
+    ncon_per_pair = fn.ncon
+
+    def _concat(*x):
+        return np.concatenate(x, axis=0) if isinstance(x[0], np.ndarray) else torch.cat(x, dim=0)
+
+    params = torch.utils._pytree.tree_map(_concat, *params) if len(params) > 1 else params[0]
+    geom1_t = torch.tensor(geom1_ids)
+    geom2_t = torch.tensor(geom2_ids)
+    contact_dim = torch.tensor(dims, dtype=torch.int32)
+    n_repeat = ncon_per_pair
+    geom1_t, geom2_t, contact_dim, params = torch.utils._pytree.tree_map(
+        lambda x: x.repeat_interleave(n_repeat, dim=0),
+        (geom1_t, geom2_t, contact_dim, params),
+    )
+
+    return Contact(
+        dist=dist,
+        pos=pos,
+        frame=frame,
+        includemargin=params.margin - params.gap,
+        friction=params.friction,
+        solref=params.solref,
+        solreffriction=params.solreffriction,
+        solimp=params.solimp,
+        contact_dim=contact_dim,
+        geom1=geom1_t,
+        geom2=geom2_t,
+        geom=torch.stack([geom1_t, geom2_t], dim=-1),
+        efc_address=torch.full((dist.shape[0],), -1, dtype=torch.int64),
+        batch_size=[dist.shape[0]],
+    )
+
+
 def _collide_geoms(
     m: Model,
     d: Data,
@@ -285,6 +404,9 @@ def _collide_geoms(
         fn = get_collision_fn(geom_types)
     if not fn:
         return Contact.zero()
+
+    if geom_types[0] == GeomType.HFIELD:
+        return _collide_hfield_geoms(m, d, candidates, fn)
 
     # group sol params by different candidate types
     typ_cands = {}
