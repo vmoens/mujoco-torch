@@ -322,7 +322,7 @@ def _collide_hfield_geoms(
             p = _dynamic_params(m, cands)
         params.append(p)
 
-        for i, c in enumerate(cands):
+        for c in cands:
             geom1_ids.append(c.geom1)
             geom2_ids.append(c.geom2)
             dims.append(c.dim)
