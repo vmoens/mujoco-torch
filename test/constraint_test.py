@@ -15,81 +15,80 @@
 """Tests for constraint functions."""
 
 import mujoco
+
 # pylint: enable=g-importing-member
 import numpy as np
 import torch
-from absl.testing import absltest
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
+
 import mujoco_torch
-from mujoco_torch._src import constraint
-from mujoco_torch._src import test_util
+from mujoco_torch._src import constraint, test_util
+
 # pylint: disable=g-importing-member
-from mujoco_torch._src.types import DisableBit
-from mujoco_torch._src.types import SolverType
+from mujoco_torch._src.types import DisableBit, SolverType
 
 
 def _assert_eq(a, b, name, step, fname, atol=5e-3, rtol=5e-3):
-  err_msg = f'mismatch: {name} at step {step} in {fname}'
-  np.testing.assert_allclose(a, b, err_msg=err_msg, atol=atol, rtol=rtol)
+    err_msg = f"mismatch: {name} at step {step} in {fname}"
+    np.testing.assert_allclose(a, b, err_msg=err_msg, atol=atol, rtol=rtol)
 
 
 class ConstraintTest(parameterized.TestCase):
+    @parameterized.parameters(enumerate(test_util.TEST_FILES))
+    def test_constraints(self, seed, fname):
+        """Test constraints."""
+        np.random.seed(seed)
 
-  @parameterized.parameters(enumerate(test_util.TEST_FILES))
-  def test_constraints(self, seed, fname):
-    """Test constraints."""
-    np.random.seed(seed)
+        # exclude convex.xml since convex contacts are not exactly equivalent
+        if fname == "convex.xml":
+            return
 
-    # exclude convex.xml since convex contacts are not exactly equivalent
-    if fname == 'convex.xml':
-      return
+        m = test_util.load_test_file(fname)
+        d = mujoco.MjData(m)
+        mx = mujoco_torch.device_put(m)
+        dx = mujoco_torch.make_data(mx)
 
-    m = test_util.load_test_file(fname)
-    d = mujoco.MjData(m)
-    mx = mujoco_torch.device_put(m)
-    dx = mujoco_torch.make_data(mx)
+        forward_jit_fn = mujoco_torch.forward
 
-    forward_jit_fn = mujoco_torch.forward
+        # give the system a little kick to ensure we have non-identity rotations
+        d.qvel = np.random.random(m.nv)
+        for i in range(100):
+            dx = dx.replace(qpos=torch.tensor(d.qpos.copy()), qvel=torch.tensor(d.qvel.copy()))
+            mujoco.mj_step(m, d)
+            dx = forward_jit_fn(mx, dx)
 
-    # give the system a little kick to ensure we have non-identity rotations
-    d.qvel = np.random.random(m.nv)
-    for i in range(100):
-      dx = dx.replace(qpos=torch.tensor(d.qpos.copy()), qvel=torch.tensor(d.qvel.copy()))
-      mujoco.mj_step(m, d)
-      dx = forward_jit_fn(mx, dx)
+            # Use tolerance-based filter: rows with max abs value > eps
+            eps = 1e-10
+            nnz_filter = dx.efc_J.abs().max(dim=1).values > eps
 
-      # Use tolerance-based filter: rows with max abs value > eps
-      eps = 1e-10
-      nnz_filter = dx.efc_J.abs().max(dim=1).values > eps
+            mj_efc_j = d.efc_J.reshape((-1, m.nv))
+            mj_nnz = np.abs(mj_efc_j).max(axis=1) > eps
+            mj_efc_j_filtered = mj_efc_j[mj_nnz]
+            mjx_efc_j = dx.efc_J[nnz_filter]
 
-      mj_efc_j = d.efc_J.reshape((-1, m.nv))
-      mj_nnz = np.abs(mj_efc_j).max(axis=1) > eps
-      mj_efc_j_filtered = mj_efc_j[mj_nnz]
-      mjx_efc_j = dx.efc_J[nnz_filter]
+            # Only compare when either side has significant constraint data
+            if mj_efc_j_filtered.shape[0] > 0 or mjx_efc_j.shape[0] > 0:
+                _assert_eq(mj_efc_j_filtered, mjx_efc_j, "efc_J", i, fname)
 
-      # Only compare when either side has significant constraint data
-      if mj_efc_j_filtered.shape[0] > 0 or mjx_efc_j.shape[0] > 0:
-        _assert_eq(mj_efc_j_filtered, mjx_efc_j, 'efc_J', i, fname)
+                mjx_efc_d = dx.efc_D[nnz_filter]
+                mj_efc_d = d.efc_D[mj_nnz] if mj_nnz.any() else d.efc_D[:0]
+                _assert_eq(mj_efc_d, mjx_efc_d, "efc_D", i, fname)
 
-        mjx_efc_d = dx.efc_D[nnz_filter]
-        mj_efc_d = d.efc_D[mj_nnz] if mj_nnz.any() else d.efc_D[:0]
-        _assert_eq(mj_efc_d, mjx_efc_d, 'efc_D', i, fname)
+                mjx_efc_aref = dx.efc_aref[nnz_filter]
+                mj_efc_aref = d.efc_aref[mj_nnz] if mj_nnz.any() else d.efc_aref[:0]
+                _assert_eq(mj_efc_aref, mjx_efc_aref, "efc_aref", i, fname)
 
-        mjx_efc_aref = dx.efc_aref[nnz_filter]
-        mj_efc_aref = d.efc_aref[mj_nnz] if mj_nnz.any() else d.efc_aref[:0]
-        _assert_eq(mj_efc_aref, mjx_efc_aref, 'efc_aref', i, fname)
+                mjx_efc_frictionloss = dx.efc_frictionloss[nnz_filter]
+                mj_efc_fl = d.efc_frictionloss[mj_nnz] if mj_nnz.any() else d.efc_frictionloss[:0]
+                _assert_eq(
+                    mj_efc_fl,
+                    mjx_efc_frictionloss,
+                    "efc_frictionloss",
+                    i,
+                    fname,
+                )
 
-        mjx_efc_frictionloss = dx.efc_frictionloss[nnz_filter]
-        mj_efc_fl = d.efc_frictionloss[mj_nnz] if mj_nnz.any() else d.efc_frictionloss[:0]
-        _assert_eq(
-            mj_efc_fl,
-            mjx_efc_frictionloss,
-            'efc_frictionloss',
-            i,
-            fname,
-        )
-
-  _JNT_RANGE = """
+    _JNT_RANGE = """
     <mujoco>
       <worldbody>
         <body pos="0 0 1">
@@ -105,84 +104,82 @@ class ConstraintTest(parameterized.TestCase):
     </mujoco>
   """
 
-  def test_jnt_range(self):
-    """Tests that mixed joint ranges are respected."""
-    # TODO(robotics-simulation): also test ball
-    m = mujoco.MjModel.from_xml_string(self._JNT_RANGE)
-    m.opt.solver = SolverType.CG.value
-    d = mujoco.MjData(m)
-    d.qpos = np.array([2.0, 15.0])
+    def test_jnt_range(self):
+        """Tests that mixed joint ranges are respected."""
+        # TODO(robotics-simulation): also test ball
+        m = mujoco.MjModel.from_xml_string(self._JNT_RANGE)
+        m.opt.solver = SolverType.CG.value
+        d = mujoco.MjData(m)
+        d.qpos = np.array([2.0, 15.0])
 
-    mx = mujoco_torch.device_put(m)
-    dx = mujoco_torch.device_put(d)
-    efc = constraint._instantiate_limit_slide_hinge(mx, dx)
+        mx = mujoco_torch.device_put(m)
+        dx = mujoco_torch.device_put(d)
+        efc = constraint._instantiate_limit_slide_hinge(mx, dx)
 
-    # first joint is outside the joint range
-    np.testing.assert_array_almost_equal(efc.J[0, 0], -1.0)
+        # first joint is outside the joint range
+        np.testing.assert_array_almost_equal(efc.J[0, 0], -1.0)
 
-    # second joint has no range, so only one efc row
-    self.assertEqual(efc.J.shape[0], 1)
+        # second joint has no range, so only one efc row
+        self.assertEqual(efc.J.shape[0], 1)
 
-  def test_disable_refsafe(self):
-    m = test_util.load_test_file('ant.xml')
+    def test_disable_refsafe(self):
+        m = test_util.load_test_file("ant.xml")
 
-    timeconst = m.opt.timestep / 4.0  # timeconst < 2 * timestep
-    solimp = torch.tensor([timeconst, 1.0], dtype=torch.float64)
-    solref = torch.tensor([0.8, 0.99, 0.001, 0.2, 2], dtype=torch.float64)
-    pos = torch.ones(3, dtype=torch.float64)
+        timeconst = m.opt.timestep / 4.0  # timeconst < 2 * timestep
+        solimp = torch.tensor([timeconst, 1.0], dtype=torch.float64)
+        solref = torch.tensor([0.8, 0.99, 0.001, 0.2, 2], dtype=torch.float64)
+        pos = torch.ones(3, dtype=torch.float64)
 
-    m.opt.disableflags = m.opt.disableflags | DisableBit.REFSAFE
-    mx = mujoco_torch.device_put(m)
-    k, *_ = constraint._kbi(mx, solimp, solref, pos)
-    self.assertEqual(k, 1 / (0.99**2 * timeconst**2))
+        m.opt.disableflags = m.opt.disableflags | DisableBit.REFSAFE
+        mx = mujoco_torch.device_put(m)
+        k, *_ = constraint._kbi(mx, solimp, solref, pos)
+        self.assertEqual(k, 1 / (0.99**2 * timeconst**2))
 
-    m.opt.disableflags = m.opt.disableflags & ~DisableBit.REFSAFE
-    mx = mujoco_torch.device_put(m)
-    k, *_ = constraint._kbi(mx, solimp, solref, pos)
-    self.assertEqual(k, 1 / (0.99**2 * (2 * m.opt.timestep) ** 2))
+        m.opt.disableflags = m.opt.disableflags & ~DisableBit.REFSAFE
+        mx = mujoco_torch.device_put(m)
+        k, *_ = constraint._kbi(mx, solimp, solref, pos)
+        self.assertEqual(k, 1 / (0.99**2 * (2 * m.opt.timestep) ** 2))
 
-  def test_disableconstraint(self):
-    m = test_util.load_test_file('ant.xml')
-    d = mujoco.MjData(m)
+    def test_disableconstraint(self):
+        m = test_util.load_test_file("ant.xml")
+        d = mujoco.MjData(m)
 
-    m.opt.disableflags = m.opt.disableflags & ~DisableBit.CONSTRAINT
-    mx, dx = mujoco_torch.device_put(m), mujoco_torch.device_put(d)
-    dx = constraint.make_constraint(mx, dx)
-    self.assertGreater(dx.efc_J.shape[0], 1)
+        m.opt.disableflags = m.opt.disableflags & ~DisableBit.CONSTRAINT
+        mx, dx = mujoco_torch.device_put(m), mujoco_torch.device_put(d)
+        dx = constraint.make_constraint(mx, dx)
+        self.assertGreater(dx.efc_J.shape[0], 1)
 
-    m.opt.disableflags = m.opt.disableflags | DisableBit.CONSTRAINT
-    mx = mujoco_torch.device_put(m)
-    dx = constraint.make_constraint(mx, dx)
-    self.assertEqual(dx.efc_J.shape[0], 0)
+        m.opt.disableflags = m.opt.disableflags | DisableBit.CONSTRAINT
+        mx = mujoco_torch.device_put(m)
+        dx = constraint.make_constraint(mx, dx)
+        self.assertEqual(dx.efc_J.shape[0], 0)
 
-  def test_disable_equality(self):
-    m = test_util.load_test_file('equality.xml')
-    d = mujoco.MjData(m)
+    def test_disable_equality(self):
+        m = test_util.load_test_file("equality.xml")
+        d = mujoco.MjData(m)
 
-    m.opt.disableflags = m.opt.disableflags | DisableBit.EQUALITY
-    mx, dx = mujoco_torch.device_put(m), mujoco_torch.device_put(d)
-    dx = constraint.make_constraint(mx, dx)
-    self.assertEqual(dx.efc_J.shape[0], 0)
+        m.opt.disableflags = m.opt.disableflags | DisableBit.EQUALITY
+        mx, dx = mujoco_torch.device_put(m), mujoco_torch.device_put(d)
+        dx = constraint.make_constraint(mx, dx)
+        self.assertEqual(dx.efc_J.shape[0], 0)
 
-  def test_disable_contact(self):
-    m = test_util.load_test_file('ant.xml')
-    d = mujoco.MjData(m)
-    d.qpos[2] = 0.0
-    mujoco.mj_forward(m, d)
+    def test_disable_contact(self):
+        m = test_util.load_test_file("ant.xml")
+        d = mujoco.MjData(m)
+        d.qpos[2] = 0.0
+        mujoco.mj_forward(m, d)
 
-    m.opt.disableflags = m.opt.disableflags & ~DisableBit.CONTACT
-    mx, dx = mujoco_torch.device_put(m), mujoco_torch.device_put(d)
-    dx = dx.tree_replace(
-        {'contact.frame': dx.contact.frame.reshape((-1, 3, 3))}
-    )
-    efc = constraint._instantiate_contact(mx, dx)
-    self.assertIsNotNone(efc)
+        m.opt.disableflags = m.opt.disableflags & ~DisableBit.CONTACT
+        mx, dx = mujoco_torch.device_put(m), mujoco_torch.device_put(d)
+        dx = dx.tree_replace({"contact.frame": dx.contact.frame.reshape((-1, 3, 3))})
+        efc = constraint._instantiate_contact(mx, dx)
+        self.assertIsNotNone(efc)
 
-    m.opt.disableflags = m.opt.disableflags | DisableBit.CONTACT
-    mx, dx = mujoco_torch.device_put(m), mujoco_torch.device_put(d)
-    efc = constraint._instantiate_contact(mx, dx)
-    self.assertIsNone(efc)
+        m.opt.disableflags = m.opt.disableflags | DisableBit.CONTACT
+        mx, dx = mujoco_torch.device_put(m), mujoco_torch.device_put(d)
+        efc = constraint._instantiate_contact(mx, dx)
+        self.assertIsNone(efc)
 
 
-if __name__ == '__main__':
-  absltest.main()
+if __name__ == "__main__":
+    absltest.main()

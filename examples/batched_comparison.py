@@ -19,12 +19,9 @@ import time
 import mujoco
 import numpy as np
 import torch
-
 from etils import epath
 
-MODEL_XML = (
-    epath.resource_path("mujoco_torch") / "test_data" / "humanoid.xml"
-).read_text()
+MODEL_XML = (epath.resource_path("mujoco_torch") / "test_data" / "humanoid.xml").read_text()
 
 BATCH_SIZES = [1, 4, 16, 64]
 NSTEPS = 20
@@ -60,8 +57,7 @@ for B in BATCH_SIZES:
 
     total_steps = NSTEPS * B
     mj_results[B] = t
-    print(f"  B={B:4d}:  {t*1e3:8.1f} ms  "
-          f"({total_steps/t:,.0f} steps/s)")
+    print(f"  B={B:4d}:  {t * 1e3:8.1f} ms  ({total_steps / t:,.0f} steps/s)")
 
 print()
 
@@ -120,8 +116,7 @@ for B in BATCH_SIZES:
 
     total_steps = NSTEPS * B
     torch_eager_results[B] = t
-    print(f"  B={B:4d}:  {t*1e3:8.1f} ms  "
-          f"({total_steps/t:,.0f} steps/s)")
+    print(f"  B={B:4d}:  {t * 1e3:8.1f} ms  ({total_steps / t:,.0f} steps/s)")
 
 print()
 
@@ -147,8 +142,7 @@ for B in BATCH_SIZES:
 
     total_steps = NSTEPS * B
     torch_vmap_results[B] = t
-    print(f"  B={B:4d}:  {t*1e3:8.1f} ms  "
-          f"({total_steps/t:,.0f} steps/s)")
+    print(f"  B={B:4d}:  {t * 1e3:8.1f} ms  ({total_steps / t:,.0f} steps/s)")
 
 print()
 
@@ -175,8 +169,7 @@ for B in BATCH_SIZES:
 
     total_steps = NSTEPS * B
     torch_cvmap_results[B] = t
-    print(f"  B={B:4d}:  {t*1e3:8.1f} ms  "
-          f"({total_steps/t:,.0f} steps/s)")
+    print(f"  B={B:4d}:  {t * 1e3:8.1f} ms  ({total_steps / t:,.0f} steps/s)")
 
 print()
 
@@ -204,8 +197,9 @@ try:
         qvels = make_batched_qvel(m_jax.nv, B, SEED)
         d_ref = mujoco.MjData(m_jax)
         dx_single = mjx.put_data(m_jax, d_ref)
+
         def _tile_leaf(x):
-            if not hasattr(x, 'ndim'):
+            if not hasattr(x, "ndim"):
                 return x
             # Scalars (0-d) need a leading batch dim; higher-rank tensors get tiled.
             if x.ndim == 0:
@@ -228,8 +222,7 @@ try:
 
         total_steps = NSTEPS * B
         jax_results[B] = t
-        print(f"  B={B:4d}:  {t*1e3:8.1f} ms  "
-              f"({total_steps/t:,.0f} steps/s)")
+        print(f"  B={B:4d}:  {t * 1e3:8.1f} ms  ({total_steps / t:,.0f} steps/s)")
 
     has_jax = True
 
@@ -263,11 +256,7 @@ for B in BATCH_SIZES:
     t_tc = torch_cvmap_results[B]
     sps = lambda t: B * NSTEPS / t
 
-    row = (f"  {B:>12d}"
-           f"  {sps(t_mj):>14,.0f}"
-           f"  {sps(t_te):>14,.0f}"
-           f"  {sps(t_tv):>14,.0f}"
-           f"  {sps(t_tc):>14,.0f}")
+    row = f"  {B:>12d}  {sps(t_mj):>14,.0f}  {sps(t_te):>14,.0f}  {sps(t_tv):>14,.0f}  {sps(t_tc):>14,.0f}"
     if has_jax and B in jax_results:
         t_jx = jax_results[B]
         row += f"  {sps(t_jx):>14,.0f}"

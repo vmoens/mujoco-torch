@@ -15,97 +15,82 @@
 """Inverse dynamics functions."""
 
 import torch
-from mujoco_torch._src import derivative
-from mujoco_torch._src import forward
-from mujoco_torch._src import sensor
-from mujoco_torch._src import smooth
-from mujoco_torch._src import solver
-from mujoco_torch._src import support
-from mujoco_torch._src.types import Data
-from mujoco_torch._src.types import DisableBit
-from mujoco_torch._src.types import EnableBit
-from mujoco_torch._src.types import IntegratorType
-from mujoco_torch._src.types import Model
+
+from mujoco_torch._src import derivative, forward, sensor, smooth, solver, support
+from mujoco_torch._src.types import Data, DisableBit, EnableBit, IntegratorType, Model
 
 
 def discrete_acc(m: Model, d: Data) -> Data:
-  """Convert discrete-time qacc to continuous-time qacc."""
+    """Convert discrete-time qacc to continuous-time qacc."""
 
-  if m.opt.integrator == IntegratorType.RK4:
-    raise RuntimeError(
-        'discrete inverse dynamics is not supported by RK4 integrator'
-    )
-  elif m.opt.integrator == IntegratorType.EULER:
-    dsbl_eulerdamp = m.opt.disableflags & DisableBit.EULERDAMP
-    no_dof_damping = (m.dof_damping == 0).all()
-    if dsbl_eulerdamp or no_dof_damping:
-      return d
+    if m.opt.integrator == IntegratorType.RK4:
+        raise RuntimeError("discrete inverse dynamics is not supported by RK4 integrator")
+    elif m.opt.integrator == IntegratorType.EULER:
+        dsbl_eulerdamp = m.opt.disableflags & DisableBit.EULERDAMP
+        no_dof_damping = (m.dof_damping == 0).all()
+        if dsbl_eulerdamp or no_dof_damping:
+            return d
 
-    # set qfrc = (M + h*diag(B)) * qacc
-    qfrc = smooth.mul_m(m, d, d.qacc)
-    qfrc = qfrc + m.opt.timestep * m.dof_damping * d.qacc
-  elif m.opt.integrator == IntegratorType.IMPLICITFAST:
-    qm = support.full_m(m, d)
+        # set qfrc = (M + h*diag(B)) * qacc
+        qfrc = smooth.mul_m(m, d, d.qacc)
+        qfrc = qfrc + m.opt.timestep * m.dof_damping * d.qacc
+    elif m.opt.integrator == IntegratorType.IMPLICITFAST:
+        qm = support.full_m(m, d)
 
-    # compute analytical derivative qDeriv; skip rne derivative
-    qderiv = derivative.deriv_smooth_vel(m, d)
-    if qderiv is not None:
-      # M = M - dt*qDeriv
-      qm = qm - m.opt.timestep * qderiv
+        # compute analytical derivative qDeriv; skip rne derivative
+        qderiv = derivative.deriv_smooth_vel(m, d)
+        if qderiv is not None:
+            # M = M - dt*qDeriv
+            qm = qm - m.opt.timestep * qderiv
 
-    # set qfrc = (M - dt*qDeriv) * qacc
-    qfrc = qm @ d.qacc
-  else:
-    raise NotImplementedError(f'integrator {m.opt.integrator} not implemented.')
+        # set qfrc = (M - dt*qDeriv) * qacc
+        qfrc = qm @ d.qacc
+    else:
+        raise NotImplementedError(f"integrator {m.opt.integrator} not implemented.")
 
-  # solve for qacc: qfrc = M * qacc
-  qacc = smooth.solve_m(m, d, qfrc)
+    # solve for qacc: qfrc = M * qacc
+    qacc = smooth.solve_m(m, d, qfrc)
 
-  return d.replace(qacc=qacc)
+    return d.replace(qacc=qacc)
 
 
 def inv_constraint(m: Model, d: Data) -> Data:
-  """Inverse constraint solver."""
+    """Inverse constraint solver."""
 
-  # no constraints
-  if d.efc_J.numel() == 0:
-    return d.replace(qfrc_constraint=torch.zeros(m.nv, dtype=d.qpos.dtype, device=d.qpos.device))
+    # no constraints
+    if d.efc_J.numel() == 0:
+        return d.replace(qfrc_constraint=torch.zeros(m.nv, dtype=d.qpos.dtype, device=d.qpos.device))
 
-  # update
-  ctx = solver._Context.create(m, d, grad=False)
+    # update
+    ctx = solver._Context.create(m, d, grad=False)
 
-  return d.replace(
-      qfrc_constraint=ctx.qfrc_constraint,
-      efc_force=ctx.efc_force,
-  )
+    return d.replace(
+        qfrc_constraint=ctx.qfrc_constraint,
+        efc_force=ctx.efc_force,
+    )
 
 
 def inverse(m: Model, d: Data) -> Data:
-  """Inverse dynamics."""
+    """Inverse dynamics."""
 
-  d = forward._position(m, d)
-  d = sensor.sensor_pos(m, d)
-  d = forward._velocity(m, d)
-  d = sensor.sensor_vel(m, d)
+    d = forward._position(m, d)
+    d = sensor.sensor_pos(m, d)
+    d = forward._velocity(m, d)
+    d = sensor.sensor_vel(m, d)
 
-  qacc = d.qacc
-  if m.opt.enableflags & EnableBit.INVDISCRETE:
-    d = discrete_acc(m, d)
+    qacc = d.qacc
+    if m.opt.enableflags & EnableBit.INVDISCRETE:
+        d = discrete_acc(m, d)
 
-  d = inv_constraint(m, d)
-  d = smooth.rne(m, d)
-  if m.ntendon and hasattr(smooth, 'tendon_bias'):
-    d = smooth.tendon_bias(m, d)
-  d = sensor.sensor_acc(m, d)
+    d = inv_constraint(m, d)
+    d = smooth.rne(m, d)
+    if m.ntendon and hasattr(smooth, "tendon_bias"):
+        d = smooth.tendon_bias(m, d)
+    d = sensor.sensor_acc(m, d)
 
-  qfrc_inverse = (
-      d.qfrc_bias
-      + smooth.mul_m(m, d, d.qacc)
-      - d.qfrc_passive
-      - d.qfrc_constraint
-  )
+    qfrc_inverse = d.qfrc_bias + smooth.mul_m(m, d, d.qacc) - d.qfrc_passive - d.qfrc_constraint
 
-  if m.opt.enableflags & EnableBit.INVDISCRETE:
-    return d.replace(qfrc_inverse=qfrc_inverse, qacc=qacc)
-  else:
-    return d.replace(qfrc_inverse=qfrc_inverse)
+    if m.opt.enableflags & EnableBit.INVDISCRETE:
+        return d.replace(qfrc_inverse=qfrc_inverse, qacc=qacc)
+    else:
+        return d.replace(qfrc_inverse=qfrc_inverse)

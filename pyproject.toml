@@ -47,3 +47,13 @@ select = [
     "UP",  # pyupgrade
     "B",   # flake8-bugbear
 ]
+ignore = [
+    "E402",  # module-import-not-at-top (structural pattern in codebase)
+    "E731",  # lambda-assignment
+    "B023",  # function-uses-loop-variable
+    "B028",  # no-explicit-stacklevel
+    "B905",  # zip-without-explicit-strict
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
