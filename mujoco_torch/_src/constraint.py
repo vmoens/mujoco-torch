@@ -192,54 +192,37 @@ def _instantiate_equality_weld(m: Model, d: Data) -> _Efc | None:
     return _Efc(j, pos, pos_norm, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
 
 
-def _instantiate_equality_joint(m: Model, d: Data) -> _Efc | None:
-    """Calculates constraint rows for joint equality constraints."""
+def _instantiate_friction(m: Model, d: Data) -> _Efc | None:
+    """Calculates constraint rows for DOF and tendon frictionloss."""
+    dof_ids = np.nonzero(m.dof_hasfrictionloss)[0]
+    tendon_ids = np.nonzero(m.tendon_hasfrictionloss)[0]
 
-    ids = np.nonzero(m.eq_type == EqType.JOINT)[0]
-
-    if (m.opt.disableflags & DisableBit.EQUALITY) or ids.size == 0:
+    size = dof_ids.size + tendon_ids.size
+    if (m.opt.disableflags & DisableBit.FRICTIONLOSS) or size == 0:
         return None
 
-    id1, id2, data = m.eq_obj1id[ids], m.eq_obj2id[ids], m.eq_data[ids]
-    active = d.eq_active[ids]
-    dofadr1, dofadr2 = m.jnt_dofadr[id1], m.jnt_dofadr[id2]
-    qposadr1, qposadr2 = m.jnt_qposadr[id1], m.jnt_qposadr[id2]
-    id2_t = torch.tensor(id2, dtype=torch.long) if isinstance(id2, np.ndarray) else id2
-    dofadr1_t = torch.tensor(dofadr1, dtype=torch.long) if isinstance(dofadr1, np.ndarray) else dofadr1
-    dofadr2_t = torch.tensor(dofadr2, dtype=torch.long) if isinstance(dofadr2, np.ndarray) else dofadr2
-    qposadr1_t = torch.tensor(qposadr1, dtype=torch.long) if isinstance(qposadr1, np.ndarray) else qposadr1
-    qposadr2_t = torch.tensor(qposadr2, dtype=torch.long) if isinstance(qposadr2, np.ndarray) else qposadr2
+    eye = torch.eye(m.nv, dtype=m.dof_frictionloss.dtype, device=m.dof_frictionloss.device)
 
-    @torch.vmap
-    def fn(data, id2, dofadr1, dofadr2, qposadr1, qposadr2, active):
-        pos1 = d.qpos.gather(0, qposadr1.unsqueeze(0)).squeeze(0)
-        pos2 = d.qpos.gather(0, qposadr2.unsqueeze(0)).squeeze(0)
-        ref1 = m.qpos0.gather(0, qposadr1.unsqueeze(0)).squeeze(0)
-        ref2 = m.qpos0.gather(0, qposadr2.unsqueeze(0)).squeeze(0)
-        pos2, ref2 = pos2 * (id2 > -1), ref2 * (id2 > -1)
+    j_dof = eye[dof_ids]
+    fl_dof = m.dof_frictionloss[dof_ids]
+    iw_dof = m.dof_invweight0[dof_ids]
+    sr_dof = m.dof_solref[dof_ids]
+    si_dof = m.dof_solimp[dof_ids]
 
-        dif = pos2 - ref2
-        dif_power = torch.pow(dif, torch.arange(0, 5, dtype=data.dtype, device=data.device))
+    j_ten = d.ten_J[tendon_ids]
+    fl_ten = m.tendon_frictionloss[tendon_ids]
+    iw_ten = m.tendon_invweight0[tendon_ids]
+    sr_ten = m.tendon_solref_fri[tendon_ids]
+    si_ten = m.tendon_solimp_fri[tendon_ids]
 
-        deriv = torch.dot(data[1:5], dif_power[:4] * torch.arange(1, 5, dtype=data.dtype, device=data.device))
-        j = torch.zeros(m.nv, dtype=data.dtype, device=data.device)
-        j = j.scatter(0, dofadr1.unsqueeze(0), torch.ones(1, dtype=data.dtype, device=data.device))
-        j = j.scatter(0, dofadr2.unsqueeze(0), (-deriv).unsqueeze(0))
-        pos = pos1 - ref1 - torch.dot(data[:5], dif_power)
-        return j * active, pos * active
+    j = torch.cat([j_dof, j_ten])
+    frictionloss = torch.cat([fl_dof, fl_ten])
+    invweight = torch.cat([iw_dof, iw_ten])
+    solref = torch.cat([sr_dof, sr_ten])
+    solimp = torch.cat([si_dof, si_ten])
+    pos = torch.zeros(size, dtype=frictionloss.dtype, device=frictionloss.device)
 
-    j, pos = fn(data, id2_t, dofadr1_t, dofadr2_t, qposadr1_t, qposadr2_t, active)
-    invweight = m.dof_invweight0[dofadr1] + m.dof_invweight0[dofadr2] * (id2 > -1)
-    solref, solimp = m.eq_solref[ids], m.eq_solimp[ids]
-    frictionloss = torch.zeros_like(pos)
-
-    return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
-
-
-def _instantiate_friction(m: Model, d: Data) -> _Efc | None:
-    # TODO(robotics-team): implement _instantiate_friction
-    del m, d
-    return None
+    return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[size])
 
 
 def _instantiate_equality_joint(m: Model, d: Data) -> _Efc | None:
@@ -496,7 +479,10 @@ def constraint_sizes(m: Model) -> tuple[int, int, int, int, int]:
         ne_joint = int((m.eq_type == EqType.JOINT).sum())
         ne = ne_connect * 3 + ne_weld * 6 + ne_joint
 
-    nf = 0
+    if m.opt.disableflags & DisableBit.FRICTIONLOSS:
+        nf = 0
+    else:
+        nf = int(m.dof_hasfrictionloss.sum()) + int(m.tendon_hasfrictionloss.sum())
 
     if m.opt.disableflags & DisableBit.LIMIT:
         nl = 0

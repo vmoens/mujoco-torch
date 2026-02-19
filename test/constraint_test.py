@@ -180,6 +180,92 @@ class ConstraintTest(parameterized.TestCase):
         efc = constraint._instantiate_contact(mx, dx)
         self.assertIsNone(efc)
 
+    _FRICTIONLOSS_XML = """
+    <mujoco>
+      <option solver="CG" timestep="0.005"/>
+      <worldbody>
+        <body pos="0 0 1">
+          <joint type="hinge" axis="0 0 1" frictionloss="1.0" damping="0.1"/>
+          <geom type="sphere" size="0.1" mass="1"/>
+          <body pos="0.5 0 0">
+            <joint type="slide" axis="1 0 0" frictionloss="0.5" damping="0.1"/>
+            <geom type="sphere" size="0.1" mass="1"/>
+          </body>
+        </body>
+      </worldbody>
+      <tendon>
+        <fixed name="ten0">
+          <joint joint="joint0" coef="1"/>
+        </fixed>
+      </tendon>
+    </mujoco>
+    """
+
+    _FRICTIONLOSS_DOF_ONLY_XML = """
+    <mujoco>
+      <option solver="CG" timestep="0.005"/>
+      <worldbody>
+        <body pos="0 0 1">
+          <joint type="hinge" axis="0 0 1" frictionloss="2.0" damping="0.1"/>
+          <geom type="sphere" size="0.1" mass="1"/>
+        </body>
+      </worldbody>
+    </mujoco>
+    """
+
+    def test_frictionloss_dof(self):
+        """Test DOF frictionloss constraints match MuJoCo C."""
+        m = mujoco.MjModel.from_xml_string(self._FRICTIONLOSS_DOF_ONLY_XML)
+        d = mujoco.MjData(m)
+        mx = mujoco_torch.device_put(m)
+
+        d.qvel[:] = np.array([1.0])
+        for i in range(100):
+            dx = mujoco_torch.device_put(d)
+            mujoco.mj_step(m, d)
+            dx = mujoco_torch.forward(mx, dx)
+
+            eps = 1e-10
+            nnz_filter = dx.efc_J.abs().max(dim=1).values > eps
+            mj_efc_j = d.efc_J.reshape((-1, m.nv))
+            mj_nnz = np.abs(mj_efc_j).max(axis=1) > eps
+
+            if mj_nnz.any() or nnz_filter.any():
+                _assert_eq(mj_efc_j[mj_nnz], dx.efc_J[nnz_filter], "efc_J", i, "frictionloss_dof")
+                _assert_eq(d.efc_D[mj_nnz], dx.efc_D[nnz_filter], "efc_D", i, "frictionloss_dof")
+                _assert_eq(d.efc_aref[mj_nnz], dx.efc_aref[nnz_filter], "efc_aref", i, "frictionloss_dof")
+                _assert_eq(
+                    d.efc_frictionloss[mj_nnz],
+                    dx.efc_frictionloss[nnz_filter],
+                    "efc_frictionloss",
+                    i,
+                    "frictionloss_dof",
+                )
+
+    def test_frictionloss_instantiate(self):
+        """Test that _instantiate_friction creates the right rows."""
+        m = mujoco.MjModel.from_xml_string(self._FRICTIONLOSS_DOF_ONLY_XML)
+        d = mujoco.MjData(m)
+        mx = mujoco_torch.device_put(m)
+        dx = mujoco_torch.device_put(d)
+        efc = constraint._instantiate_friction(mx, dx)
+
+        self.assertIsNotNone(efc)
+        self.assertEqual(efc.J.shape[0], 1)
+        np.testing.assert_array_almost_equal(efc.frictionloss.numpy(), [2.0])
+        np.testing.assert_array_almost_equal(efc.pos.numpy(), [0.0])
+
+    def test_disable_frictionloss(self):
+        """Test that FRICTIONLOSS disable flag suppresses friction rows."""
+        m = mujoco.MjModel.from_xml_string(self._FRICTIONLOSS_DOF_ONLY_XML)
+        d = mujoco.MjData(m)
+
+        m.opt.disableflags = m.opt.disableflags | DisableBit.FRICTIONLOSS
+        mx = mujoco_torch.device_put(m)
+        dx = mujoco_torch.device_put(d)
+        efc = constraint._instantiate_friction(mx, dx)
+        self.assertIsNone(efc)
+
     _CONDIM1_XML = """
     <mujoco>
       <option solver="CG" timestep="0.005"/>
