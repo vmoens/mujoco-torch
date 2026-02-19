@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mujoco-torch"
+version = "0.1.0"
+description = "MuJoCo MJX ported to PyTorch"
+license = "Apache-2.0"
+authors = [{ name = "vmoens" }]
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "mujoco>=3.0",
+    "numpy",
+    "tensordict>=0.11",
+    "absl-py",
+    "etils",
+    "scipy",
+    "trimesh",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/vmoens/mujoco-torch"
+
+[tool.setuptools.packages.find]
+include = ["mujoco_torch*"]
+
+[tool.setuptools.package-data]
+mujoco_torch = ["test_data/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "W",   # pycodestyle warnings
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+]
