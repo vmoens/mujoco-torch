@@ -19,8 +19,8 @@ from mujoco_torch._src import derivative
 from mujoco_torch._src import forward
 from mujoco_torch._src import sensor
 from mujoco_torch._src import smooth
-from mujoco_torch._src import solver
 from mujoco_torch._src import support
+from mujoco_torch._src.constraint import constraint_sizes
 from mujoco_torch._src.types import Data
 from mujoco_torch._src.types import DisableBit
 from mujoco_torch._src.types import EnableBit
@@ -71,13 +71,18 @@ def inv_constraint(m: Model, d: Data) -> Data:
   if d.efc_J.numel() == 0:
     return d.replace(qfrc_constraint=torch.zeros(m.nv, dtype=d.qpos.dtype, device=d.qpos.device))
 
-  # update
-  ctx = solver._Context.create(m, d, grad=False)
+  ne, nf, _, _, _ = constraint_sizes(m)
+  ne_nf = ne + nf
 
-  return d.replace(
-      qfrc_constraint=ctx.qfrc_constraint,
-      efc_force=ctx.efc_force,
-  )
+  jaref = d.efc_J @ d.qacc - d.efc_aref
+  active = jaref < 0
+  eq_fric_mask = torch.arange(active.shape[0], device=active.device) < ne_nf
+  active = active | eq_fric_mask
+
+  efc_force = d.efc_D * -jaref * active
+  qfrc_constraint = d.efc_J.T @ efc_force
+
+  return d.replace(qfrc_constraint=qfrc_constraint, efc_force=efc_force)
 
 
 def inverse(m: Model, d: Data) -> Data:
