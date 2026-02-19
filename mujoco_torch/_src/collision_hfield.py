@@ -37,9 +37,7 @@ from mujoco_torch._src.collision_types import (
 )
 
 
-def _sphere_prism(
-    sphere: GeomInfo, prism: ConvexInfo
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Sphere vs prism collision. Returns (dist, pos, n)."""
     faces = prism.face
     normals = prism.face_normal
@@ -64,12 +62,8 @@ def _sphere_prism(
     pt = _project_pt_onto_plane(sphere_pos, face[0], normal)
     edge_p0 = torch.roll(face, 1, dims=0)
     edge_p1 = face
-    edge_normals = torch.vmap(torch.linalg.cross, (0, None))(
-        edge_p1 - edge_p0, normal
-    )
-    edge_dist = torch.vmap(
-        lambda pp, pn: torch.dot(pt - pp, pn)
-    )(edge_p0, edge_normals)
+    edge_normals = torch.vmap(torch.linalg.cross, (0, None))(edge_p1 - edge_p0, normal)
+    edge_dist = torch.vmap(lambda pp, pn: torch.dot(pt - pp, pn))(edge_p0, edge_normals)
     inside = torch.all(edge_dist <= 0)
 
     degenerate = torch.all(edge_normals == 0, dim=1)
@@ -80,9 +74,7 @@ def _sphere_prism(
         edge_dist,
     )
     idx = edge_dist.argmin()
-    edge_pt = math.closest_segment_point(
-        _vmap_select(edge_p0, idx), _vmap_select(edge_p1, idx), pt
-    )
+    edge_pt = math.closest_segment_point(_vmap_select(edge_p0, idx), _vmap_select(edge_p1, idx), pt)
     pt = torch.where(inside, pt, edge_pt)
 
     n, d = math.normalize_with_norm(pt - sphere_pos)
@@ -95,9 +87,7 @@ def _sphere_prism(
     return dist, pos, n
 
 
-def _capsule_prism(
-    cap: GeomInfo, prism: ConvexInfo
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _capsule_prism(cap: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Capsule vs prism. Returns (dist(2,), pos(2,3), n(2,3))."""
     faces = prism.face
     normals = prism.face_normal
@@ -130,18 +120,10 @@ def _capsule_prism(
 
     edge_p0 = torch.roll(face, 1, dims=0)
     edge_p1 = face
-    edge_normals = torch.vmap(torch.linalg.cross, (0, None))(
-        edge_p1 - edge_p0, normal
-    )
-    cap_pts_clipped, mask = _clip_edge_to_planes(
-        cap_pts[0], cap_pts[1], edge_p0, edge_normals
-    )
-    cap_pts_clipped = (
-        cap_pts_clipped - normal * cap.geom_size[0]
-    )
-    face_pts = torch.vmap(
-        _project_pt_onto_plane, (0, None, None)
-    )(cap_pts_clipped, face[0], normal)
+    edge_normals = torch.vmap(torch.linalg.cross, (0, None))(edge_p1 - edge_p0, normal)
+    cap_pts_clipped, mask = _clip_edge_to_planes(cap_pts[0], cap_pts[1], edge_p0, edge_normals)
+    cap_pts_clipped = cap_pts_clipped - normal * cap.geom_size[0]
+    face_pts = torch.vmap(_project_pt_onto_plane, (0, None, None))(cap_pts_clipped, face[0], normal)
     pos = (cap_pts_clipped + face_pts) * 0.5
     norm = normal.unsqueeze(0).expand(2, -1)
     penetration = torch.where(
@@ -154,17 +136,15 @@ def _capsule_prism(
         ),
     )
 
-    edge_closest, cap_closest = torch.vmap(
-        math.closest_segment_to_segment_points, (0, 0, None, None)
-    )(edge_p0, edge_p1, cap_pts[0], cap_pts[1])
+    edge_closest, cap_closest = torch.vmap(math.closest_segment_to_segment_points, (0, 0, None, None))(
+        edge_p0, edge_p1, cap_pts[0], cap_pts[1]
+    )
     e_idx = ((edge_closest - cap_closest) ** 2).sum(dim=1).argmin()
     cap_closest_pt = _vmap_select(cap_closest, e_idx)
     edge_closest_pt = _vmap_select(edge_closest, e_idx)
     edge_axis = cap_closest_pt - edge_closest_pt
     edge_axis, edge_dist = math.normalize_with_norm(edge_axis)
-    edge_pos = (
-        edge_closest_pt + (cap_closest_pt - edge_axis * cap.geom_size[0])
-    ) * 0.5
+    edge_pos = (edge_closest_pt + (cap_closest_pt - edge_axis * cap.geom_size[0])) * 0.5
     edge_penetration = cap.geom_size[0] - edge_dist
     has_edge_contact = edge_penetration > 0
 
@@ -184,9 +164,7 @@ def _capsule_prism(
     return dist, pos, n
 
 
-def _convex_prism(
-    obj: GeomInfo, prism: ConvexInfo
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _convex_prism(obj: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Convex vs prism. Returns (dist(4,), pos(4,3), n(4,3))."""
     obj_faces = obj.vert[obj.face]
     prism_faces = prism.face
@@ -225,10 +203,14 @@ def _convex_prism(
     local_edges2 = local_verts2[edge2]
 
     dist, pos, normal = _sat_hull_hull(
-        local_faces1, faces2 if swapped else prism_faces,
-        local_verts1, local_verts2,
-        local_normals1, local_normals2,
-        local_edges1, local_edges2,
+        local_faces1,
+        faces2 if swapped else prism_faces,
+        local_verts1,
+        local_verts2,
+        local_normals1,
+        local_normals2,
+        local_edges1,
+        local_edges2,
     )
 
     pos = pos2 + pos @ mat2.T
@@ -352,9 +334,7 @@ def _hfield_collision(
 def _select_manifold(dist, pos, n):
     """Selects 4 manifold contact points."""
     n_mean = torch.mean(n, dim=0)
-    mask = dist < torch.minimum(
-        torch.zeros_like(dist), dist.min() + torch.tensor(1e-3, dtype=dist.dtype)
-    )
+    mask = dist < torch.minimum(torch.zeros_like(dist), dist.min() + torch.tensor(1e-3, dtype=dist.dtype))
     idx = _manifold_points(pos, mask, n_mean)
     dist = _vmap_take_1d(dist, idx)
     pos = _vmap_take(pos, idx)
@@ -365,14 +345,10 @@ def _select_manifold(dist, pos, n):
     return dist, pos, n
 
 
-def hfield_sphere(
-    h: HFieldInfo, s: GeomInfo, subgrid_size: tuple[int, int]
-) -> Collision:
+def hfield_sphere(h: HFieldInfo, s: GeomInfo, subgrid_size: tuple[int, int]) -> Collision:
     """Calculates contacts between a hfield and a sphere."""
     rbound = float(torch.max(s.geom_size))
-    dist, pos, n = _hfield_collision(
-        _sphere_prism, h, s, rbound, subgrid_size
-    )
+    dist, pos, n = _hfield_collision(_sphere_prism, h, s, rbound, subgrid_size)
     dist, pos, n = _select_manifold(dist, pos, n)
 
     pos = torch.vmap(lambda p: h.mat @ p + h.pos)(pos)
@@ -381,14 +357,10 @@ def hfield_sphere(
     return dist, pos, frame
 
 
-def hfield_capsule(
-    h: HFieldInfo, c: GeomInfo, subgrid_size: tuple[int, int]
-) -> Collision:
+def hfield_capsule(h: HFieldInfo, c: GeomInfo, subgrid_size: tuple[int, int]) -> Collision:
     """Calculates contacts between a hfield and a capsule."""
     rbound = float(c.geom_size[0] + c.geom_size[1])
-    dist, pos, n = _hfield_collision(
-        _capsule_prism, h, c, rbound, subgrid_size
-    )
+    dist, pos, n = _hfield_collision(_capsule_prism, h, c, rbound, subgrid_size)
     dist, pos, n = _select_manifold(dist, pos, n)
 
     pos = torch.vmap(lambda p: h.mat @ p + h.pos)(pos)
@@ -397,14 +369,10 @@ def hfield_capsule(
     return dist, pos, frame
 
 
-def hfield_convex(
-    h: HFieldInfo, c: GeomInfo, subgrid_size: tuple[int, int]
-) -> Collision:
+def hfield_convex(h: HFieldInfo, c: GeomInfo, subgrid_size: tuple[int, int]) -> Collision:
     """Calculates contacts between a hfield and a convex object (box/mesh)."""
     rbound = float(torch.max(c.geom_size))
-    dist, pos, n = _hfield_collision(
-        _convex_prism, h, c, rbound, subgrid_size
-    )
+    dist, pos, n = _hfield_collision(_convex_prism, h, c, rbound, subgrid_size)
     dist, pos, n = _select_manifold(dist, pos, n)
 
     pos = torch.vmap(lambda p: h.mat @ p + h.pos)(pos)

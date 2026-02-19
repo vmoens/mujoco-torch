@@ -575,9 +575,7 @@ class HFieldCollisionTest(parameterized.TestCase):
         idx = torch.where(valid)[0][:n_mj]
         c = dx.contact[idx]
         c = c.replace(
-            contact_dim=c.contact_dim[
-                np.arange(n_mj)
-            ],
+            contact_dim=c.contact_dim[np.arange(n_mj)],
         )
         np.testing.assert_allclose(
             c.dist.numpy(),

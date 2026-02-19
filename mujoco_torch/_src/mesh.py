@@ -351,9 +351,7 @@ def hfield(m: mujoco.MjModel | Model, data_id: int) -> HFieldInfo:
     raw = m.hfield_data[adr : adr + nrow * ncol]
     if isinstance(raw, torch.Tensor):
         raw = raw.numpy()
-    data = np.array(raw).reshape(
-        (ncol, nrow), order="F"
-    )
+    data = np.array(raw).reshape((ncol, nrow), order="F")
     h = HFieldInfo(
         torch.zeros(3, dtype=torch.float64),
         torch.eye(3, dtype=torch.float64),
@@ -428,10 +426,7 @@ def get(m: mujoco.MjModel) -> dict[str, Sequence[np.ndarray | None]]:
             key = (hash(vert.data.tobytes()), hash(face.data.tobytes()))
             meshid = -1  # box has no mesh
         elif typ == GeomType.HFIELD:
-            kwargs = {
-                k: kwargs[k] + [None]
-                for k in _DERIVED_ARGS
-            }
+            kwargs = {k: kwargs[k] + [None] for k in _DERIVED_ARGS}
             continue
         elif dataid >= 0:
             vert, face = verts[dataid], faces[dataid]
