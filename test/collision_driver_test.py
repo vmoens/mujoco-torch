@@ -513,5 +513,91 @@ class TopKContactTest(absltest.TestCase):
         self.assertEqual(dx_top_k.ncon, 2)
 
 
+def _collide_hfield(mjcf, hfield_data_value=0.5):
+    """Like _collide but sets hfield data before device_put."""
+    m = mujoco.MjModel.from_xml_string(mjcf)
+    m.hfield_data[:] = hfield_data_value
+    mx = mujoco_torch.device_put(m)
+    d = mujoco.MjData(m)
+    dx = mujoco_torch.device_put(d)
+    mujoco.mj_step(m, d)
+    dx = mujoco_torch.kinematics(mx, dx)
+    dx = mujoco_torch.collision(mx, dx)
+    return d, dx
+
+
+class HFieldCollisionTest(parameterized.TestCase):
+    """Tests hfield collision functions."""
+
+    _HFIELD_SPHERE = """
+    <mujoco>
+      <asset>
+        <hfield name="terrain" nrow="4" ncol="4"
+                size="1 1 0.5 0.1"/>
+      </asset>
+      <worldbody>
+        <geom type="hfield" hfield="terrain"/>
+        <body pos="0 0 0.35">
+          <joint type="free"/>
+          <geom type="sphere" size="0.15"/>
+        </body>
+      </worldbody>
+    </mujoco>
+    """
+
+    _HFIELD_CAPSULE = """
+    <mujoco>
+      <asset>
+        <hfield name="terrain" nrow="10" ncol="10"
+                size="1 1 0.5 0.1"/>
+      </asset>
+      <worldbody>
+        <geom type="hfield" hfield="terrain"/>
+        <body pos="0 0 0.33">
+          <joint type="free"/>
+          <geom fromto="-0.1 0 0 0.1 0 0"
+                size="0.08" type="capsule"/>
+        </body>
+      </worldbody>
+    </mujoco>
+    """
+
+    @parameterized.parameters(
+        ("hfield_sphere", _HFIELD_SPHERE),
+        ("hfield_capsule", _HFIELD_CAPSULE),
+    )
+    def test_hfield(self, name, mjcf):
+        d, dx = _collide_hfield(mjcf)
+        n_mj = d.contact.pos.shape[0]
+        valid = dx.contact.dist < 0
+        n_valid = valid.sum().item()
+        self.assertGreaterEqual(n_valid, n_mj)
+        idx = torch.where(valid)[0][:n_mj]
+        c = dx.contact[idx]
+        c = c.replace(
+            contact_dim=c.contact_dim[
+                np.arange(n_mj)
+            ],
+        )
+        np.testing.assert_allclose(
+            c.dist.numpy(),
+            d.contact.dist[:n_mj],
+            atol=1e-2,
+            err_msg=f"dist mismatch in {name}",
+        )
+        np.testing.assert_allclose(
+            c.pos.numpy(),
+            d.contact.pos[:n_mj],
+            atol=1e-2,
+            err_msg=f"pos mismatch in {name}",
+        )
+        np.testing.assert_allclose(
+            c.frame.numpy().reshape(-1, 9),
+            d.contact.frame[:n_mj],
+            atol=5e-2,
+            err_msg=f"frame mismatch in {name}",
+        )
+
+
 if __name__ == "__main__":
     absltest.main()
