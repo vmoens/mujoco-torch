@@ -180,6 +180,105 @@ class ConstraintTest(parameterized.TestCase):
         efc = constraint._instantiate_contact(mx, dx)
         self.assertIsNone(efc)
 
+    _CONDIM1_XML = """
+    <mujoco>
+      <option solver="CG" timestep="0.005"/>
+      <worldbody>
+        <geom type="plane" size="5 5 0.1" condim="1"/>
+        <body pos="0 0 1">
+          <freejoint/>
+          <geom type="sphere" size="0.1" mass="1" condim="1"/>
+        </body>
+      </worldbody>
+    </mujoco>
+    """
+
+    _MIXED_CONDIM_XML = """
+    <mujoco>
+      <option solver="CG" timestep="0.005"/>
+      <worldbody>
+        <geom type="plane" size="5 5 0.1" condim="1"/>
+        <body name="ball_fl" pos="-0.5 0 1">
+          <freejoint/>
+          <geom type="sphere" size="0.1" mass="1" condim="1"/>
+        </body>
+        <body name="ball_fr" pos="0.5 0 1">
+          <freejoint/>
+          <geom type="sphere" size="0.1" mass="1" condim="3"/>
+        </body>
+      </worldbody>
+    </mujoco>
+    """
+
+    def test_condim1_device_put(self):
+        """Verify that device_put accepts a model with condim=1."""
+        m = mujoco.MjModel.from_xml_string(self._CONDIM1_XML)
+        mx = mujoco_torch.device_put(m)
+        self.assertIsNotNone(mx)
+
+    def test_condim1_frictionless_step(self):
+        """Step a condim=1 model and compare qpos/qvel against MuJoCo C."""
+        m = mujoco.MjModel.from_xml_string(self._CONDIM1_XML)
+        d = mujoco.MjData(m)
+        mx = mujoco_torch.device_put(m)
+
+        d.qvel[:3] = [0.1, 0.0, -0.5]
+        for i in range(200):
+            dx = mujoco_torch.device_put(d)
+            mujoco.mj_step(m, d)
+            dx = mujoco_torch.step(mx, dx)
+
+            _assert_eq(d.qpos, dx.qpos, "qpos", i, "condim1")
+            _assert_eq(d.qvel, dx.qvel, "qvel", i, "condim1")
+
+    def test_condim1_normal_only(self):
+        """Verify condim=1 constraints produce only normal-force rows."""
+        m = mujoco.MjModel.from_xml_string(self._CONDIM1_XML)
+        d = mujoco.MjData(m)
+        d.qpos[2] = 0.05  # push sphere close to plane
+        mujoco.mj_forward(m, d)
+
+        mx = mujoco_torch.device_put(m)
+        dx = mujoco_torch.device_put(d)
+        efc = constraint._instantiate_contact_frictionless(mx, dx)
+
+        if efc is not None:
+            # condim=1 produces exactly 1 row per contact
+            ncon = dx.contact.dist.shape[0]
+            self.assertEqual(efc.J.shape[0], ncon)
+
+    def test_mixed_condim_step(self):
+        """Step a model with both condim=1 and condim=3, compare against C."""
+        m = mujoco.MjModel.from_xml_string(self._MIXED_CONDIM_XML)
+        d = mujoco.MjData(m)
+        mx = mujoco_torch.device_put(m)
+
+        d.qvel[2] = -0.5
+        d.qvel[8] = -0.5
+        for i in range(200):
+            dx = mujoco_torch.device_put(d)
+            mujoco.mj_step(m, d)
+            dx = mujoco_torch.step(mx, dx)
+
+            _assert_eq(d.qpos, dx.qpos, "qpos", i, "mixed_condim")
+            _assert_eq(d.qvel, dx.qvel, "qvel", i, "mixed_condim")
+
+    def test_mixed_condim_constraint_sizes(self):
+        """Verify constraint sizes account for variable rows per condim."""
+        m = mujoco.MjModel.from_xml_string(self._MIXED_CONDIM_XML)
+        mx = mujoco_torch.device_put(m)
+        ne, nf, nl, ncon_, nefc = constraint.constraint_sizes(mx)
+
+        from mujoco_torch._src import collision_driver
+
+        dims = collision_driver.make_condim(mx)
+        ncon_fl = int((dims == 1).sum())
+        ncon_fr = int((dims == 3).sum())
+
+        self.assertEqual(ncon_, ncon_fl + ncon_fr)
+        expected_nc = ncon_fl * 1 + ncon_fr * 4
+        self.assertEqual(nefc, ne + nf + nl + expected_nc)
+
 
 if __name__ == "__main__":
     absltest.main()

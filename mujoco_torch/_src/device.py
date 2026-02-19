@@ -191,8 +191,8 @@ def _validate(m: mujoco.MjModel):
             raise NotImplementedError(f"{unsupported} not implemented.")
 
     # check condim
-    if any(dim != 3 for dim in m.geom_condim) or any(dim != 3 for dim in m.pair_dim):
-        raise NotImplementedError("Only condim=3 is supported.")
+    if any(dim not in (1, 3) for dim in m.geom_condim) or any(dim not in (1, 3) for dim in m.pair_dim):
+        raise NotImplementedError("Only condim=1 and condim=3 are supported.")
 
     # check collision geom types
     candidate_set = collision_driver.collision_candidates(m)

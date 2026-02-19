@@ -149,10 +149,14 @@ class ValidateInputTest(absltest.TestCase):
 
     def test_condim(self):
         m = test_util.load_test_file("ant.xml")
-        for i in [1, 4, 6]:
+        for i in [4, 6]:
             m.geom_condim[0] = i
             with self.assertRaises(NotImplementedError):
                 mujoco_torch.device_put(m)
+        # condim=1 and condim=3 are accepted
+        for i in [1, 3]:
+            m.geom_condim[0] = i
+            mujoco_torch.device_put(m)
 
     def test_geoms(self):
         m = mujoco.MjModel.from_xml_string("""

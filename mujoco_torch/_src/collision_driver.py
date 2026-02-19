@@ -292,10 +292,11 @@ def _collide_geoms(
         typ = (c.ipair > -1, c.geomp > -1)
         typ_cands.setdefault(typ, []).append(c)
 
-    geom1, geom2, params = [], [], []
+    geom1, geom2, dims, params = [], [], [], []
     for (pair, priority), candidates in typ_cands.items():
         geom1.extend([c.geom1 for c in candidates])
         geom2.extend([c.geom2 for c in candidates])
+        dims.extend([c.dim for c in candidates])
         if pair:
             params.append(_pair_params(m, candidates))
         elif priority:
@@ -319,11 +320,12 @@ def _collide_geoms(
 
     params = torch.utils._pytree.tree_map(_concat, *params) if len(params) > 1 else params[0]
     geom1, geom2 = torch.tensor(geom1), torch.tensor(geom2)
+    contact_dim = torch.tensor(dims, dtype=torch.int32)
     # repeat params by the number of contacts per geom pair
     n_repeat = ncon_per_pair
-    geom1, geom2, params = torch.utils._pytree.tree_map(
+    geom1, geom2, contact_dim, params = torch.utils._pytree.tree_map(
         lambda x: x.repeat_interleave(n_repeat, dim=0),
-        (geom1, geom2, params),
+        (geom1, geom2, contact_dim, params),
     )
 
     con = Contact(
@@ -335,7 +337,7 @@ def _collide_geoms(
         solref=params.solref,
         solreffriction=params.solreffriction,
         solimp=params.solimp,
-        contact_dim=torch.zeros(dist.shape[0], dtype=torch.int32),
+        contact_dim=contact_dim,
         geom1=geom1,
         geom2=geom2,
         geom=torch.stack([geom1, geom2], dim=-1),
@@ -389,22 +391,38 @@ def collision_candidates(m: Model | mujoco.MjModel) -> CandidateSet:
     return candidate_set
 
 
-def ncon(m: Model) -> int:
-    """Returns the number of contacts computed in MJX given a model."""
+def make_condim(m: Model | mujoco.MjModel) -> np.ndarray:
+    """Returns per-contact condim array, sorted ascending (1s before 3s).
+
+    This is computed purely from Model (no Data needed) and mirrors MJX's
+    ``make_condim`` in ``mujoco/mjx/_src/collision_driver.py``.
+    """
     if m.opt.disableflags & DisableBit.CONTACT:
-        return 0
+        return np.empty(0, dtype=int)
 
     candidates = collision_candidates(m)
     max_count = _max_contact_points(m)
 
-    count = 0
+    dims: list = []
     for k, v in candidates.items():
         fn = get_collision_fn(k[0:2])
         if fn is None:
             continue
-        count += len(v) * fn.ncon  # pytype: disable=attribute-error
+        ncon_per_pair = fn.ncon  # pytype: disable=attribute-error
+        for c in v:
+            dims.extend([c.dim] * ncon_per_pair)
 
-    return min(max_count, count) if max_count > -1 else count
+    dims.sort()
+
+    if max_count > -1 and len(dims) > max_count:
+        dims = dims[:max_count]
+
+    return np.array(dims, dtype=int) if dims else np.empty(0, dtype=int)
+
+
+def ncon(m: Model) -> int:
+    """Returns the number of contacts computed in MJX given a model."""
+    return make_condim(m).size
 
 
 def _get_collision_cache(m: Model) -> tuple:
@@ -462,14 +480,21 @@ def collision(m: Model, d: Data) -> Data:
     if ncon_ != contact.dist.shape[0]:
         raise RuntimeError("Number of contacts does not match ncon.")
 
-    # Compute constraint sizes purely from Model (not Data) so this works
-    # inside torch.vmap where Data fields may be batched NonTensorStack.
+    # Sort contacts by condim (1s before 3s) for consistent constraint ordering.
+    sort_idx = torch.argsort(contact.contact_dim)
+    contact = contact[sort_idx]
+
+    # Compute efc_address with variable strides per condim:
+    # condim=1 produces 1 constraint row, condim=3 produces 4 (pyramidal).
     from mujoco_torch._src.constraint import constraint_sizes
 
     ne, nf, nl, _, _ = constraint_sizes(m)
     ns = ne + nf + nl
-    contact = contact.replace(efc_address=torch.arange(ns, ns + ncon_ * 4, 4))
-    # TODO(robotics-simulation): add support for other friction dimensions
-    contact = contact.replace(contact_dim=torch.full((ncon_,), 3, dtype=torch.int32))
+    dims_np = make_condim(m)
+    rows_per_contact = np.where(dims_np == 1, 1, (dims_np - 1) * 2)
+    offsets = np.cumsum(np.concatenate(([0], rows_per_contact[:-1])))
+    contact = contact.replace(
+        efc_address=torch.tensor(ns + offsets, dtype=torch.int64),
+    )
 
     return d.replace(contact=contact, ncon=torch.tensor(ncon_, dtype=torch.int32))

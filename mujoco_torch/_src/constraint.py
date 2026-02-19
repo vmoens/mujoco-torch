@@ -242,6 +242,50 @@ def _instantiate_friction(m: Model, d: Data) -> _Efc | None:
     return None
 
 
+def _instantiate_equality_joint(m: Model, d: Data) -> _Efc | None:
+    """Calculates constraint rows for joint equality constraints."""
+
+    ids = np.nonzero(m.eq_type == EqType.JOINT)[0]
+
+    if (m.opt.disableflags & DisableBit.EQUALITY) or ids.size == 0:
+        return None
+
+    id1, id2, data = m.eq_obj1id[ids], m.eq_obj2id[ids], m.eq_data[ids]
+    active = d.eq_active[ids]
+    dofadr1, dofadr2 = m.jnt_dofadr[id1], m.jnt_dofadr[id2]
+    qposadr1, qposadr2 = m.jnt_qposadr[id1], m.jnt_qposadr[id2]
+    id2_t = torch.tensor(id2, dtype=torch.long) if isinstance(id2, np.ndarray) else id2
+    dofadr1_t = torch.tensor(dofadr1, dtype=torch.long) if isinstance(dofadr1, np.ndarray) else dofadr1
+    dofadr2_t = torch.tensor(dofadr2, dtype=torch.long) if isinstance(dofadr2, np.ndarray) else dofadr2
+    qposadr1_t = torch.tensor(qposadr1, dtype=torch.long) if isinstance(qposadr1, np.ndarray) else qposadr1
+    qposadr2_t = torch.tensor(qposadr2, dtype=torch.long) if isinstance(qposadr2, np.ndarray) else qposadr2
+
+    @torch.vmap
+    def fn(data, id2, dofadr1, dofadr2, qposadr1, qposadr2, active):
+        pos1 = d.qpos.gather(0, qposadr1.unsqueeze(0)).squeeze(0)
+        pos2 = d.qpos.gather(0, qposadr2.unsqueeze(0)).squeeze(0)
+        ref1 = m.qpos0.gather(0, qposadr1.unsqueeze(0)).squeeze(0)
+        ref2 = m.qpos0.gather(0, qposadr2.unsqueeze(0)).squeeze(0)
+        pos2, ref2 = pos2 * (id2 > -1), ref2 * (id2 > -1)
+
+        dif = pos2 - ref2
+        dif_power = torch.pow(dif, torch.arange(0, 5, dtype=data.dtype, device=data.device))
+
+        deriv = torch.dot(data[1:5], dif_power[:4] * torch.arange(1, 5, dtype=data.dtype, device=data.device))
+        j = torch.zeros(m.nv, dtype=data.dtype, device=data.device)
+        j = j.scatter(0, dofadr1.unsqueeze(0), torch.ones(1, dtype=data.dtype, device=data.device))
+        j = j.scatter(0, dofadr2.unsqueeze(0), (-deriv).unsqueeze(0))
+        pos = pos1 - ref1 - torch.dot(data[:5], dif_power)
+        return j * active, pos * active
+
+    j, pos = fn(data, id2_t, dofadr1_t, dofadr2_t, qposadr1_t, qposadr2_t, active)
+    invweight = m.dof_invweight0[dofadr1] + m.dof_invweight0[dofadr2] * (id2 > -1)
+    solref, solimp = m.eq_solref[ids], m.eq_solimp[ids]
+    frictionloss = torch.zeros_like(pos)
+
+    return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
+
+
 def _instantiate_limit_ball(m: Model, d: Data) -> _Efc | None:
     """Calculates constraint rows for ball joint limits."""
 
@@ -332,12 +376,60 @@ def _instantiate_limit_tendon(m: Model, d: Data) -> _Efc | None:
     return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
 
 
-def _instantiate_contact(m: Model, d: Data) -> _Efc | None:
-    """Calculates constraint rows for contacts."""
+def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc | None:
+    """Calculates constraint rows for frictionless (condim=1) contacts.
 
-    _, _, _, ncon_m, _ = constraint_sizes(m)
+    Each condim=1 contact produces a single normal-force constraint row.
+    """
+    from mujoco_torch._src import collision_driver  # avoid circular at module level
+
+    dims = collision_driver.make_condim(m)
+    ncon_fl = int((dims == 1).sum())
     actual_ncon = d.contact.dist.shape[0]
-    if (m.opt.disableflags & DisableBit.CONTACT) or ncon_m == 0 or actual_ncon == 0:
+    if (m.opt.disableflags & DisableBit.CONTACT) or ncon_fl == 0 or actual_ncon == 0:
+        return None
+
+    @torch.vmap
+    def fn(c: Contact):
+        dist = c.dist - c.includemargin
+        geom_bodyid = torch.tensor(m.geom_bodyid, device=c.dist.device)
+        g1 = c.geom1.long().unsqueeze(0)
+        g2 = c.geom2.long().unsqueeze(0)
+        body1 = geom_bodyid.gather(0, g1).squeeze(0)
+        body2 = geom_bodyid.gather(0, g2).squeeze(0)
+        diff = support.jac_dif_pair(m, d, c.pos, body1, body2)
+        invweight0 = m.body_invweight0[:, 0]
+        t = invweight0.gather(0, body1.unsqueeze(0)).squeeze(0) + invweight0.gather(0, body2.unsqueeze(0)).squeeze(0)
+
+        # rotate Jacobian differences to contact frame, take normal row only
+        j = (c.frame @ diff.T)[0]
+
+        active = dist < 0
+        return j * active, dist * active, t
+
+    # Select only condim=1 contacts (they come first due to sorting in collision())
+    contact = d.contact
+    if contact.batch_size != torch.Size([actual_ncon]):
+        contact = contact.clone(recurse=False)
+        contact.auto_batch_size_()
+    contact = contact[:ncon_fl]
+    j, pos, invweight = fn(contact)
+    solref = contact.solref
+    solimp = contact.solimp
+    frictionloss = torch.zeros_like(pos)
+
+    return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
+
+
+def _instantiate_contact(m: Model, d: Data) -> _Efc | None:
+    """Calculates constraint rows for frictional (condim=3) pyramidal contacts."""
+    from mujoco_torch._src import collision_driver  # avoid circular at module level
+
+    dims = collision_driver.make_condim(m)
+    ncon_fl = int((dims == 1).sum())
+    ncon_fr = int((dims == 3).sum())
+    actual_ncon = d.contact.dist.shape[0]
+    if (m.opt.disableflags & DisableBit.CONTACT) or ncon_fr == 0 or actual_ncon == 0:
         return None
 
     @torch.vmap
@@ -355,7 +447,6 @@ def _instantiate_contact(m: Model, d: Data) -> _Efc | None:
         # rotate Jacobian differences to contact frame
         diff_con = c.frame @ diff.T
 
-        # TODO(robotics-simulation): add support for other friction dimensions
         # 4 pyramidal friction directions
         js, invweights = [], []
         for diff_tan, friction in zip(diff_con[1:], c.friction[:2]):
@@ -370,11 +461,12 @@ def _instantiate_contact(m: Model, d: Data) -> _Efc | None:
 
         return j, invweight, pos, solref, solimp
 
+    # Select only condim=3 contacts (they come after condim=1 due to sorting)
     contact = d.contact
-    # Ensure batch_size matches the leading tensor dimension for vmap.
-    if contact.batch_size != torch.Size([ncon_m]):
+    if contact.batch_size != torch.Size([actual_ncon]):
         contact = contact.clone(recurse=False)
         contact.auto_batch_size_()
+    contact = contact[ncon_fl : ncon_fl + ncon_fr]
     res = fn(contact)
     # remove contact grouping dimension: flatten (ncon, 4, ...) to (ncon*4, ...)
     j, invweight, pos, solref, solimp = torch.utils._pytree.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), res)
@@ -413,10 +505,13 @@ def constraint_sizes(m: Model) -> tuple[int, int, int, int, int]:
 
     if m.opt.disableflags & DisableBit.CONTACT:
         ncon_ = 0
+        nc = 0
     else:
-        ncon_ = collision_driver.ncon(m)
+        dims = collision_driver.make_condim(m)
+        ncon_ = dims.size
+        # condim=1 -> 1 row (frictionless), condim=3 -> 4 rows (pyramidal)
+        nc = int((dims == 1).sum()) + int((dims == 3).sum()) * 4
 
-    nc = ncon_ * 4
     nefc = ne + nf + nl + nc
     return ne, nf, nl, ncon_, nefc
 
@@ -428,19 +523,28 @@ def count_constraints(m: Model, d: Data) -> tuple[int, int, int, int]:
        require a ``Data`` instance and is compatible with ``torch.vmap``.
     """
     ne, nf, nl, ncon_, nefc = constraint_sizes(m)
-    return ne, nf, nl, ncon_ * 4
+    nc = nefc - ne - nf - nl
+    return ne, nf, nl, nc
 
 
 @torch.compiler.disable
 def make_constraint(m: Model, d: Data) -> Data:
     """Creates constraint jacobians and other supporting data."""
+    from mujoco_torch._src import collision_driver  # avoid circular at module level
 
     ne, nf, nl, ncon, nefc = constraint_sizes(m)
     ns = ne + nf + nl
-    # Use actual data contact count for efc_address; device_put on a fresh
-    # MjData may produce 0 contacts while the model expects more.
+    # Use actual data contact count for efc_address with per-condim strides;
+    # device_put on a fresh MjData may produce 0 contacts while the model
+    # expects more.
     actual_ncon = d.contact.dist.shape[0]
-    efc_address = torch.arange(ns, ns + actual_ncon * 4, 4)
+    dims = collision_driver.make_condim(m)
+    dims_actual = dims[:actual_ncon] if actual_ncon < len(dims) else dims
+    rows_per = np.where(dims_actual == 1, 1, (dims_actual - 1) * 2) if len(dims_actual) > 0 else np.empty(0, dtype=int)
+    offsets = np.cumsum(np.concatenate(([0], rows_per[:-1]))) if len(rows_per) > 0 else np.empty(0, dtype=int)
+    efc_address = (
+        torch.tensor(ns + offsets, dtype=torch.int64) if len(offsets) > 0 else torch.empty(0, dtype=torch.int64)
+    )
     d = d.tree_replace({"contact.efc_address": efc_address})
 
     if m.opt.disableflags & DisableBit.CONSTRAINT:
@@ -456,6 +560,7 @@ def make_constraint(m: Model, d: Data) -> Data:
                 _instantiate_limit_ball(m, d),
                 _instantiate_limit_slide_hinge(m, d),
                 _instantiate_limit_tendon(m, d),
+                _instantiate_contact_frictionless(m, d),
                 _instantiate_contact(m, d),
             )
             if efc is not None
