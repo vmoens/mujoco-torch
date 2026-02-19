@@ -15,83 +15,83 @@
 """Collide geometries."""
 
 import dataclasses
-from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
+from collections.abc import Callable, Sequence
 
 import mujoco
+
 # pylint: enable=g-importing-member
 import numpy as np
+
 # from torch import numpy as torch
 import torch
+
 from mujoco_torch._src import collision_types
-from mujoco_torch._src import support
-from mujoco_torch._src.dataclasses import MjTensorClass
+from mujoco_torch._src.collision_convex import capsule_convex, convex_convex, plane_convex, sphere_convex
+from mujoco_torch._src.collision_primitive import (
+    capsule_capsule,
+    plane_capsule,
+    plane_sphere,
+    sphere_capsule,
+    sphere_sphere,
+)
+
 # pylint: disable=g-importing-member
-from mujoco_torch._src.collision_types import FunctionKey
 from mujoco_torch._src.collision_types import GeomInfo
-from mujoco_torch._src.collision_convex import capsule_convex
-from mujoco_torch._src.collision_convex import convex_convex
-from mujoco_torch._src.collision_convex import plane_convex
-from mujoco_torch._src.collision_convex import sphere_convex
-from mujoco_torch._src.collision_primitive import capsule_capsule
-from mujoco_torch._src.collision_primitive import plane_capsule
-from mujoco_torch._src.collision_primitive import plane_sphere
-from mujoco_torch._src.collision_primitive import sphere_capsule
-from mujoco_torch._src.collision_primitive import sphere_sphere
-from mujoco_torch._src.types import Contact
-from mujoco_torch._src.types import Data
-from mujoco_torch._src.types import DisableBit
-from mujoco_torch._src.types import GeomType
-from mujoco_torch._src.types import Model
+from mujoco_torch._src.dataclasses import MjTensorClass
+from mujoco_torch._src.types import Contact, Data, DisableBit, GeomType, Model
 
 
 @dataclasses.dataclass(frozen=True)
 class Candidate:
-  """A geom pair candidate for collision testing."""
-  geom1: int
-  geom2: int
-  ipair: int
-  geomp: int
-  dim: int
+    """A geom pair candidate for collision testing."""
+
+    geom1: int
+    geom2: int
+    ipair: int
+    geomp: int
+    dim: int
 
 
 class SolverParams(MjTensorClass):
-  """Solver parameters for a collision contact."""
-  friction: torch.Tensor
-  solref: torch.Tensor
-  solreffriction: torch.Tensor
-  solimp: torch.Tensor
-  margin: torch.Tensor
-  gap: torch.Tensor
+    """Solver parameters for a collision contact."""
+
+    friction: torch.Tensor
+    solref: torch.Tensor
+    solreffriction: torch.Tensor
+    solimp: torch.Tensor
+    margin: torch.Tensor
+    gap: torch.Tensor
 
 
-CandidateSet = Dict[Tuple, List[Candidate]]
+CandidateSet = dict[tuple, list[Candidate]]
 
 # Module-level cache for collision candidates and ncon.
 # Keyed by unique model identity (same approach as scan.py).
-_collision_cache: Dict[int, Tuple['CandidateSet', int]] = {}
-_collision_model_ids: Dict[int, Tuple[int, object]] = {}
+_collision_cache: dict[int, tuple["CandidateSet", int]] = {}
+_collision_model_ids: dict[int, tuple[int, object]] = {}
 _collision_model_id_counter = 0
 
 
 def _collision_model_id(m) -> int:
-  """Return a unique cache ID for this model instance."""
-  global _collision_model_id_counter
-  mid = id(m)
-  stored = _collision_model_ids.get(mid)
-  if stored is not None:
-    cache_id, ref = stored
-    if ref is m:
-      return cache_id
-  _collision_model_id_counter += 1
-  cache_id = _collision_model_id_counter
-  _collision_model_ids[mid] = (cache_id, m)
-  return cache_id
+    """Return a unique cache ID for this model instance."""
+    global _collision_model_id_counter
+    mid = id(m)
+    stored = _collision_model_ids.get(mid)
+    if stored is not None:
+        cache_id, ref = stored
+        if ref is m:
+            return cache_id
+    _collision_model_id_counter += 1
+    cache_id = _collision_model_id_counter
+    _collision_model_ids[mid] = (cache_id, m)
+    return cache_id
 
 
 def clear_collision_cache():
-  """Clear precomputed collision caches (useful for testing)."""
-  _collision_cache.clear()
-  _collision_model_ids.clear()
+    """Clear precomputed collision caches (useful for testing)."""
+    _collision_cache.clear()
+    _collision_model_ids.clear()
+
 
 # pair-wise collision functions
 _COLLISION_FUNC = {
@@ -113,396 +113,388 @@ _COLLISION_FUNC = {
 
 
 def get_collision_fn(
-    key: Tuple[Union[GeomType, mujoco.mjtGeom], Union[GeomType, mujoco.mjtGeom]]
-) -> Optional[Callable[[GeomInfo, GeomInfo], collision_types.Collision]]:
-  """Returns a collision function given a pair of geom types."""
-  return _COLLISION_FUNC.get(key, None)
+    key: tuple[GeomType | mujoco.mjtGeom, GeomType | mujoco.mjtGeom],
+) -> Callable[[GeomInfo, GeomInfo], collision_types.Collision] | None:
+    """Returns a collision function given a pair of geom types."""
+    return _COLLISION_FUNC.get(key, None)
 
 
 def _add_candidate(
     result: CandidateSet,
-    m: Union[Model, mujoco.MjModel],
+    m: Model | mujoco.MjModel,
     g1: int,
     g2: int,
     ipair: int = -1,
 ):
-  """Adds a candidate to test for collision."""
-  t1, t2 = m.geom_type[g1], m.geom_type[g2]
-  if t1 > t2:
-    t1, t2, g1, g2 = t2, t1, g2, g1
+    """Adds a candidate to test for collision."""
+    t1, t2 = m.geom_type[g1], m.geom_type[g2]
+    if t1 > t2:
+        t1, t2, g1, g2 = t2, t1, g2, g1
 
-  def mesh_key(i):
-    convex_data = [[None] * m.ngeom] * 3
-    if isinstance(m, Model):
-      convex_data = [m.geom_convex_face, m.geom_convex_vert, m.geom_convex_edge]
-    key = tuple((-1,) if v[i] is None else v[i].shape for v in convex_data)
-    return key
+    def mesh_key(i):
+        convex_data = [[None] * m.ngeom] * 3
+        if isinstance(m, Model):
+            convex_data = [m.geom_convex_face, m.geom_convex_vert, m.geom_convex_edge]
+        key = tuple((-1,) if v[i] is None else v[i].shape for v in convex_data)
+        return key
 
-  k1, k2 = mesh_key(g1), mesh_key(g2)
+    k1, k2 = mesh_key(g1), mesh_key(g2)
 
-  candidates = {(c.geom1, c.geom2) for c in result.get((t1, t2, k1, k2), [])}
-  if (g1, g2) in candidates:
-    return
+    candidates = {(c.geom1, c.geom2) for c in result.get((t1, t2, k1, k2), [])}
+    if (g1, g2) in candidates:
+        return
 
-  if ipair > -1:
-    candidate = Candidate(g1, g2, ipair, -1, m.pair_dim[ipair])
-  elif m.geom_priority[g1] != m.geom_priority[g2]:
-    gp = g1 if m.geom_priority[g1] > m.geom_priority[g2] else g2
-    candidate = Candidate(g1, g2, -1, gp, m.geom_condim[gp])
-  else:
-    dim = max(m.geom_condim[g1], m.geom_condim[g2])
-    candidate = Candidate(g1, g2, -1, -1, dim)
+    if ipair > -1:
+        candidate = Candidate(g1, g2, ipair, -1, m.pair_dim[ipair])
+    elif m.geom_priority[g1] != m.geom_priority[g2]:
+        gp = g1 if m.geom_priority[g1] > m.geom_priority[g2] else g2
+        candidate = Candidate(g1, g2, -1, gp, m.geom_condim[gp])
+    else:
+        dim = max(m.geom_condim[g1], m.geom_condim[g2])
+        candidate = Candidate(g1, g2, -1, -1, dim)
 
-  result.setdefault((t1, t2, k1, k2), []).append(candidate)
+    result.setdefault((t1, t2, k1, k2), []).append(candidate)
 
 
 def _pair_params(
     m: Model,
     candidates: Sequence[Candidate],
 ) -> SolverParams:
-  """Gets solver params for pair geoms."""
-  ipair = torch.tensor([c.ipair for c in candidates])
-  friction = torch.clamp_min(m.pair_friction[ipair], mujoco.mjMINMU)
-  solref = m.pair_solref[ipair]
-  solreffriction = m.pair_solreffriction[ipair]
-  solimp = m.pair_solimp[ipair]
-  margin = m.pair_margin[ipair]
-  gap = m.pair_gap[ipair]
+    """Gets solver params for pair geoms."""
+    ipair = torch.tensor([c.ipair for c in candidates])
+    friction = torch.clamp_min(m.pair_friction[ipair], mujoco.mjMINMU)
+    solref = m.pair_solref[ipair]
+    solreffriction = m.pair_solreffriction[ipair]
+    solimp = m.pair_solimp[ipair]
+    margin = m.pair_margin[ipair]
+    gap = m.pair_gap[ipair]
 
-  return SolverParams(friction, solref, solreffriction, solimp, margin, gap, batch_size=[])
+    return SolverParams(friction, solref, solreffriction, solimp, margin, gap, batch_size=[])
 
 
 def _priority_params(
     m: Model,
     candidates: Sequence[Candidate],
 ) -> SolverParams:
-  """Gets solver params from priority geoms."""
-  geomp = torch.tensor([c.geomp for c in candidates])
-  friction = m.geom_friction[geomp][:, torch.tensor([0, 0, 1, 2, 2])]
-  solref = m.geom_solref[geomp]
-  solreffriction = torch.zeros(geomp.shape + (mujoco.mjNREF,), dtype=solref.dtype)
-  solimp = m.geom_solimp[geomp]
-  g = torch.tensor([(c.geom1, c.geom2) for c in candidates])
-  margin = torch.amax(m.geom_margin[g.T], axis=0)
-  gap = torch.amax(m.geom_gap[g.T], axis=0)
+    """Gets solver params from priority geoms."""
+    geomp = torch.tensor([c.geomp for c in candidates])
+    friction = m.geom_friction[geomp][:, torch.tensor([0, 0, 1, 2, 2])]
+    solref = m.geom_solref[geomp]
+    solreffriction = torch.zeros(geomp.shape + (mujoco.mjNREF,), dtype=solref.dtype)
+    solimp = m.geom_solimp[geomp]
+    g = torch.tensor([(c.geom1, c.geom2) for c in candidates])
+    margin = torch.amax(m.geom_margin[g.T], axis=0)
+    gap = torch.amax(m.geom_gap[g.T], axis=0)
 
-  return SolverParams(friction, solref, solreffriction, solimp, margin, gap, batch_size=[])
+    return SolverParams(friction, solref, solreffriction, solimp, margin, gap, batch_size=[])
 
 
 def _dynamic_params(
     m: Model,
     candidates: Sequence[Candidate],
 ) -> SolverParams:
-  """Gets solver params for dynamic geoms."""
-  g1 = torch.tensor([c.geom1 for c in candidates])
-  g2 = torch.tensor([c.geom2 for c in candidates])
+    """Gets solver params for dynamic geoms."""
+    g1 = torch.tensor([c.geom1 for c in candidates])
+    g2 = torch.tensor([c.geom2 for c in candidates])
 
-  friction = torch.maximum(m.geom_friction[g1], m.geom_friction[g2])
-  # copy friction terms for the full geom pair
-  friction = friction[:, torch.tensor([0, 0, 1, 2, 2])]
+    friction = torch.maximum(m.geom_friction[g1], m.geom_friction[g2])
+    # copy friction terms for the full geom pair
+    friction = friction[:, torch.tensor([0, 0, 1, 2, 2])]
 
-  minval = torch.tensor(mujoco.mjMINVAL)
-  solmix1, solmix2 = m.geom_solmix[g1], m.geom_solmix[g2]
-  mix = solmix1 / (solmix1 + solmix2)
-  mix = torch.where((solmix1 < minval) & (solmix2 < minval), 0.5, mix)
-  mix = torch.where((solmix1 < minval) & (solmix2 >= minval), 0.0, mix)
-  mix_fn = torch.vmap(lambda a, b, m: m * a + (1 - m) * b)
+    minval = torch.tensor(mujoco.mjMINVAL)
+    solmix1, solmix2 = m.geom_solmix[g1], m.geom_solmix[g2]
+    mix = solmix1 / (solmix1 + solmix2)
+    mix = torch.where((solmix1 < minval) & (solmix2 < minval), 0.5, mix)
+    mix = torch.where((solmix1 < minval) & (solmix2 >= minval), 0.0, mix)
+    mix_fn = torch.vmap(lambda a, b, m: m * a + (1 - m) * b)
 
-  solref1, solref2 = m.geom_solref[g1], m.geom_solref[g2]
-  solref = torch.minimum(solref1, solref2)
-  s_mix = mix_fn(solref1, solref2, mix)
-  solref = torch.where((solref1[0] > 0) & (solref2[0] > 0), s_mix, solref)
-  solreffriction = torch.zeros(g1.shape + (mujoco.mjNREF,), dtype=solref.dtype)
-  solimp = mix_fn(m.geom_solimp[g1], m.geom_solimp[g2], mix)
-  margin = torch.maximum(m.geom_margin[g1], m.geom_margin[g2])
-  gap = torch.maximum(m.geom_gap[g1], m.geom_gap[g2])
+    solref1, solref2 = m.geom_solref[g1], m.geom_solref[g2]
+    solref = torch.minimum(solref1, solref2)
+    s_mix = mix_fn(solref1, solref2, mix)
+    solref = torch.where((solref1[0] > 0) & (solref2[0] > 0), s_mix, solref)
+    solreffriction = torch.zeros(g1.shape + (mujoco.mjNREF,), dtype=solref.dtype)
+    solimp = mix_fn(m.geom_solimp[g1], m.geom_solimp[g2], mix)
+    margin = torch.maximum(m.geom_margin[g1], m.geom_margin[g2])
+    gap = torch.maximum(m.geom_gap[g1], m.geom_gap[g2])
 
-  return SolverParams(friction, solref, solreffriction, solimp, margin, gap, batch_size=[])
+    return SolverParams(friction, solref, solreffriction, solimp, margin, gap, batch_size=[])
 
 
-def _pair_info(
-    m: Model, d: Data, geom1: Sequence[int], geom2: Sequence[int]
-) -> Tuple[GeomInfo, GeomInfo, int]:
-  """Returns geom pair info for calculating collision."""
-  g1, g2 = torch.tensor(geom1), torch.tensor(geom2)
-  n1, n2 = g1.shape[0], g2.shape[0]
-  info1 = GeomInfo(
-      d.geom_xpos[g1],
-      d.geom_xmat[g1],
-      geom_size=m.geom_size[g1],
-      batch_size=[n1],
-  )
-  info2 = GeomInfo(
-      d.geom_xpos[g2],
-      d.geom_xmat[g2],
-      geom_size=m.geom_size[g2],
-      batch_size=[n2],
-  )
-  if m.geom_convex_face[geom1[0]] is not None:
-    info1 = info1.replace(
-        face=torch.stack([m.geom_convex_face[i] for i in geom1]),
-        vert=torch.stack([m.geom_convex_vert[i] for i in geom1]),
-        edge=torch.stack([m.geom_convex_edge[i] for i in geom1]),
-        facenorm=torch.stack([m.geom_convex_facenormal[i] for i in geom1]),
+def _pair_info(m: Model, d: Data, geom1: Sequence[int], geom2: Sequence[int]) -> tuple[GeomInfo, GeomInfo, int]:
+    """Returns geom pair info for calculating collision."""
+    g1, g2 = torch.tensor(geom1), torch.tensor(geom2)
+    n1, n2 = g1.shape[0], g2.shape[0]
+    info1 = GeomInfo(
+        d.geom_xpos[g1],
+        d.geom_xmat[g1],
+        geom_size=m.geom_size[g1],
+        batch_size=[n1],
     )
-  if m.geom_convex_face[geom2[0]] is not None:
-    info2 = info2.replace(
-        face=torch.stack([m.geom_convex_face[i] for i in geom2]),
-        vert=torch.stack([m.geom_convex_vert[i] for i in geom2]),
-        edge=torch.stack([m.geom_convex_edge[i] for i in geom2]),
-        facenorm=torch.stack([m.geom_convex_facenormal[i] for i in geom2]),
+    info2 = GeomInfo(
+        d.geom_xpos[g2],
+        d.geom_xmat[g2],
+        geom_size=m.geom_size[g2],
+        batch_size=[n2],
     )
-  # All populated tensor fields have a batch dim at 0 (from indexing/stacking)
-  return info1, info2, 0
+    if m.geom_convex_face[geom1[0]] is not None:
+        info1 = info1.replace(
+            face=torch.stack([m.geom_convex_face[i] for i in geom1]),
+            vert=torch.stack([m.geom_convex_vert[i] for i in geom1]),
+            edge=torch.stack([m.geom_convex_edge[i] for i in geom1]),
+            facenorm=torch.stack([m.geom_convex_facenormal[i] for i in geom1]),
+        )
+    if m.geom_convex_face[geom2[0]] is not None:
+        info2 = info2.replace(
+            face=torch.stack([m.geom_convex_face[i] for i in geom2]),
+            vert=torch.stack([m.geom_convex_vert[i] for i in geom2]),
+            edge=torch.stack([m.geom_convex_edge[i] for i in geom2]),
+            facenorm=torch.stack([m.geom_convex_facenormal[i] for i in geom2]),
+        )
+    # All populated tensor fields have a batch dim at 0 (from indexing/stacking)
+    return info1, info2, 0
 
 
-def _body_pair_filter(
-    m: Union[Model, mujoco.MjModel], b1: int, b2: int
-) -> bool:
-  """Filters body pairs for collision."""
-  dsbl_filterparent = m.opt.disableflags & DisableBit.FILTERPARENT
-  weld1 = m.body_weldid[b1]
-  weld2 = m.body_weldid[b2]
-  parent_weld1 = m.body_weldid[m.body_parentid[weld1]]
-  parent_weld2 = m.body_weldid[m.body_parentid[weld2]]
+def _body_pair_filter(m: Model | mujoco.MjModel, b1: int, b2: int) -> bool:
+    """Filters body pairs for collision."""
+    dsbl_filterparent = m.opt.disableflags & DisableBit.FILTERPARENT
+    weld1 = m.body_weldid[b1]
+    weld2 = m.body_weldid[b2]
+    parent_weld1 = m.body_weldid[m.body_parentid[weld1]]
+    parent_weld2 = m.body_weldid[m.body_parentid[weld2]]
 
-  if weld1 == weld2:
-    # filter out self-collisions
-    return True
+    if weld1 == weld2:
+        # filter out self-collisions
+        return True
 
-  if (
-      not dsbl_filterparent
-      and weld1 != 0
-      and weld2 != 0
-      and (weld1 == parent_weld2 or weld2 == parent_weld1)
-  ):
-    # filter out parent-child collisions
-    return True
+    if not dsbl_filterparent and weld1 != 0 and weld2 != 0 and (weld1 == parent_weld2 or weld2 == parent_weld1):
+        # filter out parent-child collisions
+        return True
 
-  return False
+    return False
 
 
 def _collide_geoms(
     m: Model,
     d: Data,
-    geom_types: Tuple[GeomType, GeomType],
+    geom_types: tuple[GeomType, GeomType],
     candidates: Sequence[Candidate],
-    fn: Optional[Callable] = None,
+    fn: Callable | None = None,
 ) -> Contact:
-  """Collides a geom pair."""
-  if fn is None:
-    fn = get_collision_fn(geom_types)
-  if not fn:
-    return Contact.zero()
+    """Collides a geom pair."""
+    if fn is None:
+        fn = get_collision_fn(geom_types)
+    if not fn:
+        return Contact.zero()
 
-  # group sol params by different candidate types
-  typ_cands = {}
-  for c in candidates:
-    typ = (c.ipair > -1, c.geomp > -1)
-    typ_cands.setdefault(typ, []).append(c)
+    # group sol params by different candidate types
+    typ_cands = {}
+    for c in candidates:
+        typ = (c.ipair > -1, c.geomp > -1)
+        typ_cands.setdefault(typ, []).append(c)
 
-  geom1, geom2, dims, params = [], [], [], []
-  for (pair, priority), candidates in typ_cands.items():
-    geom1.extend([c.geom1 for c in candidates])
-    geom2.extend([c.geom2 for c in candidates])
-    dims.extend([c.dim for c in candidates])
-    if pair:
-      params.append(_pair_params(m, candidates))
-    elif priority:
-      params.append(_priority_params(m, candidates))
-    else:
-      params.append(_dynamic_params(m, candidates))
+    geom1, geom2, dims, params = [], [], [], []
+    for (pair, priority), candidates in typ_cands.items():
+        geom1.extend([c.geom1 for c in candidates])
+        geom2.extend([c.geom2 for c in candidates])
+        dims.extend([c.dim for c in candidates])
+        if pair:
+            params.append(_pair_params(m, candidates))
+        elif priority:
+            params.append(_priority_params(m, candidates))
+        else:
+            params.append(_dynamic_params(m, candidates))
 
-  # call contact function
-  g1, g2, in_axes = _pair_info(m, d, geom1, geom2)
-  res = torch.vmap(fn, in_axes)(g1, g2)
-  dist, pos, frame = res
+    # call contact function
+    g1, g2, in_axes = _pair_info(m, d, geom1, geom2)
+    res = torch.vmap(fn, in_axes)(g1, g2)
+    dist, pos, frame = res
 
-  # Flatten (npairs, ncon_per_pair, ...) → (npairs * ncon_per_pair, ...)
-  ncon_per_pair = dist.shape[1] if dist.ndim > 1 else 1
-  dist = dist.reshape(-1)
-  pos = pos.reshape(-1, 3)
-  frame = frame.reshape(-1, 3, 3)
+    # Flatten (npairs, ncon_per_pair, ...) → (npairs * ncon_per_pair, ...)
+    ncon_per_pair = dist.shape[1] if dist.ndim > 1 else 1
+    dist = dist.reshape(-1)
+    pos = pos.reshape(-1, 3)
+    frame = frame.reshape(-1, 3, 3)
 
-  def _concat(*x):
-    return np.concatenate(x, axis=0) if isinstance(x[0], np.ndarray) else torch.cat(x, dim=0)
+    def _concat(*x):
+        return np.concatenate(x, axis=0) if isinstance(x[0], np.ndarray) else torch.cat(x, dim=0)
 
-  params = torch.utils._pytree.tree_map(_concat, *params) if len(params) > 1 else params[0]
-  geom1, geom2 = torch.tensor(geom1), torch.tensor(geom2)
-  contact_dim = torch.tensor(dims, dtype=torch.int32)
-  # repeat params by the number of contacts per geom pair
-  n_repeat = ncon_per_pair
-  geom1, geom2, contact_dim, params = torch.utils._pytree.tree_map(
-      lambda x: x.repeat_interleave(n_repeat, dim=0),
-      (geom1, geom2, contact_dim, params),
-  )
+    params = torch.utils._pytree.tree_map(_concat, *params) if len(params) > 1 else params[0]
+    geom1, geom2 = torch.tensor(geom1), torch.tensor(geom2)
+    contact_dim = torch.tensor(dims, dtype=torch.int32)
+    # repeat params by the number of contacts per geom pair
+    n_repeat = ncon_per_pair
+    geom1, geom2, contact_dim, params = torch.utils._pytree.tree_map(
+        lambda x: x.repeat_interleave(n_repeat, dim=0),
+        (geom1, geom2, contact_dim, params),
+    )
 
-  con = Contact(
-      dist=dist,
-      pos=pos,
-      frame=frame,
-      includemargin=params.margin - params.gap,
-      friction=params.friction,
-      solref=params.solref,
-      solreffriction=params.solreffriction,
-      solimp=params.solimp,
-      contact_dim=contact_dim,
-      geom1=geom1,
-      geom2=geom2,
-      geom=torch.stack([geom1, geom2], dim=-1),
-      efc_address=torch.full((dist.shape[0],), -1, dtype=torch.int64),
-      batch_size=[dist.shape[0]],
-  )
-  return con
+    con = Contact(
+        dist=dist,
+        pos=pos,
+        frame=frame,
+        includemargin=params.margin - params.gap,
+        friction=params.friction,
+        solref=params.solref,
+        solreffriction=params.solreffriction,
+        solimp=params.solimp,
+        contact_dim=contact_dim,
+        geom1=geom1,
+        geom2=geom2,
+        geom=torch.stack([geom1, geom2], dim=-1),
+        efc_address=torch.full((dist.shape[0],), -1, dtype=torch.int64),
+        batch_size=[dist.shape[0]],
+    )
+    return con
 
 
 def _max_contact_points(m: Model) -> int:
-  """Returns the maximum number of contact points when set as a numeric."""
-  for i in range(m.nnumeric):
-    name = m.names[m.name_numericadr[i] :].decode('utf-8').split('\x00', 1)[0]
-    if name == 'max_contact_points':
-      return int(m.numeric_data[m.numeric_adr[i]])
+    """Returns the maximum number of contact points when set as a numeric."""
+    for i in range(m.nnumeric):
+        name = m.names[m.name_numericadr[i] :].decode("utf-8").split("\x00", 1)[0]
+        if name == "max_contact_points":
+            return int(m.numeric_data[m.numeric_adr[i]])
 
-  return -1
-
-
-def collision_candidates(m: Union[Model, mujoco.MjModel]) -> CandidateSet:
-  """Returns candidates for collision checking."""
-  candidate_set = {}
-
-  for ipair in range(m.npair):
-    g1, g2 = m.pair_geom1[ipair], m.pair_geom2[ipair]
-    _add_candidate(candidate_set, m, g1, g2, ipair)
-
-  body_pairs = []
-  exclude_signature = set(m.exclude_signature)
-  for b1 in range(m.nbody):
-    for b2 in range(b1, m.nbody):
-      signature = (b1 << 16) + (b2)
-      if signature in exclude_signature:
-        continue
-      if _body_pair_filter(m, b1, b2):
-        continue
-      body_pairs.append((b1, b2))
-
-  for b1, b2 in body_pairs:
-    start1 = m.body_geomadr[b1]
-    end1 = m.body_geomadr[b1] + m.body_geomnum[b1]
-    for g1 in range(start1, end1):
-      start2 = m.body_geomadr[b2]
-      end2 = m.body_geomadr[b2] + m.body_geomnum[b2]
-      for g2 in range(start2, end2):
-        mask = m.geom_contype[g1] & m.geom_conaffinity[g2]
-        mask |= m.geom_contype[g2] & m.geom_conaffinity[g1]
-        if mask != 0:
-          _add_candidate(candidate_set, m, g1, g2)
-
-  return candidate_set
+    return -1
 
 
-def make_condim(m: Union[Model, mujoco.MjModel]) -> np.ndarray:
-  """Returns per-contact condim array, sorted ascending (1s before 3s).
+def collision_candidates(m: Model | mujoco.MjModel) -> CandidateSet:
+    """Returns candidates for collision checking."""
+    candidate_set = {}
 
-  This is computed purely from Model (no Data needed) and mirrors MJX's
-  ``make_condim`` in ``mujoco/mjx/_src/collision_driver.py``.
-  """
-  if m.opt.disableflags & DisableBit.CONTACT:
-    return np.empty(0, dtype=int)
+    for ipair in range(m.npair):
+        g1, g2 = m.pair_geom1[ipair], m.pair_geom2[ipair]
+        _add_candidate(candidate_set, m, g1, g2, ipair)
 
-  candidates = collision_candidates(m)
-  max_count = _max_contact_points(m)
+    body_pairs = []
+    exclude_signature = set(m.exclude_signature)
+    for b1 in range(m.nbody):
+        for b2 in range(b1, m.nbody):
+            signature = (b1 << 16) + (b2)
+            if signature in exclude_signature:
+                continue
+            if _body_pair_filter(m, b1, b2):
+                continue
+            body_pairs.append((b1, b2))
 
-  dims: list = []
-  for k, v in candidates.items():
-    fn = get_collision_fn(k[0:2])
-    if fn is None:
-      continue
-    ncon_per_pair = fn.ncon  # pytype: disable=attribute-error
-    for c in v:
-      dims.extend([c.dim] * ncon_per_pair)
+    for b1, b2 in body_pairs:
+        start1 = m.body_geomadr[b1]
+        end1 = m.body_geomadr[b1] + m.body_geomnum[b1]
+        for g1 in range(start1, end1):
+            start2 = m.body_geomadr[b2]
+            end2 = m.body_geomadr[b2] + m.body_geomnum[b2]
+            for g2 in range(start2, end2):
+                mask = m.geom_contype[g1] & m.geom_conaffinity[g2]
+                mask |= m.geom_contype[g2] & m.geom_conaffinity[g1]
+                if mask != 0:
+                    _add_candidate(candidate_set, m, g1, g2)
 
-  dims.sort()
+    return candidate_set
 
-  if max_count > -1 and len(dims) > max_count:
-    dims = dims[:max_count]
 
-  return np.array(dims, dtype=int) if dims else np.empty(0, dtype=int)
+def make_condim(m: Model | mujoco.MjModel) -> np.ndarray:
+    """Returns per-contact condim array, sorted ascending (1s before 3s).
+
+    This is computed purely from Model (no Data needed) and mirrors MJX's
+    ``make_condim`` in ``mujoco/mjx/_src/collision_driver.py``.
+    """
+    if m.opt.disableflags & DisableBit.CONTACT:
+        return np.empty(0, dtype=int)
+
+    candidates = collision_candidates(m)
+    max_count = _max_contact_points(m)
+
+    dims: list = []
+    for k, v in candidates.items():
+        fn = get_collision_fn(k[0:2])
+        if fn is None:
+            continue
+        ncon_per_pair = fn.ncon  # pytype: disable=attribute-error
+        for c in v:
+            dims.extend([c.dim] * ncon_per_pair)
+
+    dims.sort()
+
+    if max_count > -1 and len(dims) > max_count:
+        dims = dims[:max_count]
+
+    return np.array(dims, dtype=int) if dims else np.empty(0, dtype=int)
 
 
 def ncon(m: Model) -> int:
-  """Returns the number of contacts computed in MJX given a model."""
-  return make_condim(m).size
+    """Returns the number of contacts computed in MJX given a model."""
+    return make_condim(m).size
 
 
-def _get_collision_cache(m: Model) -> Tuple:
-  """Get or build cached collision candidates and ncon for a model.
+def _get_collision_cache(m: Model) -> tuple:
+    """Get or build cached collision candidates and ncon for a model.
 
-  Returns a tuple of (collision_groups, ncon, max_contact_points) where
-  collision_groups is a list of (fn, geom_types, candidates) tuples with the
-  collision function already resolved.  This avoids dict lookups with numpy
-  keys at runtime which break under torch.compile.
-  """
-  cache_id = _collision_model_id(m)
-  cached = _collision_cache.get(cache_id)
-  if cached is not None:
-    return cached
+    Returns a tuple of (collision_groups, ncon, max_contact_points) where
+    collision_groups is a list of (fn, geom_types, candidates) tuples with the
+    collision function already resolved.  This avoids dict lookups with numpy
+    keys at runtime which break under torch.compile.
+    """
+    cache_id = _collision_model_id(m)
+    cached = _collision_cache.get(cache_id)
+    if cached is not None:
+        return cached
 
-  candidate_set = collision_candidates(m)
-  ncon_ = ncon(m)
-  max_cp = _max_contact_points(m)
+    candidate_set = collision_candidates(m)
+    ncon_ = ncon(m)
+    max_cp = _max_contact_points(m)
 
-  # Pre-resolve collision functions using proper GeomType enums.
-  collision_groups = []
-  for key, candidates in candidate_set.items():
-    geom_types = (GeomType(int(key[0])), GeomType(int(key[1])))
-    fn = get_collision_fn(geom_types)
-    collision_groups.append((fn, geom_types, candidates))
+    # Pre-resolve collision functions using proper GeomType enums.
+    collision_groups = []
+    for key, candidates in candidate_set.items():
+        geom_types = (GeomType(int(key[0])), GeomType(int(key[1])))
+        fn = get_collision_fn(geom_types)
+        collision_groups.append((fn, geom_types, candidates))
 
-  result = (collision_groups, ncon_, max_cp)
-  _collision_cache[cache_id] = result
-  return result
+    result = (collision_groups, ncon_, max_cp)
+    _collision_cache[cache_id] = result
+    return result
 
 
 @torch.compiler.disable
 def collision(m: Model, d: Data) -> Data:
-  """Collides geometries."""
-  collision_groups, ncon_, max_cp = _get_collision_cache(m)
-  if ncon_ == 0:
-    return d.replace(contact=Contact.zero(), ncon=torch.tensor(0, dtype=torch.int32))
+    """Collides geometries."""
+    collision_groups, ncon_, max_cp = _get_collision_cache(m)
+    if ncon_ == 0:
+        return d.replace(contact=Contact.zero(), ncon=torch.tensor(0, dtype=torch.int32))
 
-  contacts = []
-  for fn, geom_types, candidates in collision_groups:
-    contacts.append(_collide_geoms(m, d, geom_types, candidates, fn=fn))
+    contacts = []
+    for fn, geom_types, candidates in collision_groups:
+        contacts.append(_collide_geoms(m, d, geom_types, candidates, fn=fn))
 
-  if not contacts:
-    raise RuntimeError('No contacts found.')
+    if not contacts:
+        raise RuntimeError("No contacts found.")
 
-  # Concatenate all contacts.  contact_dim and efc_address are empty at
-  # this point and get set below.
-  contact = torch.cat(contacts)
+    # Concatenate all contacts.  contact_dim and efc_address are empty at
+    # this point and get set below.
+    contact = torch.cat(contacts)
 
-  if max_cp > -1 and contact.dist.shape[0] > max_cp:
-    # get top-k contacts
-    _, idx = torch.topk(-contact.dist, k=max_cp)
-    contact = contact[idx]
+    if max_cp > -1 and contact.dist.shape[0] > max_cp:
+        # get top-k contacts
+        _, idx = torch.topk(-contact.dist, k=max_cp)
+        contact = contact[idx]
 
-  if ncon_ != contact.dist.shape[0]:
-    raise RuntimeError('Number of contacts does not match ncon.')
+    if ncon_ != contact.dist.shape[0]:
+        raise RuntimeError("Number of contacts does not match ncon.")
 
-  # Sort contacts by condim (1s before 3s) for consistent constraint ordering.
-  sort_idx = torch.argsort(contact.contact_dim)
-  contact = contact[sort_idx]
+    # Sort contacts by condim (1s before 3s) for consistent constraint ordering.
+    sort_idx = torch.argsort(contact.contact_dim)
+    contact = contact[sort_idx]
 
-  # Compute efc_address with variable strides per condim:
-  # condim=1 produces 1 constraint row, condim=3 produces 4 (pyramidal).
-  from mujoco_torch._src.constraint import constraint_sizes
-  ne, nf, nl, _, _ = constraint_sizes(m)
-  ns = ne + nf + nl
-  dims_np = make_condim(m)
-  rows_per_contact = np.where(dims_np == 1, 1, (dims_np - 1) * 2)
-  offsets = np.cumsum(np.concatenate(([0], rows_per_contact[:-1])))
-  contact = contact.replace(
-      efc_address=torch.tensor(ns + offsets, dtype=torch.int64),
-  )
+    # Compute efc_address with variable strides per condim:
+    # condim=1 produces 1 constraint row, condim=3 produces 4 (pyramidal).
+    from mujoco_torch._src.constraint import constraint_sizes
 
-  return d.replace(contact=contact, ncon=torch.tensor(ncon_, dtype=torch.int32))
+    ne, nf, nl, _, _ = constraint_sizes(m)
+    ns = ne + nf + nl
+    dims_np = make_condim(m)
+    rows_per_contact = np.where(dims_np == 1, 1, (dims_np - 1) * 2)
+    offsets = np.cumsum(np.concatenate(([0], rows_per_contact[:-1])))
+    contact = contact.replace(
+        efc_address=torch.tensor(ns + offsets, dtype=torch.int64),
+    )
+
+    return d.replace(contact=contact, ncon=torch.tensor(ncon_, dtype=torch.int32))

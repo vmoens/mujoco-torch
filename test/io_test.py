@@ -15,28 +15,27 @@
 """Tests for io functions."""
 
 import torch
-from absl.testing import absltest
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
+
 import mujoco_torch
 from mujoco_torch._src import test_util
 
 
 class IoTest(parameterized.TestCase):
+    @parameterized.parameters(test_util.TEST_FILES)
+    def test_make_data(self, fname):
+        """Test that data created by make_data matches data returned by step."""
 
-  @parameterized.parameters(test_util.TEST_FILES)
-  def test_make_data(self, fname):
-    """Test that data created by make_data matches data returned by step."""
+        m = test_util.load_test_file(fname)
+        mx = mujoco_torch.device_put(m)
+        dx = mujoco_torch.make_data(mx)
+        dx_step = mujoco_torch.step(mx, dx)
 
-    m = test_util.load_test_file(fname)
-    mx = mujoco_torch.device_put(m)
-    dx = mujoco_torch.make_data(mx)
-    dx_step = mujoco_torch.step(mx, dx)
+        _, dx_treedef = torch.utils._pytree.tree_flatten(dx)
+        _, dx_step_treedef = torch.utils._pytree.tree_flatten(dx_step)
 
-    _, dx_treedef = torch.utils._pytree.tree_flatten(dx)
-    _, dx_step_treedef = torch.utils._pytree.tree_flatten(dx_step)
-
-    self.assertEqual(dx_treedef, dx_step_treedef)
+        self.assertEqual(dx_treedef, dx_step_treedef)
 
 
-if __name__ == '__main__':
-  absltest.main()
+if __name__ == "__main__":
+    absltest.main()

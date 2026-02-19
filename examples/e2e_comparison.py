@@ -16,9 +16,7 @@ import torch
 # Ant model ships with the repo; you can swap in any MuJoCo XML.
 from etils import epath
 
-MODEL_XML = (
-    epath.resource_path("mujoco_torch") / "test_data" / "ant.xml"
-).read_text()
+MODEL_XML = (epath.resource_path("mujoco_torch") / "test_data" / "ant.xml").read_text()
 
 NSTEPS = 1000
 SEED = 42
@@ -46,7 +44,7 @@ t_mj = time.perf_counter() - t0
 
 qpos_mj = d_mj.qpos.copy()
 qvel_mj = d_mj.qvel.copy()
-print(f"  {NSTEPS} steps in {t_mj*1e3:.1f} ms")
+print(f"  {NSTEPS} steps in {t_mj * 1e3:.1f} ms")
 print(f"  qpos[:5] = {qpos_mj[:5]}")
 print(f"  qvel[:5] = {qvel_mj[:5]}")
 print()
@@ -85,7 +83,7 @@ t_torch_eager = time.perf_counter() - t0
 
 qpos_torch = dx_eager.qpos.detach().cpu().numpy()
 qvel_torch = dx_eager.qvel.detach().cpu().numpy()
-print(f"  eager:    {NSTEPS} steps in {t_torch_eager*1e3:.1f} ms")
+print(f"  eager:    {NSTEPS} steps in {t_torch_eager * 1e3:.1f} ms")
 print(f"  qpos[:5] = {qpos_torch[:5]}")
 print(f"  qvel[:5] = {qvel_torch[:5]}")
 
@@ -110,7 +108,7 @@ t_torch_compiled = time.perf_counter() - t0
 
 qpos_torch_c = dx_comp.qpos.detach().cpu().numpy()
 qvel_torch_c = dx_comp.qvel.detach().cpu().numpy()
-print(f"  compiled: {NSTEPS} steps in {t_torch_compiled*1e3:.1f} ms")
+print(f"  compiled: {NSTEPS} steps in {t_torch_compiled * 1e3:.1f} ms")
 print(f"  qpos[:5] = {qpos_torch_c[:5]}")
 print(f"  qvel[:5] = {qvel_torch_c[:5]}")
 print(f"  compiled vs eager max|Δqpos| = {np.abs(qpos_torch_c - qpos_torch).max():.2e}")
@@ -154,7 +152,7 @@ try:
 
     qpos_jax = np.array(dx_jax.qpos)
     qvel_jax = np.array(dx_jax.qvel)
-    print(f"  {NSTEPS} steps in {t_jax*1e3:.1f} ms")
+    print(f"  {NSTEPS} steps in {t_jax * 1e3:.1f} ms")
     print(f"  qpos[:5] = {qpos_jax[:5]}")
     print(f"  qvel[:5] = {qvel_jax[:5]}")
     has_jax = True
@@ -194,11 +192,11 @@ print()
 print("=" * 72)
 print("  Timing  (wall-clock, single-threaded CPU)")
 print("=" * 72)
-print(f"  {'MuJoCo (C)':30s}  {t_mj*1e3:8.1f} ms  ({NSTEPS/t_mj:,.0f} steps/s)")
-print(f"  {'mujoco-torch eager':30s}  {t_torch_eager*1e3:8.1f} ms  ({NSTEPS/t_torch_eager:,.0f} steps/s)")
-print(f"  {'mujoco-torch compiled':30s}  {t_torch_compiled*1e3:8.1f} ms  ({NSTEPS/t_torch_compiled:,.0f} steps/s)")
+print(f"  {'MuJoCo (C)':30s}  {t_mj * 1e3:8.1f} ms  ({NSTEPS / t_mj:,.0f} steps/s)")
+print(f"  {'mujoco-torch eager':30s}  {t_torch_eager * 1e3:8.1f} ms  ({NSTEPS / t_torch_eager:,.0f} steps/s)")
+print(f"  {'mujoco-torch compiled':30s}  {t_torch_compiled * 1e3:8.1f} ms  ({NSTEPS / t_torch_compiled:,.0f} steps/s)")
 if has_jax:
-    print(f"  {'MJX (JAX jit)':30s}  {t_jax*1e3:8.1f} ms  ({NSTEPS/t_jax:,.0f} steps/s)")
+    print(f"  {'MJX (JAX jit)':30s}  {t_jax * 1e3:8.1f} ms  ({NSTEPS / t_jax:,.0f} steps/s)")
 print()
-speedup = t_torch_eager / t_torch_compiled if t_torch_compiled > 0 else float('inf')
+speedup = t_torch_eager / t_torch_compiled if t_torch_compiled > 0 else float("inf")
 print(f"  torch.compile speedup vs eager: {speedup:.1f}x")

@@ -15,60 +15,55 @@
 """Tests the collision driver."""
 
 import dataclasses
-from typing import Dict, Optional, Tuple
 
 import mujoco
+
 # pylint: enable=g-importing-member
 import numpy as np
 import torch
-from absl.testing import absltest
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 from etils import epath
+
 import mujoco_torch
-from mujoco_torch._src import collision_driver
-from mujoco_torch._src import test_util
+from mujoco_torch._src import collision_driver, test_util
+
 # pylint: disable=g-importing-member
-from mujoco_torch._src.types import Contact
-from mujoco_torch._src.types import Data
-from mujoco_torch._src.types import DisableBit
-from mujoco_torch._src.types import Model
+from mujoco_torch._src.types import Contact, Data, DisableBit, Model
 
 
 def _assert_attr_eq(mjx_d, mj_d, attr, name, atol):
-  if attr == 'efc_address':
-    # we do not test efc_address since it gets set in constraint logic
-    return
-  err_msg = f'mismatch: {attr} in run: {name}'
-  # Mujoco uses 'dim' for contact dimension; we use 'contact_dim'
-  mj_attr = 'dim' if attr == 'contact_dim' else attr
-  mjx_d, mj_d = getattr(mjx_d, attr), getattr(mj_d, mj_attr)
-  if attr == 'frame':
-    mj_d = mj_d.reshape((-1, 3, 3))
-  if mjx_d.shape != mj_d.shape:
-    raise AssertionError(f'{attr} shape mismatch: {mjx_d.shape}, {mj_d.shape}')
-  np.testing.assert_allclose(mjx_d, mj_d, err_msg=err_msg, atol=atol)
+    if attr == "efc_address":
+        # we do not test efc_address since it gets set in constraint logic
+        return
+    err_msg = f"mismatch: {attr} in run: {name}"
+    # Mujoco uses 'dim' for contact dimension; we use 'contact_dim'
+    mj_attr = "dim" if attr == "contact_dim" else attr
+    mjx_d, mj_d = getattr(mjx_d, attr), getattr(mj_d, mj_attr)
+    if attr == "frame":
+        mj_d = mj_d.reshape((-1, 3, 3))
+    if mjx_d.shape != mj_d.shape:
+        raise AssertionError(f"{attr} shape mismatch: {mjx_d.shape}, {mj_d.shape}")
+    np.testing.assert_allclose(mjx_d, mj_d, err_msg=err_msg, atol=atol)
 
 
-def _collide(
-    mjcf: str, assets: Optional[Dict[str, str]] = None
-) -> Tuple[mujoco.MjModel, mujoco.MjData, Model, Data]:
-  m = mujoco.MjModel.from_xml_string(mjcf, assets or {})
-  mx = mujoco_torch.device_put(m)
-  d = mujoco.MjData(m)
-  dx = mujoco_torch.device_put(d)
+def _collide(mjcf: str, assets: dict[str, str] | None = None) -> tuple[mujoco.MjModel, mujoco.MjData, Model, Data]:
+    m = mujoco.MjModel.from_xml_string(mjcf, assets or {})
+    mx = mujoco_torch.device_put(m)
+    d = mujoco.MjData(m)
+    dx = mujoco_torch.device_put(d)
 
-  mujoco.mj_step(m, d)
-  collision_jit_fn = mujoco_torch.collision
-  kinematics_jit_fn = mujoco_torch.kinematics
-  # collision_jit_fn = torch.compile(mujoco_torch.collision)
-  # kinematics_jit_fn = torch.compile(mujoco_torch.kinematics)
-  dx = kinematics_jit_fn(mx, dx)
-  dx = collision_jit_fn(mx, dx)
-  return d, dx
+    mujoco.mj_step(m, d)
+    collision_jit_fn = mujoco_torch.collision
+    kinematics_jit_fn = mujoco_torch.kinematics
+    # collision_jit_fn = torch.compile(mujoco_torch.collision)
+    # kinematics_jit_fn = torch.compile(mujoco_torch.kinematics)
+    dx = kinematics_jit_fn(mx, dx)
+    dx = collision_jit_fn(mx, dx)
+    return d, dx
 
 
 class SphereCollisionTest(parameterized.TestCase):
-  _SPHERE_PLANE = """
+    _SPHERE_PLANE = """
     <mujoco>
       <worldbody>
         <geom size="40 40 40" type="plane"/>
@@ -80,7 +75,7 @@ class SphereCollisionTest(parameterized.TestCase):
     </mujoco>
   """
 
-  _SPHERE_SPHERE = """
+    _SPHERE_SPHERE = """
     <mujoco>
       <worldbody>
         <body>
@@ -95,7 +90,7 @@ class SphereCollisionTest(parameterized.TestCase):
     </mujoco>
   """
 
-  _SPHERE_CAP = """
+    _SPHERE_CAP = """
     <mujoco>
       <worldbody>
         <body>
@@ -110,17 +105,17 @@ class SphereCollisionTest(parameterized.TestCase):
     </mujoco>
   """
 
-  @parameterized.parameters(
-      ('sphere_plane', _SPHERE_PLANE),
-      ('sphere_sphere', _SPHERE_SPHERE),
-      ('sphere_cap', _SPHERE_CAP),
-  )
-  def test_sphere(self, name, mjcf):
-    d, dx = _collide(mjcf)
-    for field in dataclasses.fields(Contact):
-      _assert_attr_eq(dx.contact, d.contact, field.name, name, 1e-5)
+    @parameterized.parameters(
+        ("sphere_plane", _SPHERE_PLANE),
+        ("sphere_sphere", _SPHERE_SPHERE),
+        ("sphere_cap", _SPHERE_CAP),
+    )
+    def test_sphere(self, name, mjcf):
+        d, dx = _collide(mjcf)
+        for field in dataclasses.fields(Contact):
+            _assert_attr_eq(dx.contact, d.contact, field.name, name, 1e-5)
 
-  _SPHERE_CONVEX = """
+    _SPHERE_CONVEX = """
     <mujoco>
       <worldbody>
         <body pos="0.52 0 0.52">
@@ -135,15 +130,15 @@ class SphereCollisionTest(parameterized.TestCase):
     </mujoco>
   """
 
-  def test_sphere_convex(self):
-    d, dx = _collide(self._SPHERE_CONVEX)
+    def test_sphere_convex(self):
+        d, dx = _collide(self._SPHERE_CONVEX)
 
-    for field in dataclasses.fields(Contact):
-      _assert_attr_eq(dx.contact, d.contact, field.name, 'sphere_convex', 1e-4)
+        for field in dataclasses.fields(Contact):
+            _assert_attr_eq(dx.contact, d.contact, field.name, "sphere_convex", 1e-4)
 
 
 class CapsuleCollisionTest(parameterized.TestCase):
-  _CAP_PLANE = """
+    _CAP_PLANE = """
     <mujoco>
       <worldbody>
         <geom size="40 40 40" type="plane"/>
@@ -155,7 +150,7 @@ class CapsuleCollisionTest(parameterized.TestCase):
     </mujoco>
   """
 
-  _CAP_CAP = """
+    _CAP_CAP = """
     <mujoco model="two_capsules">
       <worldbody>
         <body>
@@ -172,16 +167,16 @@ class CapsuleCollisionTest(parameterized.TestCase):
     </mujoco>
   """
 
-  @parameterized.parameters(
-      ('capsule_plane', _CAP_PLANE),
-      ('capsule_capsule', _CAP_CAP),
-  )
-  def test_capsule(self, name, mjcf):
-    d, dx = _collide(mjcf)
-    for field in dataclasses.fields(Contact):
-      _assert_attr_eq(dx.contact, d.contact, field.name, name, 1e-4)
+    @parameterized.parameters(
+        ("capsule_plane", _CAP_PLANE),
+        ("capsule_capsule", _CAP_CAP),
+    )
+    def test_capsule(self, name, mjcf):
+        d, dx = _collide(mjcf)
+        for field in dataclasses.fields(Contact):
+            _assert_attr_eq(dx.contact, d.contact, field.name, name, 1e-4)
 
-  _PARALLEL_CAP = """
+    _PARALLEL_CAP = """
     <mujoco>
       <worldbody>
         <body>
@@ -196,21 +191,19 @@ class CapsuleCollisionTest(parameterized.TestCase):
     </mujoco>
   """
 
-  def test_parallel_capsules(self):
-    """Tests that two parallel capsules are colliding at the midpoint."""
-    _, dx = _collide(self._PARALLEL_CAP)
+    def test_parallel_capsules(self):
+        """Tests that two parallel capsules are colliding at the midpoint."""
+        _, dx = _collide(self._PARALLEL_CAP)
 
-    np.testing.assert_allclose(dx.contact.dist, -0.05)
-    np.testing.assert_allclose(
-        dx.contact.pos[0],
-        np.array([0.0, 0.1, (0.15 + 0.2) / 2.0]),
-        atol=1e-5,
-    )
-    np.testing.assert_allclose(
-        dx.contact.frame[0, 0, :], np.array([0, 0.0, -1.0]), atol=1e-5
-    )
+        np.testing.assert_allclose(dx.contact.dist, -0.05)
+        np.testing.assert_allclose(
+            dx.contact.pos[0],
+            np.array([0.0, 0.1, (0.15 + 0.2) / 2.0]),
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(dx.contact.frame[0, 0, :], np.array([0, 0.0, -1.0]), atol=1e-5)
 
-  _CAP_BOX = """
+    _CAP_BOX = """
     <mujoco>
       <worldbody>
         <body pos="0 0 0.54">
@@ -225,14 +218,14 @@ class CapsuleCollisionTest(parameterized.TestCase):
     </mujoco>
   """
 
-  def test_capsule_convex(self):
-    """Tests a capsule-convex collision for a face contact."""
-    d, dx = _collide(self._CAP_BOX)
+    def test_capsule_convex(self):
+        """Tests a capsule-convex collision for a face contact."""
+        d, dx = _collide(self._CAP_BOX)
 
-    for field in dataclasses.fields(Contact):
-      _assert_attr_eq(dx.contact, d.contact, field.name, 'capsule_convex', 1e-4)
+        for field in dataclasses.fields(Contact):
+            _assert_attr_eq(dx.contact, d.contact, field.name, "capsule_convex", 1e-4)
 
-  _CAP_EDGE_BOX = """
+    _CAP_EDGE_BOX = """
     <mujoco>
       <worldbody>
         <body pos="0.5 0 0.55" euler="0 30 0">
@@ -247,24 +240,24 @@ class CapsuleCollisionTest(parameterized.TestCase):
     </mujoco>
   """
 
-  def test_capsule_convex_edge(self):
-    """Tests a capsule-convex collision for an edge contact."""
-    d, dx = _collide(self._CAP_EDGE_BOX)
+    def test_capsule_convex_edge(self):
+        """Tests a capsule-convex collision for an edge contact."""
+        d, dx = _collide(self._CAP_EDGE_BOX)
 
-    c = dx.contact
-    self.assertEqual(c.pos.shape[0], 2)
-    self.assertGreater(c.dist[1], 0)
-    # extract the contact point with penetration
-    c = torch.utils._pytree.tree_map(lambda x: x[0:1], dx.contact)
-    c = c.replace(contact_dim=c.contact_dim[np.array([0])])
-    for field in dataclasses.fields(Contact):
-      _assert_attr_eq(c, d.contact, field.name, 'capsule_convex_edge', 1e-4)
+        c = dx.contact
+        self.assertEqual(c.pos.shape[0], 2)
+        self.assertGreater(c.dist[1], 0)
+        # extract the contact point with penetration
+        c = torch.utils._pytree.tree_map(lambda x: x[0:1], dx.contact)
+        c = c.replace(contact_dim=c.contact_dim[np.array([0])])
+        for field in dataclasses.fields(Contact):
+            _assert_attr_eq(c, d.contact, field.name, "capsule_convex_edge", 1e-4)
 
 
 class ConvexTest(absltest.TestCase):
-  """Tests the convex contact functions."""
+    """Tests the convex contact functions."""
 
-  _BOX_PLANE = """
+    _BOX_PLANE = """
     <mujoco>
       <worldbody>
         <geom size="40 40 40" type="plane"/>
@@ -276,19 +269,19 @@ class ConvexTest(absltest.TestCase):
     </mujoco>
   """
 
-  def test_box_plane(self):
-    """Tests box collision with a plane."""
-    d, dx = _collide(self._BOX_PLANE)
+    def test_box_plane(self):
+        """Tests box collision with a plane."""
+        d, dx = _collide(self._BOX_PLANE)
 
-    np.testing.assert_array_less(dx.contact.dist[:2], 0)
-    np.testing.assert_array_less(-dx.contact.dist[2:], 0)
-    # extract the contact points with penetration
-    c = torch.utils._pytree.tree_map(lambda x: x[:2], dx.contact)
-    c = c.replace(contact_dim=c.contact_dim[np.array([0, 1])])
-    for field in dataclasses.fields(Contact):
-      _assert_attr_eq(c, d.contact, field.name, 'box_plane', 1e-2)
+        np.testing.assert_array_less(dx.contact.dist[:2], 0)
+        np.testing.assert_array_less(-dx.contact.dist[2:], 0)
+        # extract the contact points with penetration
+        c = torch.utils._pytree.tree_map(lambda x: x[:2], dx.contact)
+        c = c.replace(contact_dim=c.contact_dim[np.array([0, 1])])
+        for field in dataclasses.fields(Contact):
+            _assert_attr_eq(c, d.contact, field.name, "box_plane", 1e-2)
 
-  _BOX_BOX = """
+    _BOX_BOX = """
     <mujoco>
       <worldbody>
         <body pos="0.0 1.0 0.2">
@@ -303,22 +296,18 @@ class ConvexTest(absltest.TestCase):
     </mujoco>
   """
 
-  def test_box_box(self):
-    """Tests a face contact for a box-box collision."""
-    d, dx = _collide(self._BOX_BOX)
-    c = dx.contact
+    def test_box_box(self):
+        """Tests a face contact for a box-box collision."""
+        d, dx = _collide(self._BOX_BOX)
+        c = dx.contact
 
-    self.assertEqual(c.pos.shape[0], 4)
-    np.testing.assert_array_less(c.dist, 0)
-    np.testing.assert_array_almost_equal(c.pos[:, 2], np.array([0.39] * 4), 2)
-    np.testing.assert_array_almost_equal(
-        c.frame[:, 0, :], np.array([[0.0, 0.0, 1.0]] * 4)
-    )
-    np.testing.assert_array_almost_equal(
-        c.frame.reshape((-1, 9)), d.contact.frame[:4, :]
-    )
+        self.assertEqual(c.pos.shape[0], 4)
+        np.testing.assert_array_less(c.dist, 0)
+        np.testing.assert_array_almost_equal(c.pos[:, 2], np.array([0.39] * 4), 2)
+        np.testing.assert_array_almost_equal(c.frame[:, 0, :], np.array([[0.0, 0.0, 1.0]] * 4))
+        np.testing.assert_array_almost_equal(c.frame.reshape((-1, 9)), d.contact.frame[:4, :])
 
-  _BOX_BOX_EDGE = """
+    _BOX_BOX_EDGE = """
     <mujoco>
       <worldbody>
         <body pos="-1.0 -1.0 0.2">
@@ -333,20 +322,20 @@ class ConvexTest(absltest.TestCase):
     </mujoco>
   """
 
-  def test_box_box_edge(self):
-    """Tests an edge contact for a box-box collision."""
-    d, dx = _collide(self._BOX_BOX_EDGE)
+    def test_box_box_edge(self):
+        """Tests an edge contact for a box-box collision."""
+        d, dx = _collide(self._BOX_BOX_EDGE)
 
-    # Only one contact point.
-    np.testing.assert_array_less(dx.contact.dist[:1], 0)
-    np.testing.assert_array_less(-dx.contact.dist[1:], 0)
-    # extract the contact point with penetration
-    c = torch.utils._pytree.tree_map(lambda x: x[0:1], dx.contact)
-    c = c.replace(contact_dim=c.contact_dim[np.array([0])])
-    for field in dataclasses.fields(Contact):
-      _assert_attr_eq(c, d.contact, field.name, 'box_box_edge', 1e-2)
+        # Only one contact point.
+        np.testing.assert_array_less(dx.contact.dist[:1], 0)
+        np.testing.assert_array_less(-dx.contact.dist[1:], 0)
+        # extract the contact point with penetration
+        c = torch.utils._pytree.tree_map(lambda x: x[0:1], dx.contact)
+        c = c.replace(contact_dim=c.contact_dim[np.array([0])])
+        for field in dataclasses.fields(Contact):
+            _assert_attr_eq(c, d.contact, field.name, "box_box_edge", 1e-2)
 
-  _CONVEX_CONVEX = """
+    _CONVEX_CONVEX = """
     <mujoco>
       <asset>
         <mesh name="tetrahedron" file="meshes/tetrahedron.stl" scale="0.1 0.1 0.1" />
@@ -365,30 +354,26 @@ class ConvexTest(absltest.TestCase):
     </mujoco>
   """
 
-  def test_convex_convex(self):
-    """Tests generic convex-convex collision."""
-    directory = epath.resource_path('mujoco_torch')
-    assets = {
-        'meshes/tetrahedron.stl': (
-            directory / 'test_data' / 'meshes/tetrahedron.stl'
-        ).read_bytes(),
-        'meshes/dodecahedron.stl': (
-            directory / 'test_data' / 'meshes/dodecahedron.stl'
-        ).read_bytes(),
-    }
-    _, dx = _collide(self._CONVEX_CONVEX, assets=assets)
-    c = dx.contact
+    def test_convex_convex(self):
+        """Tests generic convex-convex collision."""
+        directory = epath.resource_path("mujoco_torch")
+        assets = {
+            "meshes/tetrahedron.stl": (directory / "test_data" / "meshes/tetrahedron.stl").read_bytes(),
+            "meshes/dodecahedron.stl": (directory / "test_data" / "meshes/dodecahedron.stl").read_bytes(),
+        }
+        _, dx = _collide(self._CONVEX_CONVEX, assets=assets)
+        c = dx.contact
 
-    # Only one contact point for an edge contact.
-    self.assertLess(c.dist[0], 0)
-    np.testing.assert_array_less(0, c.dist[1:])
-    np.testing.assert_array_almost_equal(c.frame[0, 0], np.array([0, 0, 1]))
+        # Only one contact point for an edge contact.
+        self.assertLess(c.dist[0], 0)
+        np.testing.assert_array_less(0, c.dist[1:])
+        np.testing.assert_array_almost_equal(c.frame[0, 0], np.array([0, 0, 1]))
 
 
 class BodyPairFilterTest(absltest.TestCase):
-  """Tests that certain body pairs get filtered."""
+    """Tests that certain body pairs get filtered."""
 
-  _SELF_COLLISION = """
+    _SELF_COLLISION = """
     <mujoco>
       <worldbody>
         <body>
@@ -400,13 +385,13 @@ class BodyPairFilterTest(absltest.TestCase):
     </mujoco>
   """
 
-  def test_filter_self_collision(self):
-    """Tests that self collisions get filtered."""
-    d, dx = _collide(self._SELF_COLLISION)
-    self.assertEqual(dx.contact.pos.shape[0], d.contact.pos.shape[0])
-    self.assertEqual(dx.contact.pos.shape[0], 0)
+    def test_filter_self_collision(self):
+        """Tests that self collisions get filtered."""
+        d, dx = _collide(self._SELF_COLLISION)
+        self.assertEqual(dx.contact.pos.shape[0], d.contact.pos.shape[0])
+        self.assertEqual(dx.contact.pos.shape[0], 0)
 
-  _PARENT_CHILD = """
+    _PARENT_CHILD = """
     <mujoco>
       <worldbody>
         <body>
@@ -421,72 +406,72 @@ class BodyPairFilterTest(absltest.TestCase):
     </mujoco>
   """
 
-  def test_filter_parent_child(self):
-    """Tests that parent-child collisions get filtered."""
-    m = mujoco.MjModel.from_xml_string(self._PARENT_CHILD)
-    mx = mujoco_torch.device_put(m)
-    d = mujoco.MjData(m)
-    dx = mujoco_torch.device_put(d)
+    def test_filter_parent_child(self):
+        """Tests that parent-child collisions get filtered."""
+        m = mujoco.MjModel.from_xml_string(self._PARENT_CHILD)
+        mx = mujoco_torch.device_put(m)
+        d = mujoco.MjData(m)
+        dx = mujoco_torch.device_put(d)
 
-    mujoco.mj_step(m, d)
-    collision_jit_fn = mujoco_torch.collision
-    kinematics_jit_fn = mujoco_torch.kinematics
-    # collision_jit_fn = torch.compile(mujoco_torch.collision)
-    # kinematics_jit_fn = torch.compile(mujoco_torch.kinematics)
-    dx = kinematics_jit_fn(mx, dx)
-    dx = collision_jit_fn(mx, dx)
+        mujoco.mj_step(m, d)
+        collision_jit_fn = mujoco_torch.collision
+        kinematics_jit_fn = mujoco_torch.kinematics
+        # collision_jit_fn = torch.compile(mujoco_torch.collision)
+        # kinematics_jit_fn = torch.compile(mujoco_torch.kinematics)
+        dx = kinematics_jit_fn(mx, dx)
+        dx = collision_jit_fn(mx, dx)
 
-    self.assertEqual(dx.contact.pos.shape[0], d.contact.pos.shape[0])
-    self.assertEqual(dx.contact.pos.shape[0], 0)
+        self.assertEqual(dx.contact.pos.shape[0], d.contact.pos.shape[0])
+        self.assertEqual(dx.contact.pos.shape[0], 0)
 
-  def test_disable_filter_parent_child(self):
-    """Tests that filterparent flag disables parent-child filtering."""
-    m = mujoco.MjModel.from_xml_string(self._PARENT_CHILD)
-    m.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_FILTERPARENT
-    mx = mujoco_torch.device_put(m)
-    d = mujoco.MjData(m)
-    dx = mujoco_torch.device_put(d)
+    def test_disable_filter_parent_child(self):
+        """Tests that filterparent flag disables parent-child filtering."""
+        m = mujoco.MjModel.from_xml_string(self._PARENT_CHILD)
+        m.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_FILTERPARENT
+        mx = mujoco_torch.device_put(m)
+        d = mujoco.MjData(m)
+        dx = mujoco_torch.device_put(d)
 
-    mujoco.mj_step(m, d)
-    collision_jit_fn = mujoco_torch.collision
-    kinematics_jit_fn = mujoco_torch.kinematics
-    # collision_jit_fn = torch.compile(mujoco_torch.collision)
-    # kinematics_jit_fn = torch.compile(mujoco_torch.kinematics)
-    dx = kinematics_jit_fn(mx, dx)
-    dx = collision_jit_fn(mx, dx)
+        mujoco.mj_step(m, d)
+        collision_jit_fn = mujoco_torch.collision
+        kinematics_jit_fn = mujoco_torch.kinematics
+        # collision_jit_fn = torch.compile(mujoco_torch.collision)
+        # kinematics_jit_fn = torch.compile(mujoco_torch.kinematics)
+        dx = kinematics_jit_fn(mx, dx)
+        dx = collision_jit_fn(mx, dx)
 
-    # one collision between parent-child spheres
-    self.assertEqual(dx.contact.pos.shape[0], d.contact.pos.shape[0])
-    self.assertEqual(dx.contact.pos.shape[0], 1)
+        # one collision between parent-child spheres
+        self.assertEqual(dx.contact.pos.shape[0], d.contact.pos.shape[0])
+        self.assertEqual(dx.contact.pos.shape[0], 1)
 
 
 class NconTest(parameterized.TestCase):
-  """Tests ncon."""
+    """Tests ncon."""
 
-  def test_ncon(self):
-    m = test_util.load_test_file('ant.xml')
-    d = mujoco.MjData(m)
-    d.qpos[2] = 0.0
+    def test_ncon(self):
+        m = test_util.load_test_file("ant.xml")
+        d = mujoco.MjData(m)
+        d.qpos[2] = 0.0
 
-    mx = mujoco_torch.device_put(m)
-    ncon = collision_driver.ncon(mx)
-    self.assertEqual(ncon, 60)
+        mx = mujoco_torch.device_put(m)
+        ncon = collision_driver.ncon(mx)
+        self.assertEqual(ncon, 60)
 
-  def test_disable_contact(self):
-    m = test_util.load_test_file('ant.xml')
-    d = mujoco.MjData(m)
-    d.qpos[2] = 0.0
+    def test_disable_contact(self):
+        m = test_util.load_test_file("ant.xml")
+        d = mujoco.MjData(m)
+        d.qpos[2] = 0.0
 
-    m.opt.disableflags = m.opt.disableflags | DisableBit.CONTACT
-    mx = mujoco_torch.device_put(m)
-    ncon = collision_driver.ncon(mx)
-    self.assertEqual(ncon, 0)
+        m.opt.disableflags = m.opt.disableflags | DisableBit.CONTACT
+        mx = mujoco_torch.device_put(m)
+        ncon = collision_driver.ncon(mx)
+        self.assertEqual(ncon, 0)
 
 
 class TopKContactTest(absltest.TestCase):
-  """Tests top-k contacts."""
+    """Tests top-k contacts."""
 
-  _CAPSULES = """
+    _CAPSULES = """
     <mujoco>
       <custom>
         <numeric data="2" name="max_contact_points"/>
@@ -508,27 +493,25 @@ class TopKContactTest(absltest.TestCase):
     </mujoco>
   """
 
-  def test_top_k_contacts(self):
-    m = mujoco.MjModel.from_xml_string(self._CAPSULES)
-    mx_top_k = mujoco_torch.device_put(m)
-    mx_all = mx_top_k.replace(
-        nnumeric=0, name_numericadr=np.array([]), numeric_data=np.array([])
-    )
-    d = mujoco.MjData(m)
-    dx = mujoco_torch.device_put(d)
+    def test_top_k_contacts(self):
+        m = mujoco.MjModel.from_xml_string(self._CAPSULES)
+        mx_top_k = mujoco_torch.device_put(m)
+        mx_all = mx_top_k.replace(nnumeric=0, name_numericadr=np.array([]), numeric_data=np.array([]))
+        d = mujoco.MjData(m)
+        dx = mujoco_torch.device_put(d)
 
-    collision_jit_fn = mujoco_torch.collision
-    kinematics_jit_fn = mujoco_torch.kinematics
-    # collision_jit_fn = torch.compile(mujoco_torch.collision)
-    # kinematics_jit_fn = torch.compile(mujoco_torch.kinematics)
-    dx = kinematics_jit_fn(mx_all, dx)
+        collision_jit_fn = mujoco_torch.collision
+        kinematics_jit_fn = mujoco_torch.kinematics
+        # collision_jit_fn = torch.compile(mujoco_torch.collision)
+        # kinematics_jit_fn = torch.compile(mujoco_torch.kinematics)
+        dx = kinematics_jit_fn(mx_all, dx)
 
-    dx_all = collision_jit_fn(mx_all, dx)
-    dx_top_k = collision_jit_fn(mx_top_k, dx)
+        dx_all = collision_jit_fn(mx_all, dx)
+        dx_top_k = collision_jit_fn(mx_top_k, dx)
 
-    self.assertEqual(dx_all.ncon, 3)
-    self.assertEqual(dx_top_k.ncon, 2)
+        self.assertEqual(dx_all.ncon, 3)
+        self.assertEqual(dx_top_k.ncon, 2)
 
 
-if __name__ == '__main__':
-  absltest.main()
+if __name__ == "__main__":
+    absltest.main()

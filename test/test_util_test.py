@@ -16,23 +16,20 @@
 
 from absl.testing import absltest
 from etils import epath
+
 from mujoco_torch._src import test_util
 
 
 class TestUtilTest(absltest.TestCase):
-
-  def test_files_in_test_data_match(self):
-    directory = epath.resource_path('mujoco_torch') / 'test_data'
-    files = set([f.name for f in directory.glob('*.xml')])
-    self.assertSetEqual(
-        files,
-        set(test_util.TEST_FILES),
-        msg=(
-            '`_test_util.TEST_FILES` must match the files in the '
-            'test_data/*.xml directory'
-        ),
-    )
+    def test_files_in_test_data_match(self):
+        directory = epath.resource_path("mujoco_torch") / "test_data"
+        files = set([f.name for f in directory.glob("*.xml")])
+        self.assertSetEqual(
+            files,
+            set(test_util.TEST_FILES),
+            msg=("`_test_util.TEST_FILES` must match the files in the test_data/*.xml directory"),
+        )
 
 
-if __name__ == '__main__':
-  absltest.main()
+if __name__ == "__main__":
+    absltest.main()
