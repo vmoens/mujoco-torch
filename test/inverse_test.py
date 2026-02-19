@@ -29,7 +29,6 @@ def _assert_attr_eq(a, b, attr, fname, atol=1e-3, rtol=1e-3):
 
 
 class InverseTest(parameterized.TestCase):
-
     @parameterized.parameters(("pendula.xml",))
     def test_inverse_no_contact(self, fname):
         """Test inverse dynamics on a model without contacts."""
@@ -52,7 +51,10 @@ class InverseTest(parameterized.TestCase):
         dx = mujoco_torch.inverse(mx, dx)
 
         np.testing.assert_allclose(
-            dx.qfrc_inverse, qfrc_inverse_ref, atol=1e-8, rtol=1e-8,
+            dx.qfrc_inverse,
+            qfrc_inverse_ref,
+            atol=1e-8,
+            rtol=1e-8,
             err_msg=f"qfrc_inverse mismatch in {fname}",
         )
 
@@ -78,7 +80,10 @@ class InverseTest(parameterized.TestCase):
         dx = mujoco_torch.inverse(mx, dx)
 
         np.testing.assert_allclose(
-            dx.qfrc_inverse, qfrc_inverse_ref, atol=1e-2, rtol=1e-2,
+            dx.qfrc_inverse,
+            qfrc_inverse_ref,
+            atol=1e-2,
+            rtol=1e-2,
             err_msg=f"qfrc_inverse mismatch in {fname}",
         )
 
@@ -104,11 +109,16 @@ class InverseTest(parameterized.TestCase):
         dx = mujoco_torch.inverse(mx, dx)
 
         np.testing.assert_allclose(
-            dx.qfrc_inverse, qfrc_inverse_ref, atol=1e-8, rtol=1e-8,
+            dx.qfrc_inverse,
+            qfrc_inverse_ref,
+            atol=1e-8,
+            rtol=1e-8,
             err_msg="qfrc_inverse mismatch (discrete Euler)",
         )
         np.testing.assert_allclose(
-            dx.qacc, qacc_before, atol=1e-12,
+            dx.qacc,
+            qacc_before,
+            atol=1e-12,
             err_msg="qacc not restored after discrete inverse",
         )
 
@@ -150,11 +160,16 @@ class InverseTest(parameterized.TestCase):
         dx = mujoco_torch.inverse(mx, dx)
 
         np.testing.assert_allclose(
-            dx.qfrc_inverse, qfrc_inverse_ref, atol=1e-8, rtol=1e-8,
+            dx.qfrc_inverse,
+            qfrc_inverse_ref,
+            atol=1e-8,
+            rtol=1e-8,
             err_msg="qfrc_inverse mismatch (discrete ImplicitFast)",
         )
         np.testing.assert_allclose(
-            dx.qacc, qacc_before, atol=1e-12,
+            dx.qacc,
+            qacc_before,
+            atol=1e-12,
             err_msg="qacc not restored after discrete inverse",
         )
 
