@@ -521,13 +521,31 @@ def tendon_armature(m: Model, d: Data) -> Data:
     return d.replace(qM=d.qM + JTAJ)
 
 
+def _moment_row(values: torch.Tensor, dofadr: torch.Tensor, nv: int) -> torch.Tensor:
+    """Build a ``(nv,)`` moment row with ``values`` scattered at ``dofadr``.
+
+    All operations are out-of-place and use tensor indices so the function
+    is compatible with both ``torch.vmap`` and ``torch.compile``.
+    """
+    k = values.shape[-1]
+    idx = torch.arange(k, dtype=torch.long, device=values.device) + dofadr
+    return torch.zeros(nv, dtype=values.dtype, device=values.device).scatter(0, idx, values)
+
+
 def transmission(m: Model, d: Data) -> Data:
-    """Computes actuator/transmission lengths and moments."""
+    """Computes actuator/transmission lengths and moments.
+
+    All per-actuator results are built out-of-place (list + stack) so that
+    the function is compatible with ``torch.vmap``.
+    """
     if not m.nu:
         return d
 
-    length = torch.zeros(m.nu, dtype=d.qpos.dtype, device=d.qpos.device)
-    moment = torch.zeros((m.nu, m.nv), dtype=d.qpos.dtype, device=d.qpos.device)
+    dtype = d.qpos.dtype
+    device = d.qpos.device
+    zero = torch.zeros((), dtype=dtype, device=device)
+    lengths: list[torch.Tensor] = []
+    moments: list[torch.Tensor] = []
 
     for i in range(m.nu):
         trntype = m.actuator_trntype[i]
@@ -535,8 +553,8 @@ def transmission(m: Model, d: Data) -> Data:
         trnid = m.actuator_trnid[i, 0]
 
         if trntype == TrnType.TENDON:
-            length[i] = d.ten_length[trnid] * gear[0]
-            moment[i] = d.ten_J[trnid] * gear[0]
+            lengths.append(d.ten_length[trnid] * gear[0])
+            moments.append(d.ten_J[trnid] * gear[0])
             continue
 
         jnt_typ = JointType(m.jnt_type[trnid])
@@ -548,10 +566,11 @@ def transmission(m: Model, d: Data) -> Data:
             if trntype == TrnType.JOINTINPARENT:
                 quat_neg = math.quat_inv(qpos[3:])
                 gearaxis = math.rotate(gear[3:], quat_neg)
-                moment[i, dofadr : dofadr + 3] = gear[:3]
-                moment[i, dofadr + 3 : dofadr + 6] = gearaxis
+                values = torch.cat([gear[:3], gearaxis])
             else:
-                moment[i, dofadr : dofadr + 6] = gear[:6]
+                values = gear[:6]
+            lengths.append(zero)
+            moments.append(_moment_row(values, dofadr, m.nv))
         elif jnt_typ == JointType.BALL:
             qpos = d.qpos[qposadr : qposadr + 4]
             axis, angle = math.quat_to_axis_angle(qpos)
@@ -559,14 +578,15 @@ def transmission(m: Model, d: Data) -> Data:
             if trntype == TrnType.JOINTINPARENT:
                 quat_neg = math.quat_inv(qpos)
                 gearaxis = math.rotate(gear[:3], quat_neg)
-            length[i] = torch.dot(axis * angle, gearaxis)
-            moment[i, dofadr : dofadr + 3] = gearaxis
+            lengths.append(torch.dot(axis * angle, gearaxis))
+            moments.append(_moment_row(gearaxis, dofadr, m.nv))
         elif jnt_typ in (JointType.SLIDE, JointType.HINGE):
-            qpos_val = d.qpos[qposadr]
-            length[i] = qpos_val * gear[0]
-            moment[i, dofadr] = gear[0]
+            lengths.append(d.qpos[qposadr] * gear[0])
+            moments.append(_moment_row(gear[0].unsqueeze(0), dofadr, m.nv))
         else:
             raise RuntimeError(f"unrecognized joint type: {jnt_typ}")
 
+    length = torch.stack(lengths)
+    moment = torch.stack(moments)
     d = d.replace(actuator_length=length, actuator_moment=moment)
     return d
