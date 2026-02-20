@@ -139,6 +139,51 @@ class ForwardTest(parameterized.TestCase):
         dx = forward._euler(mx, dx)
         np.testing.assert_allclose(dx.qvel, 1 + m.opt.timestep)
 
+    @parameterized.parameters("ant.xml", "humanoid.xml")
+    def test_step_vmap(self, fname):
+        """Test that vmap(step) matches sequential step for each env in a batch.
+
+        Constraints are disabled so the test isolates the forward/integration
+        pipeline (including transmission) without hitting the solver's
+        while_loop, which has its own vmap limitations.
+        """
+        torch.set_default_dtype(torch.float64)
+        batch_size = 4
+        nsteps = 5
+
+        m = test_util.load_test_file(fname)
+        m.opt.disableflags = m.opt.disableflags | DisableBit.CONSTRAINT
+        mx = mujoco_torch.device_put(m)
+
+        rng = np.random.RandomState(42)
+        envs = []
+        for _ in range(batch_size):
+            d = mujoco.MjData(m)
+            d.qvel[:] = 0.01 * rng.randn(m.nv)
+            envs.append(mujoco_torch.device_put(d))
+
+        # sequential reference
+        seq_results = []
+        for dx in envs:
+            for _ in range(nsteps):
+                dx = mujoco_torch.step(mx, dx)
+            seq_results.append(dx)
+
+        # batched via vmap
+        d_batch = torch.stack(envs, dim=0)
+        vmap_step = torch.vmap(lambda d: mujoco_torch.step(mx, d))
+        for _ in range(nsteps):
+            d_batch = vmap_step(d_batch)
+
+        for i in range(batch_size):
+            for attr in ("qpos", "qvel"):
+                np.testing.assert_allclose(
+                    getattr(d_batch[i], attr).detach().numpy(),
+                    getattr(seq_results[i], attr).detach().numpy(),
+                    atol=1e-8,
+                    err_msg=f"vmap vs sequential mismatch: {attr} env={i} in {fname}",
+                )
+
 
 if __name__ == "__main__":
     absltest.main()
