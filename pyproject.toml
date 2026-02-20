@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "pytest-benchmark"]
 
 [project.urls]
 Homepage = "https://github.com/vmoens/mujoco-torch"
@@ -34,6 +34,8 @@ mujoco_torch = ["test_data/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
+python_files = ["test_*.py", "*_test.py", "bench_*.py"]
+markers = ["mjx: benchmarks requiring JAX and mujoco.mjx"]
 
 [tool.ruff]
 line-length = 120
@@ -60,3 +62,4 @@ ignore = [
 "__init__.py" = ["F401"]
 "examples/*" = ["T201"]
 "test/*" = ["T201"]
+"benchmarks/*" = ["T201"]
