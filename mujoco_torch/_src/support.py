@@ -17,8 +17,9 @@
 import mujoco
 import numpy as np
 import torch
+from torch._C._functorch import _add_batch_dim, _remove_batch_dim, is_batchedtensor, maybe_get_level
 
-from mujoco_torch._src import scan
+from mujoco_torch._src import math, scan
 
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import Data, JacobianType, Model
@@ -113,16 +114,12 @@ def local_to_global(
     local_quat: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Converts local position/orientation to world frame."""
-    from mujoco_torch._src import math
-
     pos = world_pos + math.rotate(local_pos, world_quat)
     mat = math.quat_to_mat(math.quat_mul(world_quat, local_quat))
     return pos, mat
 
 
 def vmap_compatible_index_select(tensor, dim, index):
-    from torch._C._functorch import _add_batch_dim, _remove_batch_dim, is_batchedtensor, maybe_get_level
-
     scalar_index = not isinstance(index, torch.Tensor) and isinstance(index, (int, np.integer))
     if not isinstance(index, torch.Tensor):
         index = torch.tensor([index]).long() if scalar_index else torch.as_tensor(index).long()

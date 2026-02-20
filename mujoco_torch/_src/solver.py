@@ -66,6 +66,7 @@ def while_loop(cond_fn, body_fn, carried_inputs, max_iter=None):
 
 
 from mujoco_torch._src import math, support
+from mujoco_torch._src.collision_driver import constraint_sizes
 
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import Data, DisableBit, Model, SolverType
@@ -312,8 +313,6 @@ def solve(m: Model, d: Data) -> Data:
     qacc_smooth = d.qacc_smooth.clone()
     qacc_warmstart = d.qacc_warmstart.clone()
     qfrc_constraint = d.qfrc_constraint.clone()
-    from mujoco_torch._src.constraint import constraint_sizes
-
     ne, nf, nl, ncon_m, nefc = constraint_sizes(m)
     ne_nf = ne + nf
 

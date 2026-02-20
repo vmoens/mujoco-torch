@@ -24,6 +24,7 @@ from typing import Any, overload
 import mujoco
 import numpy as np
 import torch
+from torch.utils._pytree import tree_map
 
 from mujoco_torch._src import collision_driver, mesh, types
 from mujoco_torch._src.dataclasses import MjTensorClass
@@ -301,8 +302,6 @@ def device_get_into(result, value):
 
     # In PyTorch, tensors are already accessible from CPU; no device_get needed.
     # Just ensure all tensors are detached and on CPU.
-    from torch.utils._pytree import tree_map
-
     value = tree_map(
         lambda x: x.detach().cpu() if isinstance(x, torch.Tensor) else x,
         value,

@@ -40,7 +40,7 @@ from mujoco_torch._src.collision_primitive import (
 # pylint: disable=g-importing-member
 from mujoco_torch._src.collision_types import GeomInfo
 from mujoco_torch._src.dataclasses import MjTensorClass
-from mujoco_torch._src.types import Contact, Data, DisableBit, GeomType, Model
+from mujoco_torch._src.types import Contact, Data, DisableBit, EqType, GeomType, Model
 
 
 @dataclasses.dataclass(frozen=True)
@@ -576,6 +576,47 @@ def _get_collision_cache(m: Model) -> tuple:
     return result
 
 
+def constraint_sizes(m: Model) -> tuple[int, int, int, int, int]:
+    """Compute (ne, nf, nl, ncon, nefc) purely from Model (no Data needed).
+
+    All constraint / contact counts are deterministic functions of the model
+    geometry and options.  Computing them from Model rather than Data avoids
+    ``int(tensor)`` / ``.item()`` calls that are incompatible with
+    ``torch.vmap``.
+    """
+    if m.opt.disableflags & DisableBit.CONSTRAINT:
+        return 0, 0, 0, 0, 0
+
+    if m.opt.disableflags & DisableBit.EQUALITY:
+        ne = 0
+    else:
+        ne_connect = int((m.eq_type == EqType.CONNECT).sum())
+        ne_weld = int((m.eq_type == EqType.WELD).sum())
+        ne_joint = int((m.eq_type == EqType.JOINT).sum())
+        ne = ne_connect * 3 + ne_weld * 6 + ne_joint
+
+    if m.opt.disableflags & DisableBit.FRICTIONLOSS:
+        nf = 0
+    else:
+        nf = int(m.dof_hasfrictionloss.sum()) + int(m.tendon_hasfrictionloss.sum())
+
+    if m.opt.disableflags & DisableBit.LIMIT:
+        nl = 0
+    else:
+        nl = int(m.jnt_limited.sum()) + int(m.tendon_limited.sum())
+
+    if m.opt.disableflags & DisableBit.CONTACT:
+        ncon_ = 0
+        nc = 0
+    else:
+        dims = make_condim(m)
+        ncon_ = dims.size
+        nc = int((dims == 1).sum()) + int((dims == 3).sum()) * 4
+
+    nefc = ne + nf + nl + nc
+    return ne, nf, nl, ncon_, nefc
+
+
 @torch.compiler.disable
 def collision(m: Model, d: Data) -> Data:
     """Collides geometries."""
@@ -608,8 +649,6 @@ def collision(m: Model, d: Data) -> Data:
 
     # Compute efc_address with variable strides per condim:
     # condim=1 produces 1 constraint row, condim=3 produces 4 (pyramidal).
-    from mujoco_torch._src.constraint import constraint_sizes
-
     ne, nf, nl, _, _ = constraint_sizes(m)
     ns = ne + nf + nl
     dims_np = make_condim(m)
