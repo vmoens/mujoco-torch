@@ -20,7 +20,7 @@ import mujoco
 import numpy as np
 import torch
 
-from mujoco_torch._src import math, support
+from mujoco_torch._src import collision_driver, math, support
 
 
 def _vmap_index(tensor: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
@@ -364,8 +364,6 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc | None:
 
     Each condim=1 contact produces a single normal-force constraint row.
     """
-    from mujoco_torch._src import collision_driver  # avoid circular at module level
-
     dims = collision_driver.make_condim(m)
     ncon_fl = int((dims == 1).sum())
     actual_ncon = d.contact.dist.shape[0]
@@ -406,8 +404,6 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc | None:
 
 def _instantiate_contact(m: Model, d: Data) -> _Efc | None:
     """Calculates constraint rows for frictional (condim=3) pyramidal contacts."""
-    from mujoco_torch._src import collision_driver  # avoid circular at module level
-
     dims = collision_driver.make_condim(m)
     ncon_fl = int((dims == 1).sum())
     ncon_fr = int((dims == 3).sum())
@@ -458,48 +454,7 @@ def _instantiate_contact(m: Model, d: Data) -> _Efc | None:
     return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
 
 
-def constraint_sizes(m: Model) -> tuple[int, int, int, int, int]:
-    """Compute (ne, nf, nl, ncon, nefc) purely from Model (no Data needed).
-
-    All constraint / contact counts are deterministic functions of the model
-    geometry and options.  Computing them from Model rather than Data avoids
-    ``int(tensor)`` / ``.item()`` calls that are incompatible with
-    ``torch.vmap``.
-    """
-    from mujoco_torch._src import collision_driver  # avoid circular at module level
-
-    if m.opt.disableflags & DisableBit.CONSTRAINT:
-        return 0, 0, 0, 0, 0
-
-    if m.opt.disableflags & DisableBit.EQUALITY:
-        ne = 0
-    else:
-        ne_connect = int((m.eq_type == EqType.CONNECT).sum())
-        ne_weld = int((m.eq_type == EqType.WELD).sum())
-        ne_joint = int((m.eq_type == EqType.JOINT).sum())
-        ne = ne_connect * 3 + ne_weld * 6 + ne_joint
-
-    if m.opt.disableflags & DisableBit.FRICTIONLOSS:
-        nf = 0
-    else:
-        nf = int(m.dof_hasfrictionloss.sum()) + int(m.tendon_hasfrictionloss.sum())
-
-    if m.opt.disableflags & DisableBit.LIMIT:
-        nl = 0
-    else:
-        nl = int(m.jnt_limited.sum()) + int(m.tendon_limited.sum())
-
-    if m.opt.disableflags & DisableBit.CONTACT:
-        ncon_ = 0
-        nc = 0
-    else:
-        dims = collision_driver.make_condim(m)
-        ncon_ = dims.size
-        # condim=1 -> 1 row (frictionless), condim=3 -> 4 rows (pyramidal)
-        nc = int((dims == 1).sum()) + int((dims == 3).sum()) * 4
-
-    nefc = ne + nf + nl + nc
-    return ne, nf, nl, ncon_, nefc
+constraint_sizes = collision_driver.constraint_sizes
 
 
 def count_constraints(m: Model, d: Data) -> tuple[int, int, int, int]:
@@ -508,7 +463,7 @@ def count_constraints(m: Model, d: Data) -> tuple[int, int, int, int]:
     .. deprecated:: Use :func:`constraint_sizes` instead which does not
        require a ``Data`` instance and is compatible with ``torch.vmap``.
     """
-    ne, nf, nl, ncon_, nefc = constraint_sizes(m)
+    ne, nf, nl, ncon_, nefc = collision_driver.constraint_sizes(m)
     nc = nefc - ne - nf - nl
     return ne, nf, nl, nc
 
@@ -516,9 +471,7 @@ def count_constraints(m: Model, d: Data) -> tuple[int, int, int, int]:
 @torch.compiler.disable
 def make_constraint(m: Model, d: Data) -> Data:
     """Creates constraint jacobians and other supporting data."""
-    from mujoco_torch._src import collision_driver  # avoid circular at module level
-
-    ne, nf, nl, ncon, nefc = constraint_sizes(m)
+    ne, nf, nl, ncon, nefc = collision_driver.constraint_sizes(m)
     ns = ne + nf + nl
     # Use actual data contact count for efc_address with per-condim strides;
     # device_put on a fresh MjData may produce 0 contacts while the model
