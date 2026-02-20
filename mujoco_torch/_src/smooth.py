@@ -154,7 +154,7 @@ def com_pos(m: Model, d: Data) -> Data:
         inert = inert[(torch.tensor([0, 1, 2, 0, 0, 1]), torch.tensor([0, 1, 2, 1, 2, 2]))]
         return torch.cat([inert, off * mass, mass.unsqueeze(0)])
 
-    root_com = subtree_com[torch.tensor(m.body_rootid)]
+    root_com = subtree_com[torch.as_tensor(m.body_rootid)]
     offset = d.xipos - root_com
     cinert = inert_com(m.body_inertia, d.ximat, offset, m.body_mass)
     d = d.replace(cinert=cinert)
@@ -214,7 +214,7 @@ def crb(m: Model, d: Data) -> Data:
     crb_body[0] = 0.0
     d = d.replace(crb=crb_body)
 
-    crb_dof = crb_body[torch.tensor(m.dof_bodyid)]
+    crb_dof = crb_body[torch.as_tensor(m.dof_bodyid)]
     crb_cdof = torch.vmap(math.inert_mul)(crb_dof, d.cdof)
     qm = support.make_m(m, crb_cdof, d.cdof, m.dof_armature)
     d = d.replace(qM=qm)
@@ -270,10 +270,11 @@ def factor_m(m: Model, d: Data) -> Data:
         qld = qld.clone()
         qld[out] = qld[out] + qld_update
 
-    qld_diag = qld[torch.tensor(m.dof_Madr)][:]
-    qld = qld / qld[torch.tensor(madr_ds)]
+    dof_Madr = torch.as_tensor(m.dof_Madr)
+    qld_diag = qld[dof_Madr][:]
+    qld = qld / qld[torch.stack(madr_ds)]
     qld = qld.clone()
-    qld[torch.tensor(m.dof_Madr)] = qld_diag
+    qld[dof_Madr] = qld_diag
 
     d = d.replace(qLD=qld, qLDiagInv=1 / qld_diag)
 
@@ -337,7 +338,7 @@ def dense_m(m: Model, d: Data) -> torch.Tensor:
 
     mat = torch.zeros((m.nv, m.nv), dtype=d.qM.dtype, device=d.qM.device)
     mat[(i, j)] = d.qM[madr_ij]
-    mat = torch.diag(d.qM[torch.tensor(m.dof_Madr)]) + mat + mat.T
+    mat = torch.diag(d.qM[torch.as_tensor(m.dof_Madr)]) + mat + mat.T
 
     return mat
 
@@ -348,7 +349,7 @@ def mul_m(m: Model, d: Data, vec: torch.Tensor) -> torch.Tensor:
     if not support.is_sparse(m):
         return d.qM @ vec
 
-    diag_mul = d.qM[torch.tensor(m.dof_Madr)] * vec
+    diag_mul = d.qM[torch.as_tensor(m.dof_Madr)] * vec
 
     is_, js, madr_ijs = [], [], []
     for i in range(m.nv):
@@ -449,7 +450,7 @@ def rne(m: Model, d: Data, flg_acc: bool = False) -> Data:
         return cfrc
 
     cfrc = scan.body_tree(m, cfrc_fn, "b", "b", loc_cfrc, reverse=True)
-    qfrc_bias = torch.vmap(torch.dot)(d.cdof, cfrc[torch.tensor(m.dof_bodyid)])
+    qfrc_bias = torch.vmap(torch.dot)(d.cdof, cfrc[torch.as_tensor(m.dof_bodyid)])
 
     d = d.replace(qfrc_bias=qfrc_bias)
 
@@ -478,7 +479,7 @@ def tendon(m: Model, d: Data) -> Data:
     tendon_num_jnt = m.tendon_num[tendon_id_jnt]
 
     # moment_jnt[i] = wrap_prm (coefficient) for each wrap element
-    moment_jnt = torch.tensor(m.wrap_prm[wrap_id_jnt], dtype=d.qpos.dtype, device=d.qpos.device)
+    moment_jnt = torch.as_tensor(m.wrap_prm[wrap_id_jnt]).to(dtype=d.qpos.dtype, device=d.qpos.device)
     qpos_vals = d.qpos[m.jnt_qposadr[wrap_objid_jnt]]
 
     # tendon length = sum of (coefficient * joint position) per tendon

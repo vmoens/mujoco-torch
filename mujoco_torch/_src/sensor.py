@@ -99,7 +99,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 adrs.append(adr[torch.as_tensor(idxs)])
             continue
         elif sensor_type == SensorType.JOINTPOS:
-            sensor = d.qpos[torch.tensor(m.jnt_qposadr[objid], device=d.qpos.device)]
+            sensor = d.qpos[torch.as_tensor(m.jnt_qposadr[objid])]
         elif sensor_type == SensorType.TENDONPOS:
             sensor = d.ten_length[objid]
         elif sensor_type == SensorType.ACTUATORPOS:
@@ -239,7 +239,7 @@ def sensor_vel(m: Model, d: Data) -> Data:
             sensor = torch.vmap(lambda ang, rot: rot.T @ ang)(ang, rot)
             adr = (adr[:, None] + torch.arange(3)).reshape(-1)
         elif sensor_type == SensorType.JOINTVEL:
-            sensor = d.qvel[torch.tensor(m.jnt_dofadr[objid], device=d.qvel.device)]
+            sensor = d.qvel[torch.as_tensor(m.jnt_dofadr[objid])]
         elif sensor_type == SensorType.TENDONVEL:
             sensor = d.ten_velocity[objid]
         elif sensor_type == SensorType.ACTUATORVEL:
@@ -345,13 +345,11 @@ def sensor_acc(m: Model, d: Data) -> Data:
         elif sensor_type == SensorType.ACTUATORFRC:
             sensor = d.actuator_force[objid]
         elif sensor_type == SensorType.JOINTACTFRC:
-            sensor = d.qfrc_actuator[torch.tensor(m.jnt_dofadr[objid], device=d.qpos.device)]
+            sensor = d.qfrc_actuator[torch.as_tensor(m.jnt_dofadr[objid])]
         elif sensor_type == SensorType.TENDONACTFRC:
-            force_mask = torch.tensor(
+            force_mask = torch.stack(
                 [(m.actuator_trntype == TrnType.TENDON) & (m.actuator_trnid[:, 0] == tendon_id) for tendon_id in objid],
-                dtype=d.actuator_force.dtype,
-                device=d.actuator_force.device,
-            )
+            ).to(dtype=d.actuator_force.dtype, device=d.actuator_force.device)
             sensor = force_mask @ d.actuator_force
         else:
             continue
