@@ -257,18 +257,18 @@ def factor_m(m: Model, d: Data) -> Data:
 
         for b, e, madr_d, madr_ij in updates_list:
             width = e - b
-            rows.append(np.arange(madr_ij, madr_ij + width))
-            madr_ijs.append(np.full((width,), madr_ij))
-            pivots.append(np.full((width,), madr_d))
-            out.append(np.arange(b, e))
-        rows = np.concatenate(rows)
-        madr_ijs = np.concatenate(madr_ijs)
-        pivots = np.concatenate(pivots)
-        out = np.concatenate(out)
+            rows.append(torch.arange(madr_ij, madr_ij + width))
+            madr_ijs.append(torch.full((width,), madr_ij, dtype=torch.long))
+            pivots.append(torch.full((width,), madr_d, dtype=torch.long))
+            out.append(torch.arange(b, e))
+        rows = torch.cat(rows)
+        madr_ijs = torch.cat(madr_ijs)
+        pivots = torch.cat(pivots)
+        out = torch.cat(out)
 
-        qld_update = -(qld[torch.tensor(madr_ijs)] / qld[torch.tensor(pivots)]) * qld[torch.tensor(rows)]
+        qld_update = -(qld[madr_ijs] / qld[pivots]) * qld[rows]
         qld = qld.clone()
-        qld[torch.tensor(out)] = qld[torch.tensor(out)] + qld_update
+        qld[out] = qld[out] + qld_update
 
     qld_diag = qld[torch.tensor(m.dof_Madr)][:]
     qld = qld / qld[torch.tensor(madr_ds)]
@@ -301,18 +301,18 @@ def solve_m(m: Model, d: Data, x: torch.Tensor) -> torch.Tensor:
 
     # x <- inv(L') * x
     for _, vals in sorted(updates_j.items(), reverse=True):
-        j, madr_ij, i = np.array(vals).T
+        j, madr_ij, i = torch.tensor(vals, dtype=torch.long).T
         x = x.clone()
-        x[torch.tensor(j)] = x[torch.tensor(j)] + (-d.qLD[torch.tensor(madr_ij)] * x[torch.tensor(i)])
+        x[j] = x[j] + (-d.qLD[madr_ij] * x[i])
 
     # x <- inv(D) * x
     x = x * d.qLDiagInv
 
     # x <- inv(L) * x
     for _, vals in sorted(updates_i.items()):
-        i, madr_ij, j = np.array(vals).T
+        i, madr_ij, j = torch.tensor(vals, dtype=torch.long).T
         x = x.clone()
-        x[torch.tensor(i)] = x[torch.tensor(i)] + (-d.qLD[torch.tensor(madr_ij)] * x[torch.tensor(j)])
+        x[i] = x[i] + (-d.qLD[madr_ij] * x[j])
 
     return x
 
@@ -482,11 +482,7 @@ def tendon(m: Model, d: Data) -> Data:
     qpos_vals = d.qpos[m.jnt_qposadr[wrap_objid_jnt]]
 
     # tendon length = sum of (coefficient * joint position) per tendon
-    segment_ids = torch.tensor(
-        np.repeat(np.arange(ntendon_jnt), tendon_num_jnt),
-        dtype=torch.long,
-        device=d.qpos.device,
-    )
+    segment_ids = torch.arange(ntendon_jnt, device=d.qpos.device).repeat_interleave(torch.as_tensor(tendon_num_jnt))
     ten_length = torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device)
     ten_length_jnt = torch.zeros(ntendon_jnt, dtype=d.qpos.dtype, device=d.qpos.device)
     ten_length_jnt = ten_length_jnt.index_add(0, segment_ids, moment_jnt * qpos_vals)
@@ -494,7 +490,7 @@ def tendon(m: Model, d: Data) -> Data:
 
     # tendon Jacobian: ten_J[tendon_id, dof_adr] = wrap_prm (coefficient)
     ten_J = torch.zeros((m.ntendon, m.nv), dtype=d.qpos.dtype, device=d.qpos.device)
-    adr_moment_jnt = np.repeat(tendon_id_jnt, tendon_num_jnt)
+    adr_moment_jnt = torch.from_numpy(tendon_id_jnt).repeat_interleave(torch.as_tensor(tendon_num_jnt))
     dofadr_moment_jnt = m.jnt_dofadr[wrap_objid_jnt]
     ten_J[adr_moment_jnt, dofadr_moment_jnt] = moment_jnt
 

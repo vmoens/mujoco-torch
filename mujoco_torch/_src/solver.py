@@ -17,7 +17,6 @@
 from typing import NamedTuple
 
 import mujoco
-import numpy as np
 import torch
 from torch._higher_order_ops.while_loop import while_loop as _torch_while_loop
 
@@ -181,25 +180,13 @@ def _make_solve_m_fn(m: Model, d: Data):
     # Pre-convert to tensors so the loop body is pure torch ops.
     j_updates = []
     for _, vals in sorted(updates_j.items(), reverse=True):
-        arr = np.array(vals)
-        j_updates.append(
-            (
-                torch.tensor(arr[:, 0], dtype=torch.long),
-                torch.tensor(arr[:, 1], dtype=torch.long),
-                torch.tensor(arr[:, 2], dtype=torch.long),
-            )
-        )
+        arr = torch.tensor(vals, dtype=torch.long)
+        j_updates.append((arr[:, 0], arr[:, 1], arr[:, 2]))
 
     i_updates = []
     for _, vals in sorted(updates_i.items()):
-        arr = np.array(vals)
-        i_updates.append(
-            (
-                torch.tensor(arr[:, 0], dtype=torch.long),
-                torch.tensor(arr[:, 1], dtype=torch.long),
-                torch.tensor(arr[:, 2], dtype=torch.long),
-            )
-        )
+        arr = torch.tensor(vals, dtype=torch.long)
+        i_updates.append((arr[:, 0], arr[:, 1], arr[:, 2]))
 
     def solve_m_fn(x):
         # x <- inv(L') * x

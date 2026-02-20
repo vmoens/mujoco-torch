@@ -50,8 +50,8 @@ def sensor_pos(m: Model, d: Data) -> Data:
     # position and orientation by object type
     objtype_data = {
         ObjType.UNKNOWN: (
-            np.zeros((1, 3)),
-            np.expand_dims(np.eye(3), axis=0),
+            torch.zeros(1, 3),
+            torch.eye(3).unsqueeze(0),
         ),
         ObjType.BODY: (d.xipos, d.ximat),
         ObjType.XBODY: (d.xpos, d.xmat),
@@ -76,27 +76,27 @@ def sensor_pos(m: Model, d: Data) -> Data:
         objtype = m.sensor_objtype[idx]
         refid = m.sensor_refid[idx]
         reftype = m.sensor_reftype[idx]
-        adr = m.sensor_adr[idx]
+        adr = torch.as_tensor(m.sensor_adr[idx])
         cutoff = m.sensor_cutoff[idx]
         data_type = m.sensor_datatype[idx]
 
         if sensor_type == SensorType.MAGNETOMETER:
             sensor = torch.vmap(lambda xmat: xmat.T @ m.opt.magnetic)(d.site_xmat[objid])
-            adr = (adr[:, None] + np.arange(3)[None]).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
         elif sensor_type == SensorType.RANGEFINDER:
             site_bodyid = m.site_bodyid[objid]
             for sid in set(site_bodyid):
                 idxs = sid == site_bodyid
                 objids = objid[idxs]
                 site_xpos = d.site_xpos[objids]
-                site_mat = d.site_xmat[objids].reshape((-1, 9))[:, np.array([2, 5, 8])]
+                site_mat = d.site_xmat[objids].reshape((-1, 9))[:, torch.tensor([2, 5, 8])]
                 cutoffs = cutoff[idxs]
                 dist, _ = torch.vmap(ray.ray, in_dims=(None, None, 0, 0, None, None, None))(
                     m, d, site_xpos, site_mat, (), True, sid
                 )
                 sensor = dist
                 sensors.append(_apply_cutoff(sensor, cutoffs, data_type[0]))
-                adrs.append(adr[idxs])
+                adrs.append(adr[torch.as_tensor(idxs)])
             continue
         elif sensor_type == SensorType.JOINTPOS:
             sensor = d.qpos[torch.tensor(m.jnt_qposadr[objid], device=d.qpos.device)]
@@ -108,7 +108,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
             jnt_qposadr = m.jnt_qposadr[objid, None] + np.arange(4)[None]
             quat = d.qpos[jnt_qposadr]
             sensor = torch.vmap(math.normalize)(quat)
-            adr = (adr[:, None] + np.arange(4)[None]).reshape(-1)
+            adr = (adr[:, None] + torch.arange(4)).reshape(-1)
         elif sensor_type == SensorType.FRAMEPOS:
 
             def _framepos(xpos, xpos_ref, xmat_ref, refid):
@@ -124,7 +124,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 xmat_ref = xmat_ref[refidt]
                 cutofft = cutoff[idxt]
                 sensor = torch.vmap(_framepos)(xpos, xpos_ref, xmat_ref, refidt)
-                adrt = adr[idxt, None] + np.arange(3)[None]
+                adrt = adr[torch.as_tensor(idxt), None] + torch.arange(3)
                 sensors.append(_apply_cutoff(sensor, cutofft, data_type[0]).reshape(-1))
                 adrs.append(adrt.reshape(-1))
             continue
@@ -143,7 +143,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 xmat_ref = xmat_ref[refidt]
                 cutofft = cutoff[idxt]
                 sensor = torch.vmap(_frameaxis)(xmat, xmat_ref, refidt)
-                adrt = adr[idxt, None] + np.arange(3)[None]
+                adrt = adr[torch.as_tensor(idxt), None] + torch.arange(3)
                 sensors.append(_apply_cutoff(sensor, cutofft, data_type[0]).reshape(-1))
                 adrs.append(adrt.reshape(-1))
             continue
@@ -175,13 +175,13 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 sensor = torch.vmap(lambda q, r, rid: torch.where(rid == -1, q, math.quat_mul(math.quat_inv(r), q)))(
                     quat, refquat, refidt
                 )
-                adrt = adr[idxt, None] + np.arange(4)[None]
+                adrt = adr[torch.as_tensor(idxt), None] + torch.arange(4)
                 sensors.append(_apply_cutoff(sensor, cutofft, data_type[0]).reshape(-1))
                 adrs.append(adrt.reshape(-1))
             continue
         elif sensor_type == SensorType.SUBTREECOM:
             sensor = d.subtree_com[objid]
-            adr = (adr[:, None] + np.arange(3)[None]).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
         elif sensor_type == SensorType.CLOCK:
             sensor = torch.repeat_interleave(d.time, idx.sum())
         else:
@@ -193,10 +193,10 @@ def sensor_pos(m: Model, d: Data) -> Data:
     if not adrs:
         return d
 
-    adrs_flat = np.concatenate(adrs)
+    adrs_flat = torch.cat(adrs)
     sensors_flat = torch.cat(sensors)
     sensordata = d.sensordata.clone()
-    sensordata[torch.tensor(adrs_flat, device=sensordata.device)] = sensors_flat.to(sensordata.dtype)
+    sensordata[adrs_flat.to(device=sensordata.device)] = sensors_flat.to(sensordata.dtype)
 
     return d.replace(sensordata=sensordata)
 
@@ -218,7 +218,7 @@ def sensor_vel(m: Model, d: Data) -> Data:
     for sensor_type in sensor_types:
         idx = m.sensor_type == sensor_type
         objid = m.sensor_objid[idx]
-        adr = m.sensor_adr[idx]
+        adr = torch.as_tensor(m.sensor_adr[idx])
         cutoff = m.sensor_cutoff[idx]
         data_type = m.sensor_datatype[idx]
 
@@ -231,13 +231,13 @@ def sensor_vel(m: Model, d: Data) -> Data:
             sensor = torch.vmap(lambda vec, dif, rot: rot.T @ (vec[3:] - torch.linalg.cross(dif, vec[:3])))(
                 cvel, pos - subtree_com, rot
             )
-            adr = (adr[:, None] + np.arange(3)[None]).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
         elif sensor_type == SensorType.GYRO:
             bodyid = m.site_bodyid[objid]
             rot = d.site_xmat[objid]
             ang = d.cvel[bodyid, :3]
             sensor = torch.vmap(lambda ang, rot: rot.T @ ang)(ang, rot)
-            adr = (adr[:, None] + np.arange(3)[None]).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
         elif sensor_type == SensorType.JOINTVEL:
             sensor = d.qvel[torch.tensor(m.jnt_dofadr[objid], device=d.qvel.device)]
         elif sensor_type == SensorType.TENDONVEL:
@@ -247,13 +247,13 @@ def sensor_vel(m: Model, d: Data) -> Data:
         elif sensor_type == SensorType.BALLANGVEL:
             jnt_dotadr = m.jnt_dofadr[objid, None] + np.arange(3)[None]
             sensor = d.qvel[jnt_dotadr]
-            adr = (adr[:, None] + np.arange(3)[None]).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
         elif sensor_type == SensorType.SUBTREELINVEL:
             sensor = d.subtree_linvel[objid]
-            adr = (adr[:, None] + np.arange(3)[None]).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
         elif sensor_type == SensorType.SUBTREEANGMOM:
             sensor = d.subtree_angmom[objid]
-            adr = (adr[:, None] + np.arange(3)[None]).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
         else:
             continue
 
@@ -263,10 +263,10 @@ def sensor_vel(m: Model, d: Data) -> Data:
     if not adrs:
         return d
 
-    adrs_flat = np.concatenate(adrs)
+    adrs_flat = torch.cat(adrs)
     sensors_flat = torch.cat(sensors)
     sensordata = d.sensordata.clone()
-    sensordata[torch.tensor(adrs_flat, device=sensordata.device)] = sensors_flat.to(sensordata.dtype)
+    sensordata[adrs_flat.to(device=sensordata.device)] = sensors_flat.to(sensordata.dtype)
 
     return d.replace(sensordata=sensordata)
 
@@ -294,7 +294,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
     for sensor_type in sensor_types:
         idx = m.sensor_type == sensor_type
         objid = m.sensor_objid[idx]
-        adr = m.sensor_adr[idx]
+        adr = torch.as_tensor(m.sensor_adr[idx])
         cutoff = m.sensor_cutoff[idx]
         data_type = m.sensor_datatype[idx]
 
@@ -317,7 +317,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
                 sensor = torch.vmap(_accelerometer)(cvel, cacc, dif, rot)
             else:
                 continue
-            adr = (adr[:, None] + np.arange(3)[None]).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
         elif sensor_type == SensorType.FORCE:
             if hasattr(d, "cfrc_int"):
                 bodyid = m.site_bodyid[objid]
@@ -326,7 +326,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
                 sensor = torch.vmap(lambda mat, vec: mat.T @ vec)(site_xmat, cfrc_int[:, 3:])
             else:
                 continue
-            adr = (adr[:, None] + np.arange(3)[None]).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
         elif sensor_type == SensorType.TORQUE:
             if hasattr(d, "cfrc_int"):
                 bodyid = m.site_bodyid[objid]
@@ -341,18 +341,18 @@ def sensor_acc(m: Model, d: Data) -> Data:
                 sensor = torch.vmap(_torque)(cfrc_int, dif, site_xmat)
             else:
                 continue
-            adr = (adr[:, None] + np.arange(3)[None]).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
         elif sensor_type == SensorType.ACTUATORFRC:
             sensor = d.actuator_force[objid]
         elif sensor_type == SensorType.JOINTACTFRC:
             sensor = d.qfrc_actuator[torch.tensor(m.jnt_dofadr[objid], device=d.qpos.device)]
         elif sensor_type == SensorType.TENDONACTFRC:
-            force_mask = np.array(
+            force_mask = torch.tensor(
                 [(m.actuator_trntype == TrnType.TENDON) & (m.actuator_trnid[:, 0] == tendon_id) for tendon_id in objid],
-                dtype=np.float32,
+                dtype=d.actuator_force.dtype,
+                device=d.actuator_force.device,
             )
-            force_mask_t = torch.tensor(force_mask, dtype=d.actuator_force.dtype, device=d.actuator_force.device)
-            sensor = force_mask_t @ d.actuator_force
+            sensor = force_mask @ d.actuator_force
         else:
             continue
 
@@ -362,9 +362,9 @@ def sensor_acc(m: Model, d: Data) -> Data:
     if not adrs:
         return d
 
-    adrs_flat = np.concatenate(adrs)
+    adrs_flat = torch.cat(adrs)
     sensors_flat = torch.cat(sensors)
     sensordata = d.sensordata.clone()
-    sensordata[torch.tensor(adrs_flat, device=sensordata.device)] = sensors_flat.to(sensordata.dtype)
+    sensordata[adrs_flat.to(device=sensordata.device)] = sensors_flat.to(sensordata.dtype)
 
     return d.replace(sensordata=sensordata)
