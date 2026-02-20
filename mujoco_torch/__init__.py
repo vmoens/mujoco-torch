@@ -46,6 +46,9 @@ from mujoco_torch._src.inverse import inverse
 # I/O
 from mujoco_torch._src.io import make_data
 
+# Logging
+from mujoco_torch._src.log import logger as mujoco_logger
+
 # Passive forces
 from mujoco_torch._src.passive import passive
 
