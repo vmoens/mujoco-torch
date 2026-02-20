@@ -15,6 +15,7 @@
 """Collide geometries."""
 
 import dataclasses
+import math as _math
 from collections.abc import Callable, Sequence
 
 import mujoco
@@ -286,9 +287,9 @@ def _hfield_subgrid_size(m: Model, hfield_data_id: int, geom_rbound: float) -> t
     ncol = int(m.hfield_ncol[hfield_data_id])
     xtick = 2.0 * float(hfield_size[0]) / (ncol - 1)
     ytick = 2.0 * float(hfield_size[1]) / (nrow - 1)
-    xbound = int(np.ceil(2 * geom_rbound / xtick)) + 1
+    xbound = int(_math.ceil(2 * geom_rbound / xtick)) + 1
     xbound = min(xbound, ncol)
-    ybound = int(np.ceil(2 * geom_rbound / ytick)) + 1
+    ybound = int(_math.ceil(2 * geom_rbound / ytick)) + 1
     ybound = min(ybound, nrow)
     return (xbound, ybound)
 
@@ -513,14 +514,14 @@ def collision_candidates(m: Model | mujoco.MjModel) -> CandidateSet:
     return candidate_set
 
 
-def make_condim(m: Model | mujoco.MjModel) -> np.ndarray:
+def make_condim(m: Model | mujoco.MjModel) -> torch.Tensor:
     """Returns per-contact condim array, sorted ascending (1s before 3s).
 
     This is computed purely from Model (no Data needed) and mirrors MJX's
     ``make_condim`` in ``mujoco/mjx/_src/collision_driver.py``.
     """
     if m.opt.disableflags & DisableBit.CONTACT:
-        return np.empty(0, dtype=int)
+        return torch.empty(0, dtype=torch.long)
 
     candidates = collision_candidates(m)
     max_count = _max_contact_points(m)
@@ -539,12 +540,12 @@ def make_condim(m: Model | mujoco.MjModel) -> np.ndarray:
     if max_count > -1 and len(dims) > max_count:
         dims = dims[:max_count]
 
-    return np.array(dims, dtype=int) if dims else np.empty(0, dtype=int)
+    return torch.tensor(dims, dtype=torch.long) if dims else torch.empty(0, dtype=torch.long)
 
 
 def ncon(m: Model) -> int:
     """Returns the number of contacts computed in MJX given a model."""
-    return make_condim(m).size
+    return make_condim(m).numel()
 
 
 def _get_collision_cache(m: Model) -> tuple:
@@ -610,7 +611,7 @@ def constraint_sizes(m: Model) -> tuple[int, int, int, int, int]:
         nc = 0
     else:
         dims = make_condim(m)
-        ncon_ = dims.size
+        ncon_ = dims.numel()
         nc = int((dims == 1).sum()) + int((dims == 3).sum()) * 4
 
     nefc = ne + nf + nl + nc
@@ -651,11 +652,11 @@ def collision(m: Model, d: Data) -> Data:
     # condim=1 produces 1 constraint row, condim=3 produces 4 (pyramidal).
     ne, nf, nl, _, _ = constraint_sizes(m)
     ns = ne + nf + nl
-    dims_np = make_condim(m)
-    rows_per_contact = np.where(dims_np == 1, 1, (dims_np - 1) * 2)
-    offsets = np.cumsum(np.concatenate(([0], rows_per_contact[:-1])))
+    dims_t = make_condim(m)
+    rows_per_contact = torch.where(dims_t == 1, 1, (dims_t - 1) * 2)
+    offsets = torch.cumsum(torch.cat([torch.zeros(1, dtype=rows_per_contact.dtype), rows_per_contact[:-1]]), dim=0)
     contact = contact.replace(
-        efc_address=torch.tensor(ns + offsets, dtype=torch.int64),
+        efc_address=(ns + offsets).to(torch.int64),
     )
 
     return d.replace(contact=contact, ncon=torch.tensor(ncon_, dtype=torch.int32))

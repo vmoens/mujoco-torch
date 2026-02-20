@@ -103,8 +103,8 @@ def _instantiate_equality_connect(m: Model, d: Data) -> _Efc | None:
 
     id1, id2, data = m.eq_obj1id[ids], m.eq_obj2id[ids], m.eq_data[ids]
     active = d.eq_active[ids]
-    id1_t = torch.tensor(id1, dtype=torch.long) if isinstance(id1, np.ndarray) else id1
-    id2_t = torch.tensor(id2, dtype=torch.long) if isinstance(id2, np.ndarray) else id2
+    id1_t = torch.as_tensor(id1, dtype=torch.long)
+    id2_t = torch.as_tensor(id2, dtype=torch.long)
 
     @torch.vmap
     def fn(data, id1, id2, active):
@@ -145,8 +145,8 @@ def _instantiate_equality_weld(m: Model, d: Data) -> _Efc | None:
 
     id1, id2, data = m.eq_obj1id[ids], m.eq_obj2id[ids], m.eq_data[ids]
     active = d.eq_active[ids]
-    id1_t = torch.tensor(id1, dtype=torch.long) if isinstance(id1, np.ndarray) else id1
-    id2_t = torch.tensor(id2, dtype=torch.long) if isinstance(id2, np.ndarray) else id2
+    id1_t = torch.as_tensor(id1, dtype=torch.long)
+    id2_t = torch.as_tensor(id2, dtype=torch.long)
 
     @torch.vmap
     def fn(data, id1, id2, active):
@@ -237,11 +237,11 @@ def _instantiate_equality_joint(m: Model, d: Data) -> _Efc | None:
     active = d.eq_active[ids]
     dofadr1, dofadr2 = m.jnt_dofadr[id1], m.jnt_dofadr[id2]
     qposadr1, qposadr2 = m.jnt_qposadr[id1], m.jnt_qposadr[id2]
-    id2_t = torch.tensor(id2, dtype=torch.long) if isinstance(id2, np.ndarray) else id2
-    dofadr1_t = torch.tensor(dofadr1, dtype=torch.long) if isinstance(dofadr1, np.ndarray) else dofadr1
-    dofadr2_t = torch.tensor(dofadr2, dtype=torch.long) if isinstance(dofadr2, np.ndarray) else dofadr2
-    qposadr1_t = torch.tensor(qposadr1, dtype=torch.long) if isinstance(qposadr1, np.ndarray) else qposadr1
-    qposadr2_t = torch.tensor(qposadr2, dtype=torch.long) if isinstance(qposadr2, np.ndarray) else qposadr2
+    id2_t = torch.as_tensor(id2, dtype=torch.long)
+    dofadr1_t = torch.as_tensor(dofadr1, dtype=torch.long)
+    dofadr2_t = torch.as_tensor(dofadr2, dtype=torch.long)
+    qposadr1_t = torch.as_tensor(qposadr1, dtype=torch.long)
+    qposadr2_t = torch.as_tensor(qposadr2, dtype=torch.long)
 
     @torch.vmap
     def fn(data, id2, dofadr1, dofadr2, qposadr1, qposadr2, active):
@@ -279,8 +279,8 @@ def _instantiate_limit_ball(m: Model, d: Data) -> _Efc | None:
 
     jnt_range = m.jnt_range[ids]
     jnt_margin = m.jnt_margin[ids]
-    qposadr = torch.tensor(np.array([np.arange(q, q + 4) for q in m.jnt_qposadr[ids]]), dtype=torch.long)
-    dofadr = torch.tensor(np.array([np.arange(da, da + 3) for da in m.jnt_dofadr[ids]]), dtype=torch.long)
+    qposadr = torch.stack([torch.arange(q, q + 4) for q in m.jnt_qposadr[ids]])
+    dofadr = torch.stack([torch.arange(da, da + 3) for da in m.jnt_dofadr[ids]])
 
     @torch.vmap
     def fn(jnt_range, jnt_margin, qposadr, dofadr):
@@ -479,11 +479,15 @@ def make_constraint(m: Model, d: Data) -> Data:
     actual_ncon = d.contact.dist.shape[0]
     dims = collision_driver.make_condim(m)
     dims_actual = dims[:actual_ncon] if actual_ncon < len(dims) else dims
-    rows_per = np.where(dims_actual == 1, 1, (dims_actual - 1) * 2) if len(dims_actual) > 0 else np.empty(0, dtype=int)
-    offsets = np.cumsum(np.concatenate(([0], rows_per[:-1]))) if len(rows_per) > 0 else np.empty(0, dtype=int)
-    efc_address = (
-        torch.tensor(ns + offsets, dtype=torch.int64) if len(offsets) > 0 else torch.empty(0, dtype=torch.int64)
-    )
+    if len(dims_actual) > 0:
+        rows_per = torch.where(dims_actual == 1, 1, (dims_actual - 1) * 2)
+        offsets = torch.cumsum(
+            torch.cat([torch.zeros(1, dtype=rows_per.dtype), rows_per[:-1]]),
+            dim=0,
+        )
+        efc_address = (ns + offsets).to(torch.int64)
+    else:
+        efc_address = torch.empty(0, dtype=torch.int64)
     d = d.tree_replace({"contact.efc_address": efc_address})
 
     if m.opt.disableflags & DisableBit.CONSTRAINT:

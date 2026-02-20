@@ -19,7 +19,6 @@ from collections.abc import Sequence
 import mujoco
 
 # pylint: enable=g-importing-member
-import numpy as np
 import torch
 from torch._higher_order_ops.scan import scan as _torch_scan
 
@@ -54,14 +53,14 @@ from mujoco_torch._src import (
 from mujoco_torch._src.types import BiasType, Data, DisableBit, DynType, GainType, IntegratorType, JointType, Model
 
 # RK4 tableau
-_RK4_A = np.array(
+_RK4_A = torch.tensor(
     [
         [0.5, 0.0, 0.0],
         [0.0, 0.5, 0.0],
         [0.0, 0.0, 1.0],
     ]
 )
-_RK4_B = np.array([1.0 / 6.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0])
+_RK4_B = torch.tensor([1.0 / 6.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0])
 
 
 def _position(m: Model, d: Data) -> Data:
@@ -289,9 +288,8 @@ def _rungekutta4(m: Model, d: Data) -> Data:
     """Runge-Kutta explicit order 4 integrator."""
     d_t0 = d
     # pylint: disable=invalid-name
-    A, B = _RK4_A, _RK4_B
-    A_t = torch.tensor(A, dtype=d.qpos.dtype, device=d.qpos.device)
-    B_t = torch.tensor(B, dtype=d.qpos.dtype, device=d.qpos.device)
+    A_t = _RK4_A.to(dtype=d.qpos.dtype, device=d.qpos.device)
+    B_t = _RK4_B.to(dtype=d.qpos.dtype, device=d.qpos.device)
     C = torch.tril(A_t).sum(dim=0)  # C(i) = sum_j A(i,j)
     T = d.time + C * m.opt.timestep
     # pylint: enable=invalid-name
