@@ -150,7 +150,7 @@ def _fluid(m: Model, d: Data) -> torch.Tensor:
         m,
         m.body_inertia,
         m.body_mass,
-        d.subtree_com[torch.tensor(m.body_rootid)],
+        d.subtree_com[torch.as_tensor(m.body_rootid)],
         d.xipos,
         d.ximat,
         d.cvel,

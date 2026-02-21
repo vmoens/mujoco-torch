@@ -273,7 +273,7 @@ def _euler(m: Model, d: Data) -> Data:
     if not m.opt.disableflags & DisableBit.EULERDAMP:
         if support.is_sparse(m):
             qM = d.qM.clone()
-            madr = torch.tensor(m.dof_Madr, dtype=torch.long, device=d.qM.device)
+            madr = torch.as_tensor(m.dof_Madr).to(dtype=torch.long, device=d.qM.device)
             qM = qM.index_add(0, madr, m.opt.timestep * m.dof_damping)
         else:
             qM = d.qM + torch.diag(m.opt.timestep * m.dof_damping)

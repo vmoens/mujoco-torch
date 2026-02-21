@@ -129,6 +129,8 @@ def _device_put_torch(x):
         # Python scalar floats: use float64 to match DEFAULT_DTYPE precision
         if isinstance(x, float):
             return torch.tensor(x, dtype=torch.float64)
+        if isinstance(x, torch.Tensor):
+            return x.detach().clone()
         # Use torch.tensor() to copy data (torch.as_tensor shares memory
         # with numpy arrays, which can be mutated by MuJoCo in-place)
         return torch.tensor(x)

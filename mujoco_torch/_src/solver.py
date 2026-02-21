@@ -216,7 +216,7 @@ def _make_mul_m_fn(m: Model, d: Data):
 
     # Sparse path: precompute index arrays.
     qM = d.qM.clone()
-    dof_Madr_t = torch.tensor(m.dof_Madr, dtype=torch.long)
+    dof_Madr_t = torch.as_tensor(m.dof_Madr).long()
 
     is_, js, madr_ijs = [], [], []
     for i in range(m.nv):
@@ -266,7 +266,7 @@ def _make_dense_m(m: Model, d: Data) -> torch.Tensor:
 
     mat = torch.zeros((m.nv, m.nv), dtype=d.qM.dtype, device=d.qM.device)
     mat[(i_idx, j_idx)] = d.qM[madr_idx]
-    mat = torch.diag(d.qM[torch.tensor(m.dof_Madr)]) + mat + mat.T
+    mat = torch.diag(d.qM[torch.as_tensor(m.dof_Madr)]) + mat + mat.T
     return mat
 
 

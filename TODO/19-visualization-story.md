@@ -34,6 +34,8 @@ MJX has `mjx-viewer` for visualization. mujoco-torch has nothing. Users need to 
 
 ## Submission Instructions
 
+- branch out from origin/main. Commit only changed / relevant new files. Make a PR. Monitor the CI.
 - If your changes have more than one step, use ghstack to submit. ghstack sends each commit as a separate PR, so make sure each commit message is a proper PR name.
+- If the changes are contained in one single commit, use `gh pr` instead.
 - BugFix and features must have a test in the same commit.
 - You can submit PRs; if you do, monitor the runs using gh.
