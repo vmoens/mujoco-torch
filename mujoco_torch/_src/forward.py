@@ -183,7 +183,7 @@ def _actuation(m: Model, d: Data) -> Data:
     qfrc_actuator = d.actuator_moment.T @ force
 
     # actuator-level gravity compensation
-    if bool((m.body_gravcomp != 0).any()):
+    if m.has_gravcomp:
         qfrc_actuator = qfrc_actuator + d.qfrc_gravcomp * m.jnt_actgravcomp[m.dof_jntid]
 
     # clamp qfrc_actuator
@@ -192,8 +192,7 @@ def _actuation(m: Model, d: Data) -> Data:
         m.jnt_actfrcrange,
         torch.tensor([-torch.inf, torch.inf]),
     )
-    ids = sum(([i] * JointType(j).dof_width() for i, j in enumerate(m.jnt_type)), [])
-    actfrcrange = actfrcrange[torch.tensor(ids)]
+    actfrcrange = actfrcrange[torch.as_tensor(m.dof_jntid)]
     qfrc_actuator = torch.clamp(qfrc_actuator, actfrcrange[:, 0], actfrcrange[:, 1])
 
     d = d.replace(act_dot=act_dot, qfrc_actuator=qfrc_actuator)

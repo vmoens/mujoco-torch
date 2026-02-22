@@ -27,43 +27,21 @@ from mujoco_torch._src.types import JointType, Model, TrnType
 Y = TypeVar("Y")
 
 # Module-level caches for scan grouping indices.  Keyed by
-# (model_id, in_types, out_types, group_by_or_reverse).
-# Using WeakValueDictionary is not possible here since the values are plain
-# dicts/lists, so we use a regular dict with id-based keys.  Models are
-# long-lived so this is fine.
+# (cache_id, in_types, out_types, group_by_or_reverse).
+# Models carry a ``cache_id`` int assigned at device_put time.
 _flat_cache: dict = {}
 _body_tree_cache: dict = {}
-_model_cache_id_counter = 0
-_model_cache_ids: dict = {}  # id(m) -> cache_id (monotonic)
 
 
 def _model_cache_id(m: Model) -> int:
-    """Return a unique cache ID for this model instance.
-
-    Uses object identity but avoids id() reuse issues by tracking a
-    monotonic counter and validating the object is still the same.
-    """
-    global _model_cache_id_counter
-    mid = id(m)
-    # Check if we already assigned a cache_id to this exact object
-    stored = _model_cache_ids.get(mid)
-    if stored is not None:
-        cache_id, ref = stored
-        # Validate it's still the same object (not a recycled id)
-        if ref is m:
-            return cache_id
-    # New model or recycled id - assign a new cache_id
-    _model_cache_id_counter += 1
-    cache_id = _model_cache_id_counter
-    _model_cache_ids[mid] = (cache_id, m)
-    return cache_id
+    """Return the unique cache ID for this model (set at device_put time)."""
+    return m.cache_id
 
 
 def clear_scan_caches():
     """Clear precomputed scan grouping caches (useful for testing)."""
     _flat_cache.clear()
     _body_tree_cache.clear()
-    _model_cache_ids.clear()
 
 
 def _np_to_long(x):
@@ -157,18 +135,25 @@ def _nvmap(f: Callable[..., Y], *args) -> Y:
     Raises:
       RuntimeError: if numpy arg elements do not match
     """
-    for arg in args:
-        if isinstance(arg, np.ndarray) and arg.shape[0] > 0 and not np.all(arg == arg[0]):
-            raise RuntimeError(f"numpy arg elements do not match: {arg}")
+    if not torch.compiler.is_compiling():
+        for arg in args:
+            if isinstance(arg, np.ndarray) and arg.shape[0] > 0 and not np.all(arg == arg[0]):
+                raise RuntimeError(f"numpy arg elements do not match: {arg}")
 
     # split out numpy and torch args: numpy arrays become static args,
     # everything else (torch tensors, pytrees, None) goes through vmap.
     # Use shape[0] > 0 (not size > 0) because 2D arrays with shape (n, 0)
     # still need their first row extracted as a representative empty element.
+    # Numpy scalars are converted to Python scalars so that Dynamo treats
+    # them as constants rather than NumpyNdarrayVariable (which causes graph
+    # breaks on branches like ``if jnt_typ == JointType.FREE``).
     np_args = []
     for a in args:
         if isinstance(a, np.ndarray):
-            np_args.append(a[0] if a.shape[0] > 0 else a)
+            val = a[0] if a.shape[0] > 0 else a
+            if isinstance(val, (np.integer, np.floating, np.bool_)):
+                val = val.item()
+            np_args.append(val)
         else:
             np_args.append(None)
     args = [None if isinstance(a, np.ndarray) else a for a in args]
@@ -189,8 +174,10 @@ def _nvmap(f: Callable[..., Y], *args) -> Y:
     vmap_args = [a for a in args if a is not None]
 
     def _ensure_tensor(x):
-        """Convert numpy scalars/arrays to tensors for vmap compatibility."""
+        """Convert numpy scalars/arrays and Python scalars to tensors for vmap compatibility."""
         if isinstance(x, (np.ndarray, np.integer, np.floating)):
+            return torch.as_tensor(x)
+        if isinstance(x, (int, float, bool)):
             return torch.as_tensor(x)
         return x
 
@@ -209,7 +196,6 @@ def _nvmap(f: Callable[..., Y], *args) -> Y:
         return torch.vmap(outer_f, in_dims=tuple([0] * len(vmap_args)))(*vmap_args)
     except ValueError as e:
         if "NoneType" in str(e):
-            # Function returned None for this group (e.g., no free joints).
             return None
         raise
 
@@ -522,9 +508,6 @@ def _build_body_tree_cache(m, in_types, out_types, reverse):
         key_in_take_torch[key] = [_np_to_long(ids) for ids in take_list]
 
     return {
-        "key_body_ids": key_body_ids,
-        "key_parents": key_parents,
-        "key_in_take": key_in_take,
         "key_in_take_torch": key_in_take_torch,
         "key_y_take": key_y_take,
         "keys": keys,

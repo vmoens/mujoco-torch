@@ -55,14 +55,8 @@ def make_m(
 ) -> torch.Tensor:
     """Computes M = a @ b.T + diag(d)."""
 
-    ij = []
-    for i in range(m.nv):
-        j = i
-        while j > -1:
-            ij.append((i, j))
-            j = m.dof_parentid[j]
-
-    i, j = (torch.tensor(x, dtype=torch.long, device=a.device) for x in zip(*ij))
+    i = torch.as_tensor(m.dof_tri_row, device=a.device)
+    j = torch.as_tensor(m.dof_tri_col, device=a.device)
 
     if not is_sparse(m):
         qm = a @ b.T
@@ -92,14 +86,8 @@ def full_m(m: Model, d: Data) -> torch.Tensor:
     if not is_sparse(m):
         return d.qM
 
-    ij = []
-    for i in range(m.nv):
-        j = i
-        while j > -1:
-            ij.append((i, j))
-            j = m.dof_parentid[j]
-
-    i, j = (torch.tensor(x, dtype=torch.long, device=d.qM.device) for x in zip(*ij))
+    i = torch.as_tensor(m.dof_tri_row, device=d.qM.device)
+    j = torch.as_tensor(m.dof_tri_col, device=d.qM.device)
 
     mat = torch.zeros((m.nv, m.nv), dtype=d.qM.dtype, device=d.qM.device)
     mat[(i, j)] = d.qM

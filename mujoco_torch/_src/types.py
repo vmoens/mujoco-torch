@@ -407,7 +407,7 @@ class Statistic(MjTensorClass):
       center: center of model
     """
 
-    meaninertia: torch.Tensor
+    meaninertia: float
     meanmass: torch.Tensor
     meansize: torch.Tensor
     extent: torch.Tensor
@@ -446,8 +446,8 @@ class Option(MjTensorClass):
 
     iterations: int
     ls_iterations: int
-    tolerance: torch.Tensor
-    ls_tolerance: torch.Tensor
+    tolerance: float
+    ls_tolerance: float
     impratio: torch.Tensor
     gravity: torch.Tensor
     density: torch.Tensor
@@ -753,6 +753,12 @@ class Model(MjTensorClass):
     geom_convex_facenormal: tuple[torch.Tensor | None, ...]
     mesh_convex: tuple[ConvexMesh, ...]
     tendon_hasfrictionloss: np.ndarray
+    has_gravcomp: bool
+    dof_tri_row: np.ndarray
+    dof_tri_col: np.ndarray
+    actuator_info: tuple
+    constraint_sizes_py: tuple
+    cache_id: int
 
 
 # Model.names collides with TensorDict.names property.  A __getattribute__

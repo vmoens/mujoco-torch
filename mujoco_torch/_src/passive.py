@@ -171,7 +171,7 @@ def passive(m: Model, d: Data) -> Data:
     qfrc_passive = _spring_damper(m, d)
     qfrc_gravcomp = torch.zeros(m.nv, dtype=d.qpos.dtype, device=d.qpos.device)
 
-    if bool((m.body_gravcomp != 0).any()) and not m.opt.disableflags & DisableBit.GRAVITY:
+    if m.has_gravcomp and not m.opt.disableflags & DisableBit.GRAVITY:
         qfrc_gravcomp = _gravcomp(m, d)
         qfrc_passive = qfrc_passive + qfrc_gravcomp * (1 - m.jnt_actgravcomp[m.dof_jntid])
 

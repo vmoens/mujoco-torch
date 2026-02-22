@@ -118,6 +118,12 @@ _DERIVED = mesh.DERIVED.union(
         (types.Model, "dof_hasfrictionloss"),
         (types.Model, "geom_rbound_hfield"),
         (types.Model, "tendon_hasfrictionloss"),
+        (types.Model, "has_gravcomp"),
+        (types.Model, "dof_tri_row"),
+        (types.Model, "dof_tri_col"),
+        (types.Model, "actuator_info"),
+        (types.Model, "constraint_sizes_py"),
+        (types.Model, "cache_id"),
     }
 )
 
@@ -141,9 +147,51 @@ def _device_put_torch(x):
 torch.device_put = _device_put_torch
 
 
+_model_cache_id_counter = 0
+
+
+def _compute_constraint_sizes(value: mujoco.MjModel) -> tuple[int, int, int, int, int]:
+    """Pre-compute constraint sizes from raw MjModel (all numpy, no tracing)."""
+    disableflags = int(value.opt.disableflags)
+    if disableflags & types.DisableBit.CONSTRAINT:
+        return (0, 0, 0, 0, 0)
+
+    if disableflags & types.DisableBit.EQUALITY:
+        ne = 0
+    else:
+        ne_connect = int((value.eq_type == types.EqType.CONNECT).sum())
+        ne_weld = int((value.eq_type == types.EqType.WELD).sum())
+        ne_joint = int((value.eq_type == types.EqType.JOINT).sum())
+        ne = ne_connect * 3 + ne_weld * 6 + ne_joint
+
+    if disableflags & types.DisableBit.FRICTIONLOSS:
+        nf = 0
+    else:
+        nf = int((value.dof_frictionloss > 0).sum()) + int((value.tendon_frictionloss > 0).sum())
+
+    if disableflags & types.DisableBit.LIMIT:
+        nl = 0
+    else:
+        nl = int(value.jnt_limited.sum()) + int(value.tendon_limited.sum())
+
+    if disableflags & types.DisableBit.CONTACT:
+        ncon_ = 0
+        nc = 0
+    else:
+        dims = collision_driver.make_condim(value)
+        ncon_ = dims.numel()
+        nc = int((dims == 1).sum()) + int((dims == 3).sum()) * 4
+
+    nefc = ne + nf + nl + nc
+    return (ne, nf, nl, ncon_, nefc)
+
+
 def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
+    global _model_cache_id_counter
+    _model_cache_id_counter += 1
+
     mesh_kwargs = mesh.get(value)
-    result = {}
+    result = {"cache_id": _model_cache_id_counter}
     for k, v in mesh_kwargs.items():
         result[k] = tuple(torch.tensor(x) if x is not None else None for x in v)
     # mesh_convex: one ConvexMesh per mesh
@@ -151,6 +199,32 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     result["dof_hasfrictionloss"] = np.array(value.dof_frictionloss > 0)
     result["geom_rbound_hfield"] = np.array(value.geom_rbound)
     result["tendon_hasfrictionloss"] = np.array(value.tendon_frictionloss > 0)
+    result["has_gravcomp"] = bool((value.body_gravcomp != 0).any())
+
+    ij = []
+    for i in range(value.nv):
+        j = i
+        while j > -1:
+            ij.append((i, j))
+            j = value.dof_parentid[j]
+    rows, cols = zip(*ij) if ij else ((), ())
+    result["dof_tri_row"] = np.array(rows, dtype=np.int64)
+    result["dof_tri_col"] = np.array(cols, dtype=np.int64)
+
+    actuator_info = []
+    for i in range(value.nu):
+        trntype = int(value.actuator_trntype[i])
+        trnid = int(value.actuator_trnid[i, 0])
+        jnt_type = dofadr = qposadr = 0
+        if trntype != types.TrnType.TENDON:
+            jnt_type = int(value.jnt_type[trnid])
+            dofadr = int(value.jnt_dofadr[trnid])
+            qposadr = int(value.jnt_qposadr[trnid])
+        actuator_info.append((trntype, trnid, jnt_type, dofadr, qposadr))
+    result["actuator_info"] = tuple(actuator_info)
+
+    result["constraint_sizes_py"] = _compute_constraint_sizes(value)
+
     return result
 
 
@@ -174,7 +248,7 @@ def _data_derived(value: mujoco.MjData) -> dict[str, Any]:
 
 
 def _option_derived(value: types.Option) -> dict[str, Any]:
-    has_fluid = value.density > 0 or value.viscosity > 0 or (value.wind != 0.0).any()
+    has_fluid = bool(value.density > 0 or value.viscosity > 0 or (value.wind != 0.0).any())
     return {"has_fluid_params": has_fluid}
 
 

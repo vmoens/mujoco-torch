@@ -578,44 +578,13 @@ def _get_collision_cache(m: Model) -> tuple:
 
 
 def constraint_sizes(m: Model) -> tuple[int, int, int, int, int]:
-    """Compute (ne, nf, nl, ncon, nefc) purely from Model (no Data needed).
+    """Return (ne, nf, nl, ncon, nefc) purely from Model (no Data needed).
 
-    All constraint / contact counts are deterministic functions of the model
-    geometry and options.  Computing them from Model rather than Data avoids
-    ``int(tensor)`` / ``.item()`` calls that are incompatible with
-    ``torch.vmap``.
+    These are pre-computed at ``device_put`` time and stored on the Model
+    so that the values are plain Python ints visible as compile-time
+    constants to ``torch.compile``.
     """
-    if m.opt.disableflags & DisableBit.CONSTRAINT:
-        return 0, 0, 0, 0, 0
-
-    if m.opt.disableflags & DisableBit.EQUALITY:
-        ne = 0
-    else:
-        ne_connect = int((m.eq_type == EqType.CONNECT).sum())
-        ne_weld = int((m.eq_type == EqType.WELD).sum())
-        ne_joint = int((m.eq_type == EqType.JOINT).sum())
-        ne = ne_connect * 3 + ne_weld * 6 + ne_joint
-
-    if m.opt.disableflags & DisableBit.FRICTIONLOSS:
-        nf = 0
-    else:
-        nf = int(m.dof_hasfrictionloss.sum()) + int(m.tendon_hasfrictionloss.sum())
-
-    if m.opt.disableflags & DisableBit.LIMIT:
-        nl = 0
-    else:
-        nl = int(m.jnt_limited.sum()) + int(m.tendon_limited.sum())
-
-    if m.opt.disableflags & DisableBit.CONTACT:
-        ncon_ = 0
-        nc = 0
-    else:
-        dims = make_condim(m)
-        ncon_ = dims.numel()
-        nc = int((dims == 1).sum()) + int((dims == 3).sum()) * 4
-
-    nefc = ne + nf + nl + nc
-    return ne, nf, nl, ncon_, nefc
+    return m.constraint_sizes_py
 
 
 @torch.compiler.disable

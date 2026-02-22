@@ -37,9 +37,15 @@ NSTEPS = 10_000
 SEED = 42
 
 
+WARMUP = 10
+BENCH_STEPS = 500
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Policy-driven ant viewer")
     parser.add_argument("--compile", action="store_true", help="torch.compile the policy + step")
+    parser.add_argument("--headless", action="store_true", help="run without viewer (useful for compile diagnostics)")
+    parser.add_argument("--benchmark", action="store_true", help="warmup then measure per-step time")
     return parser.parse_args()
 
 
@@ -86,18 +92,46 @@ def main(args):
         dx = mujoco_torch.device_put(d_mj)
         print(f"Compiled in {time.perf_counter() - t0:.1f}s")
 
-    with mujoco.viewer.launch_passive(m_mj, d_mj) as viewer:
-        for _ in range(NSTEPS):
+    if args.benchmark:
+        for _ in range(WARMUP):
             dx = step_fn(mx, dx)
-            mujoco_torch.device_get_into(d_mj, dx)
-            viewer.sync()
 
-            time.sleep(m_mj.opt.timestep)
+        times = []
+        for _ in range(BENCH_STEPS):
+            t0 = time.perf_counter()
+            dx = step_fn(mx, dx)
+            times.append(time.perf_counter() - t0)
 
-            if not viewer.is_running():
-                break
+        times_ms = [t * 1e3 for t in times]
+        times_ms.sort()
+        median = times_ms[len(times_ms) // 2]
+        p10 = times_ms[len(times_ms) // 10]
+        p90 = times_ms[len(times_ms) * 9 // 10]
+        mean = sum(times_ms) / len(times_ms)
+        mode = "compile" if args.compile else "eager"
+        print(f"[{mode}] {BENCH_STEPS} steps after {WARMUP} warmup")
+        print(f"  median: {median:.2f} ms/step  ({1e3 / median:.0f} steps/s)")
+        print(f"  mean:   {mean:.2f} ms/step")
+        print(f"  p10:    {p10:.2f} ms   p90: {p90:.2f} ms")
+    elif args.headless:
+        t0 = time.perf_counter()
+        for i in range(NSTEPS):
+            dx = step_fn(mx, dx)
+        elapsed = time.perf_counter() - t0
+        print(f"Ran {NSTEPS} steps in {elapsed:.2f}s ({NSTEPS / elapsed:.0f} steps/s)")
+    else:
+        with mujoco.viewer.launch_passive(m_mj, d_mj) as viewer:
+            for _ in range(NSTEPS):
+                dx = step_fn(mx, dx)
+                mujoco_torch.device_get_into(d_mj, dx)
+                viewer.sync()
 
-    print(f"Ran {NSTEPS} steps.")
+                time.sleep(m_mj.opt.timestep)
+
+                if not viewer.is_running():
+                    break
+
+        print(f"Ran {NSTEPS} steps.")
 
 
 if __name__ == "__main__":

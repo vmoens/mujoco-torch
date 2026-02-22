@@ -549,18 +549,15 @@ def transmission(m: Model, d: Data) -> Data:
     moments: list[torch.Tensor] = []
 
     for i in range(m.nu):
-        trntype = m.actuator_trntype[i]
+        trntype, trnid, jnt_type_i, dofadr, qposadr = m.actuator_info[i]
         gear = m.actuator_gear[i]
-        trnid = m.actuator_trnid[i, 0]
 
         if trntype == TrnType.TENDON:
             lengths.append(d.ten_length[trnid] * gear[0])
             moments.append(d.ten_J[trnid] * gear[0])
             continue
 
-        jnt_typ = JointType(m.jnt_type[trnid])
-        dofadr = m.jnt_dofadr[trnid]
-        qposadr = m.jnt_qposadr[trnid]
+        jnt_typ = JointType(jnt_type_i)
 
         if jnt_typ == JointType.FREE:
             qpos = d.qpos[qposadr : qposadr + 7]
