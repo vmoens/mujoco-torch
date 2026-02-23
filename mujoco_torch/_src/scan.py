@@ -73,6 +73,9 @@ def _take(obj: Y, idx) -> Y:
     def take(x):
         if not x.shape[0]:
             return x
+        nonlocal idx
+        if idx.device != x.device:
+            idx = idx.to(x.device)
         return x[idx]
 
     return tree_map(take, obj)
