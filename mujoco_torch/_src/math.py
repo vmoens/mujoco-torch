@@ -416,4 +416,11 @@ def concatenate(data):
     filtered = [x for x in data if x is not None]
     if not filtered:
         return None
+    device = None
+    for t in filtered:
+        if t.device.type != "cpu":
+            device = t.device
+            break
+    if device is not None:
+        filtered = [t.to(device) if t.device != device else t for t in filtered]
     return torch.cat(filtered, dim=0)

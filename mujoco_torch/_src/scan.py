@@ -49,6 +49,18 @@ def _np_to_long(x):
     return torch.as_tensor(np.asarray(x), dtype=torch.long)
 
 
+def _cat_device_safe(tensors):
+    """Concatenates tensors, moving all to the device of the first non-CPU tensor."""
+    device = None
+    for t in tensors:
+        if t.device.type != "cpu":
+            device = t.device
+            break
+    if device is not None:
+        tensors = tuple(t.to(device) if t.device != device else t for t in tensors)
+    return torch.cat(tensors)
+
+
 def _take(obj: Y, idx) -> Y:
     """Takes idxs on any pytree given to it.
 
@@ -695,7 +707,7 @@ def body_tree(
             y_typ = [y_[i] for y_ in y_typ]
         if typ != "b":
             y_typ = tree_map(lambda x: torch.flatten(x, 0, 1), y_typ)
-        y_typ = tree_map(lambda *x: torch.cat(x), *y_typ)
+        y_typ = tree_map(lambda *x: _cat_device_safe(x), *y_typ)
         if torch.compiler.is_compiling():
             y_take = cache["y_take_torch"][i]
         else:
