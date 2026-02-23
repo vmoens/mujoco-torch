@@ -504,7 +504,7 @@ def flat(
         for i, typ in enumerate(out_types):
             _check_output(ys[i], order_dict[typ], typ, i)
             ids = np.concatenate(
-                [np.hstack(v[typ].numpy() if isinstance(v[typ], torch.Tensor) else v[typ]) for _, v in active_kti]
+                [np.hstack(v[typ].cpu().numpy() if isinstance(v[typ], torch.Tensor) else v[typ]) for _, v in active_kti]
             )
             input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
             reorder_idx = _np_to_long(_index(ids, input_order))
