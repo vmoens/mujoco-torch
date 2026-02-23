@@ -118,45 +118,84 @@ def _index(haystack, needle):
     return idx
 
 
-def _nvmap(f: Callable[..., Y], *args) -> Y:
-    """A vmap that accepts numpy arrays.
+def _np_to_safe(val):
+    """Convert a numpy representative value to a Dynamo-safe Python/tensor form."""
+    if isinstance(val, (np.integer, np.floating, np.bool_)):
+        return val.item()
+    if not isinstance(val, np.ndarray):
+        return val
+    if val.ndim == 0:
+        return val.item()
+    if val.size == 0:
+        return ()
+    if val.ndim == 1 and isinstance(val.flat[0], (np.integer, np.bool_)):
+        return tuple(int(x) for x in val)
+    return torch.as_tensor(np.ascontiguousarray(val))
 
-    Numpy arrays are statically vmapped, and the elements are passed to f as
-    static arguments.  The implication is that all the elements of numpy array
-    arguments must be the same.
+
+def _validate_and_convert_np_subset(subset):
+    """Validate that a per-group numpy subset has identical rows, then convert."""
+    if subset.shape[0] > 0 and not np.all(subset == subset[0]):
+        raise RuntimeError(f"numpy arg elements do not match: {subset}")
+    val = subset[0] if subset.shape[0] > 0 else subset
+    return _np_to_safe(val)
+
+
+@torch.compiler.disable
+def _extract_np_for_flat(args, in_types, key_typ_ids_torch, group_has_output):
+    """Pre-extract numpy static args for all flat-scan groups at once.
+
+    Returns a list (one per group) of np_args lists.  Called once per
+    ``flat()`` invocation so there is only one graph break for numpy
+    processing, not one per group.
+    """
+    result = []
+    for (_, typ_ids_t), has_output in zip(key_typ_ids_torch, group_has_output):
+        if not has_output:
+            result.append(None)
+            continue
+        group_np = []
+        for arg, typ in zip(args, in_types):
+            if not isinstance(arg, np.ndarray):
+                group_np.append(None)
+                continue
+            subset = _take(arg, typ_ids_t[typ])
+            group_np.append(_validate_and_convert_np_subset(subset))
+        result.append(group_np)
+    return result
+
+
+@torch.compiler.disable
+def _extract_np_for_body_tree(args, key_in_take_torch, keys):
+    """Pre-extract numpy static args for all body-tree groups at once.
+
+    Returns a dict mapping key → [None, np_val_0, np_val_1, ...] where
+    the leading None is for the carry argument.
+    """
+    result = {}
+    for key in keys:
+        group_np = [None]  # carry is never numpy
+        for arg, ids in zip(args, key_in_take_torch[key]):
+            if not isinstance(arg, np.ndarray):
+                group_np.append(None)
+                continue
+            subset = _take(arg, ids)
+            group_np.append(_validate_and_convert_np_subset(subset))
+        result[key] = group_np
+    return result
+
+
+def _nvmap(f: Callable[..., Y], np_args, *args) -> Y:
+    """A vmap that accepts pre-extracted numpy static args.
 
     Args:
       f: function to be mapped over
-      *args: args to be mapped along, passed to f
+      np_args: pre-extracted numpy static args (from _extract_np_for_groups)
+      *args: tensor args to be vmapped
 
     Returns:
       the result of vmapping f over args
-
-    Raises:
-      RuntimeError: if numpy arg elements do not match
     """
-    if not torch.compiler.is_compiling():
-        for arg in args:
-            if isinstance(arg, np.ndarray) and arg.shape[0] > 0 and not np.all(arg == arg[0]):
-                raise RuntimeError(f"numpy arg elements do not match: {arg}")
-
-    # split out numpy and torch args: numpy arrays become static args,
-    # everything else (torch tensors, pytrees, None) goes through vmap.
-    # Use shape[0] > 0 (not size > 0) because 2D arrays with shape (n, 0)
-    # still need their first row extracted as a representative empty element.
-    # Numpy scalars are converted to Python scalars so that Dynamo treats
-    # them as constants rather than NumpyNdarrayVariable (which causes graph
-    # breaks on branches like ``if jnt_typ == JointType.FREE``).
-    np_args = []
-    for a in args:
-        if isinstance(a, np.ndarray):
-            val = a[0] if a.shape[0] > 0 else a
-            if isinstance(val, (np.integer, np.floating, np.bool_)):
-                val = val.item()
-            np_args.append(val)
-        else:
-            np_args.append(None)
-    args = [None if isinstance(a, np.ndarray) else a for a in args]
 
     # remove empty args that we should not vmap over
     def _check_empty(a):
@@ -192,6 +231,9 @@ def _nvmap(f: Callable[..., Y], *args) -> Y:
         # No tensor args to vmap over; just call f directly with static args.
         return f(*[n if n is not None else None for n in np_args])
 
+    if torch.compiler.is_compiling():
+        return torch.vmap(outer_f, in_dims=tuple([0] * len(vmap_args)))(*vmap_args)
+
     try:
         return torch.vmap(outer_f, in_dims=tuple([0] * len(vmap_args)))(*vmap_args)
     except ValueError as e:
@@ -202,6 +244,8 @@ def _nvmap(f: Callable[..., Y], *args) -> Y:
 
 def _check_input(m: Model, args: Any, in_types: str) -> None:
     """Checks that scan input has the right shape."""
+    if torch.compiler.is_compiling():
+        return
     size = {
         "b": m.nbody,
         "j": m.njnt,
@@ -314,6 +358,24 @@ def _build_flat_cache(m, in_types, out_types, group_by):
         typ_ids_t = {t: _np_to_long(v) for t, v in typ_ids.items()}
         key_typ_ids_torch.append((key, typ_ids_t))
 
+    # Pre-compute reorder indices for the compile path.
+    # Assumes all has_output groups produce results (always true in production;
+    # only test callbacks that return None break this assumption).
+    active_kti_np = [(k, v) for (k, v), ho in zip(key_typ_ids, group_has_output) if ho]
+    active_keys = set(k for k, _ in active_kti_np)
+    active_order = [typ_ids for key, typ_ids in order if key in active_keys]
+    active_order_per_type = [[o[t] for o in active_order] for t in all_types]
+    active_order_per_type = [
+        np.concatenate(o) if isinstance(o[0], np.ndarray) else np.array(o) for o in active_order_per_type
+    ]
+    order_dict = dict(zip(all_types, active_order_per_type))
+
+    reorder_indices = {}
+    for typ in set(out_types):
+        ids = np.concatenate([np.hstack(v[typ]) for _, v in active_kti_np])
+        input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
+        reorder_indices[typ] = _np_to_long(_index(ids, input_order))
+
     return {
         "key_typ_ids": key_typ_ids,
         "key_typ_ids_torch": key_typ_ids_torch,
@@ -321,9 +383,11 @@ def _build_flat_cache(m, in_types, out_types, group_by):
         "order": order,
         "all_types": all_types,
         "flat_": flat_,
+        "reorder_indices": reorder_indices,
     }
 
 
+@torch.compiler.disable
 def _get_flat_cache(m, in_types, out_types, group_by):
     """Get or build flat scan cache for the given model and type signature."""
     cache_key = (_model_cache_id(m), in_types, out_types, group_by)
@@ -334,7 +398,6 @@ def _get_flat_cache(m, in_types, out_types, group_by):
     return cache
 
 
-@torch.compiler.disable
 def flat(
     m: Model,
     f: Callable[..., Y],
@@ -380,52 +443,59 @@ def flat(
     cache = _get_flat_cache(m, in_types, out_types, group_by)
     key_typ_ids_torch = cache["key_typ_ids_torch"]
     group_has_output = cache["group_has_output"]
-    order = cache["order"]
-    all_types = cache["all_types"]
     flat_ = cache["flat_"]
 
-    # use cached grouping to take the right data subsets and call vmap(f)
+    # Pre-extract numpy static args for all groups (one graph break total)
+    all_np_args = _extract_np_for_flat(args, in_types, key_typ_ids_torch, group_has_output)
+
+    # Call vmap per group (Dynamo unrolls this constant-length loop)
     ys = []
-    for (_, typ_ids_t), has_output in zip(key_typ_ids_torch, group_has_output):
+    for i, ((_, typ_ids_t), has_output) in enumerate(zip(key_typ_ids_torch, group_has_output)):
         if has_output:
-            f_args = [_take(arg, typ_ids_t[typ]) for arg, typ in zip(args, in_types)]
-            y = _nvmap(f, *f_args)
-            ys.append(y)
+            f_args = [
+                _take(arg, typ_ids_t[typ]) if not isinstance(arg, np.ndarray) else None
+                for arg, typ in zip(args, in_types)
+            ]
+            ys.append(_nvmap(f, all_np_args[i], *f_args))
         else:
             ys.append(None)
 
-    # remove None results from the final output
-    key_typ_ids_torch = [v for y, v in zip(ys, key_typ_ids_torch) if y is not None]
+    # Filter None results and matching cache entries
+    active_kti = [v for y, v in zip(ys, key_typ_ids_torch) if y is not None]
     ys = [y for y in ys if y is not None]
-    ys_keys = set([k for k, *_ in key_typ_ids_torch])
-    active_order = [o for k, o in order if k in ys_keys]
 
-    # get the original input order
-    active_order_per_type = [[o[t] for o in active_order] for t in all_types]
-    active_order_per_type = [
-        np.concatenate(o) if isinstance(o[0], np.ndarray) else np.array(o) for o in active_order_per_type
-    ]
-    order_dict = dict(zip(all_types, active_order_per_type))
-
-    # concatenate back to a single tree and drop the grouping dimension
+    # Flatten grouped dimensions and concatenate across groups
     f_ret_is_seq = isinstance(ys[0], (list, tuple))
     ys = ys if f_ret_is_seq else [[y] for y in ys]
     ys = [[v if typ in flat_ else torch.flatten(v, 0, 1) for v, typ in zip(y, out_types)] for y in ys]
     ys = tree_map(lambda *x: concatenate(x), *ys)
 
-    # put concatenated results back in order
+    # Put concatenated results back in model order
     reordered_ys = []
-    for i, (y, typ) in enumerate(zip(ys, out_types)):
-        _check_output(y, order_dict[typ], typ, i)
-        ids = np.concatenate(
-            [np.hstack(v[typ].numpy() if isinstance(v[typ], torch.Tensor) else v[typ]) for _, v in key_typ_ids_torch]
-        )
-        input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
-        reorder_idx = _np_to_long(_index(ids, input_order))
-        reordered_ys.append(_take(y, reorder_idx))
-    y = reordered_ys if f_ret_is_seq else reordered_ys[0]
+    if torch.compiler.is_compiling():
+        reorder_indices = cache["reorder_indices"]
+        for i, typ in enumerate(out_types):
+            reordered_ys.append(_take(ys[i], reorder_indices[typ]))
+    else:
+        order = cache["order"]
+        all_types = cache["all_types"]
+        ys_keys = set(k for k, _ in active_kti)
+        active_order = [typ_ids for key, typ_ids in order if key in ys_keys]
+        active_order_per_type = [[o[t] for o in active_order] for t in all_types]
+        active_order_per_type = [
+            np.concatenate(o) if isinstance(o[0], np.ndarray) else np.array(o) for o in active_order_per_type
+        ]
+        order_dict = dict(zip(all_types, active_order_per_type))
+        for i, typ in enumerate(out_types):
+            _check_output(ys[i], order_dict[typ], typ, i)
+            ids = np.concatenate(
+                [np.hstack(v[typ].numpy() if isinstance(v[typ], torch.Tensor) else v[typ]) for _, v in active_kti]
+            )
+            input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
+            reorder_idx = _np_to_long(_index(ids, input_order))
+            reordered_ys.append(_take(ys[i], reorder_idx))
 
-    return y
+    return reordered_ys if f_ret_is_seq else reordered_ys[0]
 
 
 def _build_body_tree_cache(m, in_types, out_types, reverse):
@@ -507,14 +577,22 @@ def _build_body_tree_cache(m, in_types, out_types, reverse):
     for key, take_list in key_in_take.items():
         key_in_take_torch[key] = [_np_to_long(ids) for ids in take_list]
 
+    # Pre-compute reorder indices for the compile path (assumes all keys
+    # produce output, which is always true in production code).
+    y_take_torch = []
+    for i in range(len(out_types)):
+        y_take_torch.append(_np_to_long(np.argsort(np.concatenate([key_y_take[key][i] for key in keys]))))
+
     return {
         "key_in_take_torch": key_in_take_torch,
         "key_y_take": key_y_take,
         "keys": keys,
         "carry_maps": carry_maps,
+        "y_take_torch": y_take_torch,
     }
 
 
+@torch.compiler.disable
 def _get_body_tree_cache(m, in_types, out_types, reverse):
     """Get or build body_tree scan cache."""
     cache_key = (_model_cache_id(m), in_types, out_types, reverse)
@@ -525,7 +603,6 @@ def _get_body_tree_cache(m, in_types, out_types, reverse):
     return cache
 
 
-@torch.compiler.disable
 def body_tree(
     m: Model,
     f: Callable[..., Y],
@@ -570,7 +647,10 @@ def body_tree(
     keys = cache["keys"]
     carry_maps = cache["carry_maps"]
 
-    # use cached grouping to take the right data subsets and call vmap(f)
+    # Pre-extract numpy static args for all groups (one graph break total)
+    all_np_args = _extract_np_for_body_tree(args, key_in_take_torch, keys)
+
+    # Scan over groups in tree order, carrying results up/down
     key_y = {}
     for key in keys:
         carry = None
@@ -589,30 +669,35 @@ def body_tree(
         elif key in carry_maps:
             parent_keys, take_idx = carry_maps[key]
             ys_all = [key_y[p] for p in parent_keys]
-            # Filter out None results from parent groups
             ys_filtered = [y_val for y_val in ys_all if y_val is not None]
             if ys_filtered:
                 y = tree_map(lambda *x: concatenate(x), *ys_filtered) if len(ys_filtered) > 1 else ys_filtered[0]
                 take_fn = lambda x, i=take_idx: _take(x, i)
                 carry = tree_map(take_fn, y)
 
-        f_args = [_take(arg, ids) for arg, ids in zip(args, key_in_take_torch[key])]
-        key_y[key] = _nvmap(f, carry, *f_args)
+        f_args = [
+            _take(arg, ids) if not isinstance(arg, np.ndarray) else None
+            for arg, ids in zip(args, key_in_take_torch[key])
+        ]
+        key_y[key] = _nvmap(f, all_np_args[key], carry, *f_args)
 
-    # slice None results from the final output
-    keys = [k for k in keys if key_y[k] is not None]
+    # Filter out keys whose callback returned None
+    active_keys = [k for k in keys if key_y[k] is not None]
 
-    # concatenate ys, drop grouping dimensions, put back in order
+    # Concatenate results, drop grouping dimensions, put back in model order
     y = []
     for i, typ in enumerate(out_types):
-        y_typ = [key_y[key] for key in keys]
+        y_typ = [key_y[key] for key in active_keys]
         if len(out_types) > 1:
             y_typ = [y_[i] for y_ in y_typ]
         if typ != "b":
             y_typ = tree_map(lambda x: torch.flatten(x, 0, 1), y_typ)
         y_typ = tree_map(lambda *x: torch.cat(x), *y_typ)
-        y_take = _np_to_long(np.argsort(np.concatenate([key_y_take[key][i] for key in keys])))
-        _check_output(y_typ, y_take, typ, i)
+        if torch.compiler.is_compiling():
+            y_take = cache["y_take_torch"][i]
+        else:
+            y_take = _np_to_long(np.argsort(np.concatenate([key_y_take[key][i] for key in active_keys])))
+            _check_output(y_typ, y_take, typ, i)
         y.append(_take(y_typ, y_take))
 
     y = y[0] if len(out_types) == 1 else y

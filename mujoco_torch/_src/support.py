@@ -142,7 +142,7 @@ def jac(m: Model, d: Data, point: torch.Tensor, body_id: torch.Tensor) -> tuple[
     index = vmap_compatible_index_select(torch.as_tensor(m.body_rootid), dim=0, index=body_id).long()
 
     offset = point - vmap_compatible_index_select(d.subtree_com, dim=0, index=index)
-    jacp = torch.vmap(lambda a, b=offset: a[3:] + torch.linalg.cross(a[:3], b))(d.cdof)
+    jacp = torch.vmap(lambda a, b=offset: a[3:] + math.cross(a[:3], b))(d.cdof)
     jacp = torch.vmap(torch.multiply)(jacp, mask)
     jacr = torch.vmap(torch.multiply)(d.cdof[:, :3], mask)
 

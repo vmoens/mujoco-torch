@@ -179,7 +179,7 @@ def _ray_triangle(
     valid = (t0 >= 0) & (t1 >= 0) & (t0 + t1 <= 1)
 
     # intersect ray with plane of triangle
-    nrm = torch.linalg.cross(vert[0] - vert[2], vert[1] - vert[2])
+    nrm = math.cross(vert[0] - vert[2], vert[1] - vert[2])
     dist = math.safe_div(
         torch.dot(vert[2] - pnt, nrm),
         torch.dot(vec, nrm),

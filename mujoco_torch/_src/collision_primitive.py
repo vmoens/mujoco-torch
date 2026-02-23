@@ -54,7 +54,7 @@ def plane_capsule(plane: GeomInfo, cap: GeomInfo) -> Contact:
         torch.tensor([0.0, 0.0, 1.0], dtype=axis.dtype, device=axis.device),
     )
     b = torch.where(b_norm < 0.5, torch.where((-0.5 < n[1]) & (n[1] < 0.5), y, z), b)
-    frame = torch.stack([n, b, torch.linalg.cross(n, b)]).unsqueeze(0)
+    frame = torch.stack([n, b, math.cross(n, b)]).unsqueeze(0)
     segment = axis * cap.geom_size[1]
     contacts = []
     for offset in [segment, -segment]:
@@ -109,7 +109,7 @@ def plane_cylinder(plane: GeomInfo, cylinder: GeomInfo) -> Contact:
 
     # compute sideways vector: vec1
     prjvec1 = -prjvec * 0.5
-    vec1 = math.normalize(torch.linalg.cross(vec, axis)) * cylinder.geom_size[0]
+    vec1 = math.normalize(math.cross(vec, axis)) * cylinder.geom_size[0]
     vec1 = vec1 * (torch.sqrt(torch.tensor(3.0, device=vec.device)) * 0.5)
 
     # disk parallel to plane

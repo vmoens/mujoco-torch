@@ -41,7 +41,7 @@ from mujoco_torch._src.collision_primitive import (
 # pylint: disable=g-importing-member
 from mujoco_torch._src.collision_types import GeomInfo
 from mujoco_torch._src.dataclasses import MjTensorClass
-from mujoco_torch._src.types import Contact, Data, DisableBit, EqType, GeomType, Model
+from mujoco_torch._src.types import Contact, Data, DisableBit, GeomType, Model
 
 
 @dataclasses.dataclass(frozen=True)

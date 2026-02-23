@@ -177,13 +177,13 @@ def _manifold_points(poly: torch.Tensor, poly_mask: torch.Tensor, poly_norm: tor
     b_idx = (((a - poly) ** 2).sum(dim=1) + dist_mask).argmax()
     b = _gather_idx(poly, b_idx)
     # choose point c furthest along the axis orthogonal to (a-b)
-    ab = torch.linalg.cross(poly_norm, a - b)
+    ab = math.cross(poly_norm, a - b)
     ap = a - poly
     c_idx = (torch.abs(ap @ ab) + dist_mask).argmax()
     c = _gather_idx(poly, c_idx)
     # choose point d furthest from the other two triangle edges
-    ac = torch.linalg.cross(poly_norm, a - c)
-    bc = torch.linalg.cross(poly_norm, b - c)
+    ac = math.cross(poly_norm, a - c)
+    bc = math.cross(poly_norm, b - c)
     bp = b - poly
     dist_bp = torch.abs(bp @ bc) + dist_mask
     dist_ap = torch.abs(ap @ ac) + dist_mask
@@ -307,7 +307,7 @@ def _clip(
     clipping_p0 = torch.roll(clipping_poly, 1, dims=0)
     clipping_plane_pts = clipping_p0
     clipping_p1 = clipping_poly
-    clipping_plane_normals = torch.vmap(torch.linalg.cross, (0, None))(
+    clipping_plane_normals = torch.vmap(math.cross, (0, None))(
         clipping_p1 - clipping_p0,
         clipping_normal,
     )
@@ -316,7 +316,7 @@ def _clip(
     subject_edge_p0 = torch.roll(subject_poly, 1, dims=0)
     subject_plane_pts = subject_edge_p0
     subject_edge_p1 = subject_poly
-    subject_plane_normals = torch.vmap(torch.linalg.cross, (0, None))(
+    subject_plane_normals = torch.vmap(math.cross, (0, None))(
         subject_edge_p1 - subject_edge_p0,
         subject_normal,
     )
@@ -438,7 +438,7 @@ def _sat_hull_hull(
     edge_dir_b = unique_edges_b[:, 0] - unique_edges_b[:, 1]
     edge_dir_a_r = torch.tile(edge_dir_a, dims=(unique_edges_b.shape[0], 1))
     edge_dir_b_r = edge_dir_b.repeat_interleave(unique_edges_a.shape[0], dim=0)
-    edge_edge_axes = torch.vmap(torch.linalg.cross)(edge_dir_a_r, edge_dir_b_r)
+    edge_edge_axes = torch.vmap(math.cross)(edge_dir_a_r, edge_dir_b_r)
     edge_edge_axes = torch.vmap(lambda x: math.normalize(x))(edge_edge_axes)
 
     axes = torch.cat([normals_a, normals_b, edge_edge_axes])
@@ -554,7 +554,7 @@ def sphere_convex(sphere: GeomInfo, convex: GeomInfo) -> Contact:
     pt = _project_pt_onto_plane(sphere_pos, face[0], normal)
     edge_p0 = torch.roll(face, 1, dims=0)
     edge_p1 = face
-    edge_normals = torch.vmap(torch.linalg.cross, (0, None))(
+    edge_normals = torch.vmap(math.cross, (0, None))(
         edge_p1 - edge_p0,
         normal,
     )
@@ -624,7 +624,7 @@ def capsule_convex(cap: GeomInfo, convex: GeomInfo) -> Contact:
     # face.
     edge_p0 = torch.roll(face, 1, dims=0)
     edge_p1 = face
-    edge_normals = torch.vmap(torch.linalg.cross, (0, None))(
+    edge_normals = torch.vmap(math.cross, (0, None))(
         edge_p1 - edge_p0,
         normal,
     )

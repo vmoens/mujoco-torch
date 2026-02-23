@@ -228,7 +228,7 @@ def sensor_vel(m: Model, d: Data) -> Data:
             rot = d.site_xmat[objid]
             cvel = d.cvel[bodyid]
             subtree_com = d.subtree_com[m.body_rootid[bodyid]]
-            sensor = torch.vmap(lambda vec, dif, rot: rot.T @ (vec[3:] - torch.linalg.cross(dif, vec[:3])))(
+            sensor = torch.vmap(lambda vec, dif, rot: rot.T @ (vec[3:] - math.cross(dif, vec[:3])))(
                 cvel, pos - subtree_com, rot
             )
             adr = (adr[:, None] + torch.arange(3)).reshape(-1)
@@ -303,9 +303,9 @@ def sensor_acc(m: Model, d: Data) -> Data:
 
                 def _accelerometer(cvel, cacc, diff, rot):
                     ang = rot.T @ cvel[:3]
-                    lin = rot.T @ (cvel[3:] - torch.linalg.cross(diff, cvel[:3]))
-                    acc = rot.T @ (cacc[3:] - torch.linalg.cross(diff, cacc[:3]))
-                    correction = torch.linalg.cross(ang, lin)
+                    lin = rot.T @ (cvel[3:] - math.cross(diff, cvel[:3]))
+                    acc = rot.T @ (cacc[3:] - math.cross(diff, cacc[:3]))
+                    correction = math.cross(ang, lin)
                     return acc + correction
 
                 bodyid = m.site_bodyid[objid]
@@ -336,7 +336,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
                 dif = d.site_xpos[objid] - d.subtree_com[rootid]
 
                 def _torque(vec, dif, rot):
-                    return rot.T @ (vec[:3] - torch.linalg.cross(dif, vec[3:]))
+                    return rot.T @ (vec[:3] - math.cross(dif, vec[3:]))
 
                 sensor = torch.vmap(_torque)(cfrc_int, dif, site_xmat)
             else:

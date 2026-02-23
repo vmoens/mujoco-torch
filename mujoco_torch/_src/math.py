@@ -18,6 +18,22 @@ import mujoco
 import torch
 
 
+def cross(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Cross product of 3-element vectors.
+
+    Drop-in replacement for ``cross`` that avoids the
+    ``sizes()`` crash under nested vmap + compile.
+    """
+    return torch.stack(
+        [
+            a[..., 1] * b[..., 2] - a[..., 2] * b[..., 1],
+            a[..., 2] * b[..., 0] - a[..., 0] * b[..., 2],
+            a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0],
+        ],
+        dim=-1,
+    )
+
+
 def safe_div(num: float | torch.Tensor, den: float | torch.Tensor) -> float | torch.Tensor:
     """Safe division for case where denominator is zero."""
     return num / (den + mujoco.mjMINVAL * (den == 0))
@@ -112,7 +128,7 @@ def rotate(vec: torch.Tensor, quat: torch.Tensor) -> torch.Tensor:
         raise ValueError("vec must have no batch dimensions.")
     s, u = quat[0], quat[1:]
     r = 2 * (torch.dot(u, vec) * u) + (s * s - torch.dot(u, u)) * vec
-    r = r + 2 * s * torch.linalg.cross(u, vec)
+    r = r + 2 * s * cross(u, vec)
     return r
 
 
@@ -251,8 +267,8 @@ def inert_mul(i: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     """
     tri_id = torch.tensor([[0, 3, 4], [3, 1, 5], [4, 5, 2]])  # cinert inr order
     inr, pos, mass = i[tri_id], i[6:9], i[9]
-    ang = torch.mv(inr, v[:3]) + torch.linalg.cross(pos, v[3:])
-    vel = mass * v[3:] - torch.linalg.cross(pos, v[:3])
+    ang = torch.mv(inr, v[:3]) + cross(pos, v[3:])
+    vel = mass * v[3:] - cross(pos, v[:3])
     return torch.cat((ang, vel))
 
 
@@ -274,7 +290,7 @@ def transform_motion(vel: torch.Tensor, offset: torch.Tensor, rotmat: torch.Tens
     """
     # TODO(robotics-simulation): are quaternions faster here
     ang, vel = vel[:3], vel[3:]
-    vel = rotmat.T @ (vel - torch.linalg.cross(offset, ang))
+    vel = rotmat.T @ (vel - cross(offset, ang))
     ang = rotmat.T @ ang
     return torch.cat([ang, vel])
 
@@ -289,8 +305,8 @@ def motion_cross(u, v):
     Returns:
       resultant spatial motion
     """
-    ang = torch.linalg.cross(u[:3], v[:3])
-    vel = torch.linalg.cross(u[3:], v[:3]) + torch.linalg.cross(u[:3], v[3:])
+    ang = cross(u[:3], v[:3])
+    vel = cross(u[3:], v[:3]) + cross(u[:3], v[3:])
     return torch.cat((ang, vel))
 
 
@@ -304,8 +320,8 @@ def motion_cross_force(v, f):
     Returns:
       resultant force
     """
-    ang = torch.linalg.cross(v[:3], f[:3]) + torch.linalg.cross(v[3:], f[3:])
-    vel = torch.linalg.cross(v[:3], f[3:])
+    ang = cross(v[:3], f[:3]) + cross(v[3:], f[3:])
+    vel = cross(v[:3], f[3:])
     return torch.cat((ang, vel))
 
 
@@ -317,7 +333,7 @@ def orthogonals(a: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     b = b - a * a.dot(b)
     # normalize b. however if a is a zero vector, zero b as well.
     b = normalize(b) * torch.any(a)
-    return b, torch.linalg.cross(a, b)
+    return b, cross(a, b)
 
 
 def make_frame(a: torch.Tensor) -> torch.Tensor:

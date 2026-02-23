@@ -62,7 +62,7 @@ def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, to
     pt = _project_pt_onto_plane(sphere_pos, face[0], normal)
     edge_p0 = torch.roll(face, 1, dims=0)
     edge_p1 = face
-    edge_normals = torch.vmap(torch.linalg.cross, (0, None))(edge_p1 - edge_p0, normal)
+    edge_normals = torch.vmap(math.cross, (0, None))(edge_p1 - edge_p0, normal)
     edge_dist = torch.vmap(lambda pp, pn: torch.dot(pt - pp, pn))(edge_p0, edge_normals)
     inside = torch.all(edge_dist <= 0)
 
@@ -120,7 +120,7 @@ def _capsule_prism(cap: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torc
 
     edge_p0 = torch.roll(face, 1, dims=0)
     edge_p1 = face
-    edge_normals = torch.vmap(torch.linalg.cross, (0, None))(edge_p1 - edge_p0, normal)
+    edge_normals = torch.vmap(math.cross, (0, None))(edge_p1 - edge_p0, normal)
     cap_pts_clipped, mask = _clip_edge_to_planes(cap_pts[0], cap_pts[1], edge_p0, edge_normals)
     cap_pts_clipped = cap_pts_clipped - normal * cap.geom_size[0]
     face_pts = torch.vmap(_project_pt_onto_plane, (0, None, None))(cap_pts_clipped, face[0], normal)

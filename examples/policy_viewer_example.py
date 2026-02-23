@@ -115,7 +115,7 @@ def main(args):
         print(f"  p10:    {p10:.2f} ms   p90: {p90:.2f} ms")
     elif args.headless:
         t0 = time.perf_counter()
-        for i in range(NSTEPS):
+        for _ in range(NSTEPS):
             dx = step_fn(mx, dx)
         elapsed = time.perf_counter() - t0
         print(f"Ran {NSTEPS} steps in {elapsed:.2f}s ({NSTEPS / elapsed:.0f} steps/s)")

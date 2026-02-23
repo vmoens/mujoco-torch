@@ -147,7 +147,7 @@ def com_pos(m: Model, d: Data) -> Data:
     # map inertias to frame centered at subtree_com
     @torch.vmap
     def inert_com(inert, ximat, off, mass):
-        h = torch.linalg.cross(off.unsqueeze(0).expand(3, 3), -torch.eye(3, dtype=off.dtype, device=off.device))
+        h = math.cross(off.unsqueeze(0).expand(3, 3), -torch.eye(3, dtype=off.dtype, device=off.device))
         inert = math.matmul_unroll(ximat * inert, ximat.T)
         inert = inert + math.matmul_unroll(h, h.T) * mass
         # cinert is triu(inert), mass * off, mass
@@ -163,7 +163,7 @@ def com_pos(m: Model, d: Data) -> Data:
     def cdof_fn(jnt_typs, root_com, xmat, xanchor, xaxis):
         cdofs = []
 
-        dof_com_fn = lambda a, o: torch.cat([a, torch.linalg.cross(a, o)])
+        dof_com_fn = lambda a, o: torch.cat([a, math.cross(a, o)])
 
         for i, jnt_typ in enumerate(jnt_typs):
             offset = root_com - xanchor[i]

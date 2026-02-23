@@ -101,7 +101,7 @@ class ScanTest(absltest.TestCase):
 
         # we should not call functions for which we know we will discard the results
         def no_world(jnt_types, val):
-            if jnt_types.size == 0:
+            if len(jnt_types) == 0:
                 self.fail("world has no dofs, should not be called")
             return val + sum(jnt_types)
 
