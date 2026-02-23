@@ -75,7 +75,7 @@ def _take(obj: Y, idx) -> Y:
     """
     if isinstance(obj, np.ndarray):
         if isinstance(idx, torch.Tensor):
-            return obj[idx.numpy()]
+            return obj[idx.cpu().numpy()]
         return obj[idx]
 
     # Ensure idx is a torch tensor for torch pytree operations
