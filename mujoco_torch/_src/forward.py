@@ -103,7 +103,7 @@ def _actuation(m: Model, d: Data) -> Data:
     ctrl = d.ctrl
     if not m.opt.disableflags & DisableBit.CLAMPCTRL:
         ctrlrange = torch.where(
-            torch.as_tensor(m.actuator_ctrllimited[:, None], dtype=torch.bool),
+            torch.as_tensor(m.actuator_ctrllimited[:, None], dtype=torch.bool, device=ctrl.device),
             m.actuator_ctrlrange,
             torch.tensor([-torch.inf, torch.inf]),
         )
@@ -139,7 +139,7 @@ def _actuation(m: Model, d: Data) -> Data:
     ctrl_act = ctrl
     if m.na:
         act_last_dim = d.act[m.actuator_actadr + m.actuator_actnum - 1]
-        ctrl_act = torch.where(torch.as_tensor(m.actuator_actadr == -1), ctrl, act_last_dim)
+        ctrl_act = torch.where(torch.as_tensor(m.actuator_actadr == -1, device=ctrl.device), ctrl, act_last_dim)
 
     def get_force(*args):
         gain_t, gain_p, bias_t, bias_p, len_, vel, ctrl_act = args
@@ -174,7 +174,7 @@ def _actuation(m: Model, d: Data) -> Data:
         group_by="u",
     )
     forcerange = torch.where(
-        torch.as_tensor(m.actuator_forcelimited[:, None], dtype=torch.bool),
+        torch.as_tensor(m.actuator_forcelimited[:, None], dtype=torch.bool, device=force.device),
         m.actuator_forcerange,
         torch.tensor([-torch.inf, torch.inf]),
     )
@@ -188,11 +188,11 @@ def _actuation(m: Model, d: Data) -> Data:
 
     # clamp qfrc_actuator
     actfrcrange = torch.where(
-        torch.as_tensor(m.jnt_actfrclimited[:, None], dtype=torch.bool),
+        torch.as_tensor(m.jnt_actfrclimited[:, None], dtype=torch.bool, device=qfrc_actuator.device),
         m.jnt_actfrcrange,
         torch.tensor([-torch.inf, torch.inf]),
     )
-    actfrcrange = actfrcrange[torch.as_tensor(m.dof_jntid)]
+    actfrcrange = actfrcrange[torch.as_tensor(m.dof_jntid, device=actfrcrange.device)]
     qfrc_actuator = torch.clamp(qfrc_actuator, actfrcrange[:, 0], actfrcrange[:, 1])
 
     d = d.replace(act_dot=act_dot, qfrc_actuator=qfrc_actuator)
@@ -244,7 +244,7 @@ def _advance(
     if m.na:
         act = d.act + act_dot * m.opt.timestep
         actrange = torch.where(
-            torch.as_tensor(m.actuator_actlimited[:, None], dtype=torch.bool),
+            torch.as_tensor(m.actuator_actlimited[:, None], dtype=torch.bool, device=act.device),
             m.actuator_actrange,
             torch.tensor([-torch.inf, torch.inf]),
         )
@@ -272,7 +272,7 @@ def _euler(m: Model, d: Data) -> Data:
     if not m.opt.disableflags & DisableBit.EULERDAMP:
         if support.is_sparse(m):
             qM = d.qM.clone()
-            madr = torch.as_tensor(m.dof_Madr).to(dtype=torch.long, device=d.qM.device)
+            madr = torch.as_tensor(m.dof_Madr, device=d.qM.device).long()
             qM = qM.index_add(0, madr, m.opt.timestep * m.dof_damping)
         else:
             qM = d.qM + torch.diag(m.opt.timestep * m.dof_damping)

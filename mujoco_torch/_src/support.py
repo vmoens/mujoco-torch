@@ -74,8 +74,8 @@ def make_m(
 
     if d is not None:
         qm = qm.clone()
-        dof_Madr = torch.as_tensor(m.dof_Madr)
-        qm[dof_Madr] = qm[dof_Madr] + d
+    dof_Madr = torch.as_tensor(m.dof_Madr, device=qm.device)
+    qm[dof_Madr] = qm[dof_Madr] + d
 
     return qm
 
@@ -137,9 +137,9 @@ def jac(m: Model, d: Data, point: torch.Tensor, body_id: torch.Tensor) -> tuple[
     device = point.device if isinstance(point, torch.Tensor) else None
     mask = (torch.arange(m.nbody, device=device) == body_id) * 1
     mask = scan.body_tree(m, fn, "b", "b", mask, reverse=True)
-    mask = mask[torch.as_tensor(m.dof_bodyid)] > 0
+    mask = mask[torch.as_tensor(m.dof_bodyid, device=mask.device)] > 0
 
-    index = vmap_compatible_index_select(torch.as_tensor(m.body_rootid), dim=0, index=body_id).long()
+    index = vmap_compatible_index_select(torch.as_tensor(m.body_rootid, device=point.device), dim=0, index=body_id).long()
 
     offset = point - vmap_compatible_index_select(d.subtree_com, dim=0, index=index)
     jacp = torch.vmap(lambda a, b=offset: a[3:] + math.cross(a[:3], b))(d.cdof)

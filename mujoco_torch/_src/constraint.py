@@ -310,8 +310,9 @@ def _instantiate_limit_slide_hinge(m: Model, d: Data) -> _Efc | None:
 
     jnt_range = m.jnt_range[ids]
     jnt_margin = m.jnt_margin[ids]
-    qposadr = torch.as_tensor(m.jnt_qposadr[ids]).long()
-    dofadr = torch.as_tensor(m.jnt_dofadr[ids]).long()
+    _dev = d.qpos.device
+    qposadr = torch.as_tensor(m.jnt_qposadr[ids], device=_dev).long()
+    dofadr = torch.as_tensor(m.jnt_dofadr[ids], device=_dev).long()
 
     @torch.vmap
     def fn(jnt_range, jnt_margin, qposadr, dofadr):
@@ -370,7 +371,7 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc | None:
     if (m.opt.disableflags & DisableBit.CONTACT) or ncon_fl == 0 or actual_ncon == 0:
         return None
 
-    geom_bodyid = torch.as_tensor(m.geom_bodyid)
+    geom_bodyid = torch.as_tensor(m.geom_bodyid, device=d.qpos.device)
 
     @torch.vmap
     def fn(c: Contact):
@@ -412,7 +413,7 @@ def _instantiate_contact(m: Model, d: Data) -> _Efc | None:
     if (m.opt.disableflags & DisableBit.CONTACT) or ncon_fr == 0 or actual_ncon == 0:
         return None
 
-    geom_bodyid = torch.as_tensor(m.geom_bodyid)
+    geom_bodyid = torch.as_tensor(m.geom_bodyid, device=d.qpos.device)
 
     @torch.vmap
     def fn(c: Contact):
