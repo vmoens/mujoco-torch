@@ -55,8 +55,8 @@ def make_m(
 ) -> torch.Tensor:
     """Computes M = a @ b.T + diag(d)."""
 
-    i = torch.as_tensor(m.dof_tri_row, device=a.device)
-    j = torch.as_tensor(m.dof_tri_col, device=a.device)
+    i = m.dof_tri_row_t
+    j = m.dof_tri_col_t
 
     if not is_sparse(m):
         qm = a @ b.T
@@ -74,7 +74,7 @@ def make_m(
 
     if d is not None:
         qm = qm.clone()
-    dof_Madr = torch.as_tensor(m.dof_Madr, device=qm.device)
+    dof_Madr = m.dof_Madr_t
     qm[dof_Madr] = qm[dof_Madr] + d
 
     return qm
@@ -86,8 +86,8 @@ def full_m(m: Model, d: Data) -> torch.Tensor:
     if not is_sparse(m):
         return d.qM
 
-    i = torch.as_tensor(m.dof_tri_row, device=d.qM.device)
-    j = torch.as_tensor(m.dof_tri_col, device=d.qM.device)
+    i = m.dof_tri_row_t
+    j = m.dof_tri_col_t
 
     mat = torch.zeros((m.nv, m.nv), dtype=d.qM.dtype, device=d.qM.device)
     mat[(i, j)] = d.qM
@@ -114,8 +114,7 @@ def vmap_compatible_index_select(tensor, dim, index):
         index = torch.tensor([index]).long() if scalar_index else torch.as_tensor(index).long()
 
     is_batched = False
-    if is_batchedtensor(index):
-        # _remove_batch_dim(batched_output, vmap_level, batch_size, out_dim)
+    if not torch.compiler.is_compiling() and is_batchedtensor(index):
         lvl = maybe_get_level(index)
         index = _remove_batch_dim(index, lvl, 0, 0)
         is_batched = True
@@ -137,9 +136,9 @@ def jac(m: Model, d: Data, point: torch.Tensor, body_id: torch.Tensor) -> tuple[
     device = point.device if isinstance(point, torch.Tensor) else None
     mask = (torch.arange(m.nbody, device=device) == body_id) * 1
     mask = scan.body_tree(m, fn, "b", "b", mask, reverse=True)
-    mask = mask[torch.as_tensor(m.dof_bodyid, device=mask.device)] > 0
+    mask = mask[m.dof_bodyid_t] > 0
 
-    index = vmap_compatible_index_select(torch.as_tensor(m.body_rootid, device=point.device), dim=0, index=body_id).long()
+    index = vmap_compatible_index_select(m.body_rootid_t, dim=0, index=body_id).long()
 
     offset = point - vmap_compatible_index_select(d.subtree_com, dim=0, index=index)
     jacp = torch.vmap(lambda a, b=offset: a[3:] + math.cross(a[:3], b))(d.cdof)

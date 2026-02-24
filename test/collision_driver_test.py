@@ -471,11 +471,7 @@ class NconTest(parameterized.TestCase):
 class TopKContactTest(absltest.TestCase):
     """Tests top-k contacts."""
 
-    _CAPSULES = """
-    <mujoco>
-      <custom>
-        <numeric data="2" name="max_contact_points"/>
-      </custom>
+    _CAPSULES_BODY = """
       <worldbody>
         <body pos="0 0 0.54">
           <joint axis="1 0 0" type="free"/>
@@ -490,20 +486,35 @@ class TopKContactTest(absltest.TestCase):
           <geom fromto="-0.4 0 0 0.4 0 0" size="0.05" type="capsule"/>
         </body>
       </worldbody>
+  """
+
+    _CAPSULES_TOP_K = f"""
+    <mujoco>
+      <custom>
+        <numeric data="2" name="max_contact_points"/>
+      </custom>
+      {_CAPSULES_BODY}
+    </mujoco>
+  """
+
+    _CAPSULES_ALL = f"""
+    <mujoco>
+      {_CAPSULES_BODY}
     </mujoco>
   """
 
     def test_top_k_contacts(self):
-        m = mujoco.MjModel.from_xml_string(self._CAPSULES)
-        mx_top_k = mujoco_torch.device_put(m)
-        mx_all = mx_top_k.replace(nnumeric=0, name_numericadr=np.array([]), numeric_data=np.array([]))
-        d = mujoco.MjData(m)
+        m_top_k = mujoco.MjModel.from_xml_string(self._CAPSULES_TOP_K)
+        mx_top_k = mujoco_torch.device_put(m_top_k)
+
+        m_all = mujoco.MjModel.from_xml_string(self._CAPSULES_ALL)
+        mx_all = mujoco_torch.device_put(m_all)
+
+        d = mujoco.MjData(m_all)
         dx = mujoco_torch.device_put(d)
 
         collision_jit_fn = mujoco_torch.collision
         kinematics_jit_fn = mujoco_torch.kinematics
-        # collision_jit_fn = torch.compile(mujoco_torch.collision)
-        # kinematics_jit_fn = torch.compile(mujoco_torch.kinematics)
         dx = kinematics_jit_fn(mx_all, dx)
 
         dx_all = collision_jit_fn(mx_all, dx)

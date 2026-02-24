@@ -48,8 +48,9 @@ def _sphere(pos: torch.Tensor, size: torch.Tensor) -> torch.Tensor:
 
 
 def _capsule(pos: torch.Tensor, size: torch.Tensor) -> torch.Tensor:
-    pa = -size[1] * torch.tensor([0, 0, 1], dtype=pos.dtype, device=pos.device)
-    pb = size[1] * torch.tensor([0, 0, 1], dtype=pos.dtype, device=pos.device)
+    unit_z = torch.eye(3, dtype=pos.dtype, device=pos.device)[2]
+    pa = -size[1] * unit_z
+    pb = size[1] * unit_z
     ab = pb - pa
     ap = pos - pa
     denom = ab.dot(ab)

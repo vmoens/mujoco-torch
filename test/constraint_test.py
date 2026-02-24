@@ -22,7 +22,7 @@ import torch
 from absl.testing import absltest, parameterized
 
 import mujoco_torch
-from mujoco_torch._src import constraint, test_util
+from mujoco_torch._src import collision_driver, constraint, forward, test_util
 
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import DisableBit, SolverType
@@ -114,7 +114,9 @@ class ConstraintTest(parameterized.TestCase):
 
         mx = mujoco_torch.device_put(m)
         dx = mujoco_torch.device_put(d)
-        efc = constraint._instantiate_limit_slide_hinge(mx, dx)
+        precomp = mx.constraint_data_py["limit_slide_hinge"]
+        self.assertIsNotNone(precomp)
+        efc = constraint._instantiate_limit_slide_hinge(mx, dx, precomp)
 
         # first joint is outside the joint range
         np.testing.assert_array_almost_equal(efc.J[0, 0], -1.0)
@@ -132,12 +134,14 @@ class ConstraintTest(parameterized.TestCase):
 
         m.opt.disableflags = m.opt.disableflags | DisableBit.REFSAFE
         mx = mujoco_torch.device_put(m)
-        k, *_ = constraint._kbi(mx, solimp, solref, pos)
+        refsafe = mx.constraint_data_py["refsafe"]
+        k, *_ = constraint._kbi(mx, solimp, solref, pos, refsafe=refsafe)
         self.assertEqual(k, 1 / (0.99**2 * timeconst**2))
 
         m.opt.disableflags = m.opt.disableflags & ~DisableBit.REFSAFE
         mx = mujoco_torch.device_put(m)
-        k, *_ = constraint._kbi(mx, solimp, solref, pos)
+        refsafe = mx.constraint_data_py["refsafe"]
+        k, *_ = constraint._kbi(mx, solimp, solref, pos, refsafe=refsafe)
         self.assertEqual(k, 1 / (0.99**2 * (2 * m.opt.timestep) ** 2))
 
     def test_disableconstraint(self):
@@ -172,13 +176,15 @@ class ConstraintTest(parameterized.TestCase):
         m.opt.disableflags = m.opt.disableflags & ~DisableBit.CONTACT
         mx, dx = mujoco_torch.device_put(m), mujoco_torch.device_put(d)
         dx = dx.tree_replace({"contact.frame": dx.contact.frame.reshape((-1, 3, 3))})
+        ncon_fl, ncon_fr = mx.condim_counts_py
+        self.assertGreater(ncon_fr, 0)
         efc = constraint._instantiate_contact(mx, dx)
         self.assertIsNotNone(efc)
 
         m.opt.disableflags = m.opt.disableflags | DisableBit.CONTACT
-        mx, dx = mujoco_torch.device_put(m), mujoco_torch.device_put(d)
-        efc = constraint._instantiate_contact(mx, dx)
-        self.assertIsNone(efc)
+        mx = mujoco_torch.device_put(m)
+        ncon_fl, ncon_fr = mx.condim_counts_py
+        self.assertEqual(ncon_fr, 0)
 
     _FRICTIONLOSS_XML = """
     <mujoco>
@@ -248,9 +254,10 @@ class ConstraintTest(parameterized.TestCase):
         d = mujoco.MjData(m)
         mx = mujoco_torch.device_put(m)
         dx = mujoco_torch.device_put(d)
-        efc = constraint._instantiate_friction(mx, dx)
+        precomp = mx.constraint_data_py["friction"]
+        self.assertIsNotNone(precomp)
+        efc = constraint._instantiate_friction(mx, dx, precomp)
 
-        self.assertIsNotNone(efc)
         self.assertEqual(efc.J.shape[0], 1)
         np.testing.assert_array_almost_equal(efc.frictionloss.numpy(), [2.0])
         np.testing.assert_array_almost_equal(efc.pos.numpy(), [0.0])
@@ -258,13 +265,9 @@ class ConstraintTest(parameterized.TestCase):
     def test_disable_frictionloss(self):
         """Test that FRICTIONLOSS disable flag suppresses friction rows."""
         m = mujoco.MjModel.from_xml_string(self._FRICTIONLOSS_DOF_ONLY_XML)
-        d = mujoco.MjData(m)
-
         m.opt.disableflags = m.opt.disableflags | DisableBit.FRICTIONLOSS
         mx = mujoco_torch.device_put(m)
-        dx = mujoco_torch.device_put(d)
-        efc = constraint._instantiate_friction(mx, dx)
-        self.assertIsNone(efc)
+        self.assertIsNone(mx.constraint_data_py["friction"])
 
     _CONDIM1_XML = """
     <mujoco>
@@ -326,10 +329,9 @@ class ConstraintTest(parameterized.TestCase):
 
         mx = mujoco_torch.device_put(m)
         dx = mujoco_torch.device_put(d)
-        efc = constraint._instantiate_contact_frictionless(mx, dx)
-
-        if efc is not None:
-            # condim=1 produces exactly 1 row per contact
+        ncon_fl, _ = mx.condim_counts_py
+        if ncon_fl > 0:
+            efc = constraint._instantiate_contact_frictionless(mx, dx)
             ncon = dx.contact.dist.shape[0]
             self.assertEqual(efc.J.shape[0], ncon)
 
@@ -355,8 +357,6 @@ class ConstraintTest(parameterized.TestCase):
         mx = mujoco_torch.device_put(m)
         ne, nf, nl, ncon_, nefc = constraint.constraint_sizes(mx)
 
-        from mujoco_torch._src import collision_driver
-
         dims = collision_driver.make_condim(mx)
         ncon_fl = int((dims == 1).sum())
         ncon_fr = int((dims == 3).sum())
@@ -364,6 +364,128 @@ class ConstraintTest(parameterized.TestCase):
         self.assertEqual(ncon_, ncon_fl + ncon_fr)
         expected_nc = ncon_fl * 1 + ncon_fr * 4
         self.assertEqual(nefc, ne + nf + nl + expected_nc)
+
+    def test_make_constraint_no_graph_breaks_contacts(self):
+        """make_constraint compiles with fullgraph=True for contact models."""
+        m = test_util.load_test_file("ant.xml")
+        d = mujoco.MjData(m)
+        d.qpos[2] = 0.0
+        mujoco.mj_forward(m, d)
+
+        mx = mujoco_torch.device_put(m)
+        dx = mujoco_torch.device_put(d)
+        dx = forward._position(mx, dx)
+
+        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True)
+        dx_compiled = compiled_fn(mx, dx)
+        dx_eager = constraint.make_constraint(mx, dx)
+
+        np.testing.assert_allclose(
+            dx_compiled.efc_J.detach().numpy(),
+            dx_eager.efc_J.detach().numpy(),
+            atol=1e-6,
+            err_msg="compiled make_constraint efc_J mismatch (contacts)",
+        )
+        np.testing.assert_allclose(
+            dx_compiled.efc_D.detach().numpy(),
+            dx_eager.efc_D.detach().numpy(),
+            atol=1e-6,
+            err_msg="compiled make_constraint efc_D mismatch (contacts)",
+        )
+        np.testing.assert_allclose(
+            dx_compiled.efc_aref.detach().numpy(),
+            dx_eager.efc_aref.detach().numpy(),
+            atol=1e-6,
+            err_msg="compiled make_constraint efc_aref mismatch (contacts)",
+        )
+
+    def test_make_constraint_no_graph_breaks_equality(self):
+        """make_constraint compiles with fullgraph=True for equality models."""
+        m = test_util.load_test_file("equality.xml")
+        d = mujoco.MjData(m)
+        mujoco.mj_forward(m, d)
+
+        mx = mujoco_torch.device_put(m)
+        dx = mujoco_torch.device_put(d)
+        dx = forward._position(mx, dx)
+
+        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True)
+        dx_compiled = compiled_fn(mx, dx)
+        dx_eager = constraint.make_constraint(mx, dx)
+
+        np.testing.assert_allclose(
+            dx_compiled.efc_J.detach().numpy(),
+            dx_eager.efc_J.detach().numpy(),
+            atol=1e-6,
+            err_msg="compiled make_constraint efc_J mismatch (equality)",
+        )
+
+    def test_make_constraint_no_graph_breaks_frictionloss(self):
+        """make_constraint compiles with fullgraph=True for frictionloss models."""
+        m = mujoco.MjModel.from_xml_string(self._FRICTIONLOSS_DOF_ONLY_XML)
+        d = mujoco.MjData(m)
+        d.qvel[:] = 1.0
+        mujoco.mj_forward(m, d)
+
+        mx = mujoco_torch.device_put(m)
+        dx = mujoco_torch.device_put(d)
+        dx = forward._position(mx, dx)
+
+        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True)
+        dx_compiled = compiled_fn(mx, dx)
+        dx_eager = constraint.make_constraint(mx, dx)
+
+        np.testing.assert_allclose(
+            dx_compiled.efc_J.detach().numpy(),
+            dx_eager.efc_J.detach().numpy(),
+            atol=1e-6,
+            err_msg="compiled make_constraint efc_J mismatch (frictionloss)",
+        )
+        np.testing.assert_allclose(
+            dx_compiled.efc_frictionloss.detach().numpy(),
+            dx_eager.efc_frictionloss.detach().numpy(),
+            atol=1e-6,
+            err_msg="compiled make_constraint efc_frictionloss mismatch",
+        )
+
+    def test_make_constraint_no_graph_breaks_mixed_condim(self):
+        """make_constraint compiles with fullgraph=True for mixed condim models."""
+        m = mujoco.MjModel.from_xml_string(self._MIXED_CONDIM_XML)
+        d = mujoco.MjData(m)
+        d.qpos[2] = 0.05
+        d.qpos[9] = 0.05
+        mujoco.mj_forward(m, d)
+
+        mx = mujoco_torch.device_put(m)
+        dx = mujoco_torch.device_put(d)
+        dx = forward._position(mx, dx)
+
+        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True)
+        dx_compiled = compiled_fn(mx, dx)
+        dx_eager = constraint.make_constraint(mx, dx)
+
+        np.testing.assert_allclose(
+            dx_compiled.efc_J.detach().numpy(),
+            dx_eager.efc_J.detach().numpy(),
+            atol=1e-6,
+            err_msg="compiled make_constraint efc_J mismatch (mixed condim)",
+        )
+
+    def test_make_constraint_no_graph_breaks_disabled(self):
+        """make_constraint compiles with fullgraph=True when constraints disabled."""
+        m = test_util.load_test_file("ant.xml")
+        m.opt.disableflags = m.opt.disableflags | DisableBit.CONSTRAINT
+        d = mujoco.MjData(m)
+        mujoco.mj_forward(m, d)
+
+        mx = mujoco_torch.device_put(m)
+        dx = mujoco_torch.device_put(d)
+        dx = forward._position(mx, dx)
+
+        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True)
+        dx_compiled = compiled_fn(mx, dx)
+
+        self.assertEqual(dx_compiled.efc_J.shape[0], 0)
 
 
 if __name__ == "__main__":

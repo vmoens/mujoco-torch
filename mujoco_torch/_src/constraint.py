@@ -17,10 +17,14 @@
 import mujoco
 
 # pylint: enable=g-importing-member
-import numpy as np
 import torch
 
 from mujoco_torch._src import collision_driver, math, support
+from mujoco_torch._src.math import _CachedConst
+
+_MJMINVAL = _CachedConst(mujoco.mjMINVAL)
+_ONE = _CachedConst(1.0)
+_ZERO_I32 = _CachedConst(0, dtype=torch.int32)
 
 
 def _vmap_index(tensor: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
@@ -40,7 +44,7 @@ def _vmap_index(tensor: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
 from torch.utils._pytree import tree_map
 
 from mujoco_torch._src.dataclasses import MjTensorClass
-from mujoco_torch._src.types import Contact, Data, DisableBit, EqType, JointType, Model
+from mujoco_torch._src.types import Contact, Data, Model
 
 
 class _Efc(MjTensorClass):
@@ -60,20 +64,21 @@ def _kbi(
     solref: torch.Tensor,
     solimp: torch.Tensor,
     pos: torch.Tensor,
+    refsafe: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Calculates stiffness, damping, and impedance of a constraint."""
     timeconst, dampratio = solref
 
-    if not m.opt.disableflags & DisableBit.REFSAFE:
+    if not refsafe:
         timeconst = torch.maximum(timeconst, 2 * m.opt.timestep) * (timeconst > 0)
 
     dmin, dmax, width, mid, power = solimp
 
     dmin = torch.clamp(dmin, mujoco.mjMINIMP, mujoco.mjMAXIMP)
     dmax = torch.clamp(dmax, mujoco.mjMINIMP, mujoco.mjMAXIMP)
-    width = torch.maximum(torch.tensor(mujoco.mjMINVAL, dtype=width.dtype, device=width.device), width)
+    width = torch.maximum(_MJMINVAL.get(width.dtype, width.device), width)
     mid = torch.clamp(mid, mujoco.mjMINIMP, mujoco.mjMAXIMP)
-    power = torch.maximum(torch.tensor(1.0, dtype=power.dtype, device=power.device), power)
+    power = torch.maximum(_ONE.get(power.dtype, power.device), power)
 
     # See https://mujoco.readthedocs.io/en/latest/modeling.html#solver-parameters
     k = 1 / (dmax * dmax * timeconst * timeconst * dampratio * dampratio)
@@ -93,31 +98,24 @@ def _kbi(
     return k, b, imp  # corresponds to K, B, I of efc_KBIP
 
 
-def _instantiate_equality_connect(m: Model, d: Data) -> _Efc | None:
+def _instantiate_equality_connect(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for connect equality constraints."""
-
-    ids = np.nonzero(m.eq_type == EqType.CONNECT)[0]
-
-    if (m.opt.disableflags & DisableBit.EQUALITY) or ids.size == 0:
-        return None
-
-    id1, id2, data = m.eq_obj1id[ids], m.eq_obj2id[ids], m.eq_data[ids]
-    active = d.eq_active[ids]
     _dev = d.qpos.device
-    id1_t = torch.as_tensor(id1, dtype=torch.long, device=_dev)
-    id2_t = torch.as_tensor(id2, dtype=torch.long, device=_dev)
+    ids = precomp["ids"].to(_dev)
+    id1_t = precomp["id1"].to(_dev)
+    id2_t = precomp["id2"].to(_dev)
+
+    data = m.eq_data[ids]
+    active = d.eq_active[ids]
 
     @torch.vmap
     def fn(data, id1, id2, active):
         anchor1, anchor2 = data[0:3], data[3:6]
-        # find global points
         pos1 = _vmap_index(d.xmat, id1) @ anchor1 + _vmap_index(d.xpos, id1)
         pos2 = _vmap_index(d.xmat, id2) @ anchor2 + _vmap_index(d.xpos, id2)
 
-        # compute position error
         cpos = pos1 - pos2
 
-        # compute Jacobian difference (opposite of contact: 0 - 1)
         jacp1, _ = support.jac(m, d, pos1, id1)
         jacp2, _ = support.jac(m, d, pos2, id2)
         j = (jacp1 - jacp2).T
@@ -125,55 +123,45 @@ def _instantiate_equality_connect(m: Model, d: Data) -> _Efc | None:
         result = (j, cpos, math.norm(cpos).unsqueeze(0).expand(3))
         return tree_map(lambda x: x * active, result)
 
-    # flatten: (ncon, 3, ...) -> (ncon*3, ...)
     j, pos, pos_norm = tree_map(lambda x: x.reshape(-1, *x.shape[2:]), fn(data, id1_t, id2_t, active))
-    invweight = m.body_invweight0[id1, 0] + m.body_invweight0[id2, 0]
+    invweight = m.body_invweight0[id1_t, 0] + m.body_invweight0[id2_t, 0]
     invweight = invweight.repeat_interleave(3)
     solref = torch.tile(m.eq_solref[ids], (3, 1))
     solimp = torch.tile(m.eq_solimp[ids], (3, 1))
     frictionloss = torch.zeros_like(pos_norm)
 
-    return _Efc(j, pos, pos_norm, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
+    return _Efc(J=j, pos=pos, pos_norm=pos_norm, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
 
 
-def _instantiate_equality_weld(m: Model, d: Data) -> _Efc | None:
+def _instantiate_equality_weld(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for weld equality constraints."""
-
-    ids = np.nonzero(m.eq_type == EqType.WELD)[0]
-
-    if (m.opt.disableflags & DisableBit.EQUALITY) or ids.size == 0:
-        return None
-
-    id1, id2, data = m.eq_obj1id[ids], m.eq_obj2id[ids], m.eq_data[ids]
-    active = d.eq_active[ids]
     _dev = d.qpos.device
-    id1_t = torch.as_tensor(id1, dtype=torch.long, device=_dev)
-    id2_t = torch.as_tensor(id2, dtype=torch.long, device=_dev)
+    ids = precomp["ids"].to(_dev)
+    id1_t = precomp["id1"].to(_dev)
+    id2_t = precomp["id2"].to(_dev)
+
+    data = m.eq_data[ids]
+    active = d.eq_active[ids]
 
     @torch.vmap
     def fn(data, id1, id2, active):
         anchor1, anchor2 = data[0:3], data[3:6]
         relpose, torquescale = data[6:10], data[10]
 
-        # find global points
         pos1 = _vmap_index(d.xmat, id1) @ anchor2 + _vmap_index(d.xpos, id1)
         pos2 = _vmap_index(d.xmat, id2) @ anchor1 + _vmap_index(d.xpos, id2)
 
-        # compute position error
         cpos = pos1 - pos2
 
-        # compute Jacobian difference (opposite of contact: 0 - 1)
         jacp1, jacr1 = support.jac(m, d, pos1, id1)
         jacp2, jacr2 = support.jac(m, d, pos2, id2)
         jacdifp = jacp1 - jacp2
         jacdifr = (jacr1 - jacr2) * torquescale
 
-        # compute orientation error: neg(q1) * q0 * relpose (axis components only)
         quat = math.quat_mul(_vmap_index(d.xquat, id1), relpose)
         quat1 = math.quat_inv(_vmap_index(d.xquat, id2))
-        crot = math.quat_mul(quat1, quat)[1:]  # copy axis components
+        crot = math.quat_mul(quat1, quat)[1:]
 
-        # correct rotation Jacobian: 0.5 * neg(q1) * (jac0-jac1) * q0 * relpose
         jac_fn = lambda j: math.quat_mul(math.quat_mul_axis(quat1, j), quat)[1:]
         jacdifr = 0.5 * torch.vmap(jac_fn)(jacdifr)
 
@@ -183,25 +171,22 @@ def _instantiate_equality_weld(m: Model, d: Data) -> _Efc | None:
         result = (j, pos, math.norm(pos).unsqueeze(0).expand(6))
         return tree_map(lambda x: x * active, result)
 
-    # flatten: (ncon, 6, ...) -> (ncon*6, ...)
     j, pos, pos_norm = tree_map(lambda x: x.reshape(-1, *x.shape[2:]), fn(data, id1_t, id2_t, active))
-    invweight = m.body_invweight0[id1] + m.body_invweight0[id2]
+    invweight = m.body_invweight0[id1_t] + m.body_invweight0[id2_t]
     invweight = invweight.repeat_interleave(3)
     solref = torch.tile(m.eq_solref[ids], (6, 1))
     solimp = torch.tile(m.eq_solimp[ids], (6, 1))
     frictionloss = torch.zeros_like(pos_norm)
 
-    return _Efc(j, pos, pos_norm, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
+    return _Efc(J=j, pos=pos, pos_norm=pos_norm, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
 
 
-def _instantiate_friction(m: Model, d: Data) -> _Efc | None:
+def _instantiate_friction(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for DOF and tendon frictionloss."""
-    dof_ids = np.nonzero(m.dof_hasfrictionloss)[0]
-    tendon_ids = np.nonzero(m.tendon_hasfrictionloss)[0]
-
-    size = dof_ids.size + tendon_ids.size
-    if (m.opt.disableflags & DisableBit.FRICTIONLOSS) or size == 0:
-        return None
+    _dev = d.qpos.device
+    dof_ids = precomp["dof_ids"].to(_dev)
+    tendon_ids = precomp["tendon_ids"].to(_dev)
+    size = precomp["size"]
 
     eye = torch.eye(m.nv, dtype=m.dof_frictionloss.dtype, device=m.dof_frictionloss.device)
 
@@ -224,27 +209,22 @@ def _instantiate_friction(m: Model, d: Data) -> _Efc | None:
     solimp = torch.cat([si_dof, si_ten])
     pos = torch.zeros(size, dtype=frictionloss.dtype, device=frictionloss.device)
 
-    return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[size])
+    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[size])
 
 
-def _instantiate_equality_joint(m: Model, d: Data) -> _Efc | None:
+def _instantiate_equality_joint(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for joint equality constraints."""
-
-    ids = np.nonzero(m.eq_type == EqType.JOINT)[0]
-
-    if (m.opt.disableflags & DisableBit.EQUALITY) or ids.size == 0:
-        return None
-
-    id1, id2, data = m.eq_obj1id[ids], m.eq_obj2id[ids], m.eq_data[ids]
-    active = d.eq_active[ids]
-    dofadr1, dofadr2 = m.jnt_dofadr[id1], m.jnt_dofadr[id2]
-    qposadr1, qposadr2 = m.jnt_qposadr[id1], m.jnt_qposadr[id2]
     _dev = d.qpos.device
-    id2_t = torch.as_tensor(id2, dtype=torch.long, device=_dev)
-    dofadr1_t = torch.as_tensor(dofadr1, dtype=torch.long, device=_dev)
-    dofadr2_t = torch.as_tensor(dofadr2, dtype=torch.long, device=_dev)
-    qposadr1_t = torch.as_tensor(qposadr1, dtype=torch.long, device=_dev)
-    qposadr2_t = torch.as_tensor(qposadr2, dtype=torch.long, device=_dev)
+    ids = precomp["ids"].to(_dev)
+    id1_t = precomp["id1"].to(_dev)
+    id2_t = precomp["id2"].to(_dev)
+    dofadr1_t = precomp["dofadr1"].to(_dev)
+    dofadr2_t = precomp["dofadr2"].to(_dev)
+    qposadr1_t = precomp["qposadr1"].to(_dev)
+    qposadr2_t = precomp["qposadr2"].to(_dev)
+
+    data = m.eq_data[ids]
+    active = d.eq_active[ids]
 
     @torch.vmap
     def fn(data, id2, dofadr1, dofadr2, qposadr1, qposadr2, active):
@@ -265,25 +245,23 @@ def _instantiate_equality_joint(m: Model, d: Data) -> _Efc | None:
         return j * active, pos * active
 
     j, pos = fn(data, id2_t, dofadr1_t, dofadr2_t, qposadr1_t, qposadr2_t, active)
-    invweight = m.dof_invweight0[dofadr1] + m.dof_invweight0[dofadr2] * (id2 > -1)
+    invweight = m.dof_invweight0[dofadr1_t] + m.dof_invweight0[dofadr2_t] * (id2_t > -1)
     solref, solimp = m.eq_solref[ids], m.eq_solimp[ids]
     frictionloss = torch.zeros_like(pos)
 
-    return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
+    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
 
 
-def _instantiate_limit_ball(m: Model, d: Data) -> _Efc | None:
+def _instantiate_limit_ball(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for ball joint limits."""
-
-    ids = np.nonzero((m.jnt_type == JointType.BALL) & m.jnt_limited)[0]
-
-    if (m.opt.disableflags & DisableBit.LIMIT) or ids.size == 0:
-        return None
+    _dev = d.qpos.device
+    ids = precomp["ids"].to(_dev)
+    qposadr = precomp["qposadr"].to(_dev)
+    dofadr = precomp["dofadr"].to(_dev)
+    dofadr_first = precomp["dofadr_first"].to(_dev)
 
     jnt_range = m.jnt_range[ids]
     jnt_margin = m.jnt_margin[ids]
-    qposadr = torch.stack([torch.arange(q, q + 4) for q in m.jnt_qposadr[ids]])
-    dofadr = torch.stack([torch.arange(da, da + 3) for da in m.jnt_dofadr[ids]])
 
     @torch.vmap
     def fn(jnt_range, jnt_margin, qposadr, dofadr):
@@ -295,27 +273,22 @@ def _instantiate_limit_ball(m: Model, d: Data) -> _Efc | None:
         return j * active, pos * active
 
     j, pos = fn(jnt_range, jnt_margin, qposadr, dofadr)
-    invweight = m.dof_invweight0[m.jnt_dofadr[ids]]
+    invweight = m.dof_invweight0[dofadr_first]
     solref, solimp = m.jnt_solref[ids], m.jnt_solimp[ids]
     frictionloss = torch.zeros_like(pos)
 
-    return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
+    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
 
 
-def _instantiate_limit_slide_hinge(m: Model, d: Data) -> _Efc | None:
+def _instantiate_limit_slide_hinge(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for slide and hinge joint limits."""
-
-    slide_hinge = np.isin(m.jnt_type, (JointType.SLIDE, JointType.HINGE))
-    ids = np.nonzero(slide_hinge & m.jnt_limited)[0]
-
-    if (m.opt.disableflags & DisableBit.LIMIT) or ids.size == 0:
-        return None
+    _dev = d.qpos.device
+    ids = precomp["ids"].to(_dev)
+    qposadr = precomp["qposadr"].to(_dev)
+    dofadr = precomp["dofadr"].to(_dev)
 
     jnt_range = m.jnt_range[ids]
     jnt_margin = m.jnt_margin[ids]
-    _dev = d.qpos.device
-    qposadr = torch.as_tensor(m.jnt_qposadr[ids], device=_dev).long()
-    dofadr = torch.as_tensor(m.jnt_dofadr[ids], device=_dev).long()
 
     @torch.vmap
     def fn(jnt_range, jnt_margin, qposadr, dofadr):
@@ -333,15 +306,13 @@ def _instantiate_limit_slide_hinge(m: Model, d: Data) -> _Efc | None:
     solref, solimp = m.jnt_solref[ids], m.jnt_solimp[ids]
     frictionloss = torch.zeros_like(pos)
 
-    return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
+    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
 
 
-def _instantiate_limit_tendon(m: Model, d: Data) -> _Efc | None:
+def _instantiate_limit_tendon(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for tendon limits."""
-    tendon_id = np.nonzero(m.tendon_limited)[0]
-
-    if (m.opt.disableflags & DisableBit.LIMIT) or tendon_id.size == 0:
-        return None
+    _dev = d.qpos.device
+    tendon_id = precomp["tendon_id"].to(_dev)
 
     length = d.ten_length[tendon_id]
     j = d.ten_J[tendon_id]
@@ -360,70 +331,56 @@ def _instantiate_limit_tendon(m: Model, d: Data) -> _Efc | None:
     pos = pos * active
     frictionloss = torch.zeros_like(pos)
 
-    return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
+    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
 
 
-def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc | None:
+def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc:
     """Calculates constraint rows for frictionless (condim=1) contacts.
 
     Each condim=1 contact produces a single normal-force constraint row.
     """
     ncon_fl, _ = m.condim_counts_py
-    actual_ncon = d.contact.dist.shape[0]
-    if (m.opt.disableflags & DisableBit.CONTACT) or ncon_fl == 0 or actual_ncon == 0:
-        return None
-
-    _dev = d.qpos.device
-    geom_bodyid = torch.as_tensor(m.geom_bodyid, device=_dev)
 
     @torch.vmap
     def fn(c: Contact):
         dist = c.dist - c.includemargin
         g1 = c.geom1.long().unsqueeze(0)
         g2 = c.geom2.long().unsqueeze(0)
-        body1 = geom_bodyid.gather(0, g1).squeeze(0)
-        body2 = geom_bodyid.gather(0, g2).squeeze(0)
+        body1 = m.geom_bodyid_t.gather(0, g1).squeeze(0)
+        body2 = m.geom_bodyid_t.gather(0, g2).squeeze(0)
         diff = support.jac_dif_pair(m, d, c.pos, body1, body2)
         invweight0 = m.body_invweight0[:, 0]
         t = invweight0.gather(0, body1.unsqueeze(0)).squeeze(0) + invweight0.gather(0, body2.unsqueeze(0)).squeeze(0)
 
-        # rotate Jacobian differences to contact frame, take normal row only
         j = (c.frame @ diff.T)[0]
 
         active = dist < 0
         return j * active, dist * active, t
 
-    # Select only condim=1 contacts (they come first due to sorting in collision())
     contact = d.contact
-    if contact.batch_size != torch.Size([actual_ncon]):
+    if contact.batch_size != torch.Size([contact.dist.shape[0]]):
         contact = contact.clone(recurse=False)
         contact.auto_batch_size_()
-    contact = contact[:ncon_fl].to(_dev)
+    contact = contact[:ncon_fl]
     j, pos, invweight = fn(contact)
     solref = contact.solref
     solimp = contact.solimp
     frictionloss = torch.zeros_like(pos)
 
-    return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
+    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
 
 
-def _instantiate_contact(m: Model, d: Data) -> _Efc | None:
+def _instantiate_contact(m: Model, d: Data) -> _Efc:
     """Calculates constraint rows for frictional (condim=3) pyramidal contacts."""
     ncon_fl, ncon_fr = m.condim_counts_py
-    actual_ncon = d.contact.dist.shape[0]
-    if (m.opt.disableflags & DisableBit.CONTACT) or ncon_fr == 0 or actual_ncon == 0:
-        return None
-
-    _dev = d.qpos.device
-    geom_bodyid = torch.as_tensor(m.geom_bodyid, device=_dev)
 
     @torch.vmap
     def fn(c: Contact):
         dist = c.dist - c.includemargin
         g1 = c.geom1.long().unsqueeze(0)
         g2 = c.geom2.long().unsqueeze(0)
-        body1 = geom_bodyid.gather(0, g1).squeeze(0)
-        body2 = geom_bodyid.gather(0, g2).squeeze(0)
+        body1 = m.geom_bodyid_t.gather(0, g1).squeeze(0)
+        body2 = m.geom_bodyid_t.gather(0, g2).squeeze(0)
         diff = support.jac_dif_pair(m, d, c.pos, body1, body2)
         invweight0 = m.body_invweight0[:, 0]
         t = invweight0.gather(0, body1.unsqueeze(0)).squeeze(0) + invweight0.gather(0, body2.unsqueeze(0)).squeeze(0)
@@ -445,18 +402,17 @@ def _instantiate_contact(m: Model, d: Data) -> _Efc | None:
 
         return j, invweight, pos, solref, solimp
 
-    # Select only condim=3 contacts (they come after condim=1 due to sorting)
     contact = d.contact
-    if contact.batch_size != torch.Size([actual_ncon]):
+    if contact.batch_size != torch.Size([contact.dist.shape[0]]):
         contact = contact.clone(recurse=False)
         contact.auto_batch_size_()
-    contact = contact[ncon_fl : ncon_fl + ncon_fr].to(_dev)
+    contact = contact[ncon_fl : ncon_fl + ncon_fr]
     res = fn(contact)
     # remove contact grouping dimension: flatten (ncon, 4, ...) to (ncon*4, ...)
     j, invweight, pos, solref, solimp = torch.utils._pytree.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), res)
     frictionloss = torch.zeros_like(pos)
 
-    return _Efc(j, pos, pos, invweight, solref, solimp, frictionloss, batch_size=[j.shape[0]])
+    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
 
 
 constraint_sizes = collision_driver.constraint_sizes
@@ -473,19 +429,15 @@ def count_constraints(m: Model, d: Data) -> tuple[int, int, int, int]:
     return ne, nf, nl, nc
 
 
-@torch.compiler.disable
 def make_constraint(m: Model, d: Data) -> Data:
     """Creates constraint jacobians and other supporting data."""
     ne, nf, nl, ncon, nefc = collision_driver.constraint_sizes(m)
     ns = ne + nf + nl
-    # Use actual data contact count for efc_address with per-condim strides;
-    # device_put on a fresh MjData may produce 0 contacts while the model
-    # expects more.
     actual_ncon = d.contact.dist.shape[0]
-    dims = collision_driver.make_condim(m)
-    dims_actual = dims[:actual_ncon] if actual_ncon < len(dims) else dims
-    if len(dims_actual) > 0:
-        rows_per = torch.where(dims_actual == 1, 1, (dims_actual - 1) * 2)
+    has_contacts = ncon > 0 and actual_ncon > 0
+    if has_contacts:
+        dims = d.contact.contact_dim
+        rows_per = torch.where(dims == 1, 1, (dims - 1) * 2)
         offsets = torch.cumsum(
             torch.cat([torch.zeros(1, dtype=rows_per.dtype), rows_per[:-1]]),
             dim=0,
@@ -495,45 +447,52 @@ def make_constraint(m: Model, d: Data) -> Data:
         efc_address = torch.empty(0, dtype=torch.int64)
     d = d.tree_replace({"contact.efc_address": efc_address})
 
-    if m.opt.disableflags & DisableBit.CONSTRAINT:
-        efcs = ()
-    else:
-        efcs = tuple(
-            efc
-            for efc in (
-                _instantiate_equality_connect(m, d),
-                _instantiate_equality_weld(m, d),
-                _instantiate_equality_joint(m, d),
-                _instantiate_friction(m, d),
-                _instantiate_limit_ball(m, d),
-                _instantiate_limit_slide_hinge(m, d),
-                _instantiate_limit_tendon(m, d),
-                _instantiate_contact_frictionless(m, d),
-                _instantiate_contact(m, d),
-            )
-            if efc is not None
-        )
+    precomp = m.constraint_data_py
+    ncon_fl, ncon_fr = m.condim_counts_py
+
+    efcs = []
+    if precomp["eq_connect"] is not None:
+        efcs.append(_instantiate_equality_connect(m, d, precomp["eq_connect"]))
+    if precomp["eq_weld"] is not None:
+        efcs.append(_instantiate_equality_weld(m, d, precomp["eq_weld"]))
+    if precomp["eq_joint"] is not None:
+        efcs.append(_instantiate_equality_joint(m, d, precomp["eq_joint"]))
+    if precomp["friction"] is not None:
+        efcs.append(_instantiate_friction(m, d, precomp["friction"]))
+    if precomp["limit_ball"] is not None:
+        efcs.append(_instantiate_limit_ball(m, d, precomp["limit_ball"]))
+    if precomp["limit_slide_hinge"] is not None:
+        efcs.append(_instantiate_limit_slide_hinge(m, d, precomp["limit_slide_hinge"]))
+    if precomp["limit_tendon"] is not None:
+        efcs.append(_instantiate_limit_tendon(m, d, precomp["limit_tendon"]))
+    if ncon_fl > 0 and has_contacts:
+        efcs.append(_instantiate_contact_frictionless(m, d))
+    if ncon_fr > 0 and has_contacts:
+        efcs.append(_instantiate_contact(m, d))
+    efcs = tuple(efcs)
 
     if not efcs:
-        z = torch.empty(0)
-        d = d.replace(efc_J=torch.empty((0, m.nv)))
-        d = d.replace(efc_D=z, efc_aref=z, efc_frictionloss=z, nefc=torch.tensor(0, dtype=torch.int32))
+        _dev = d.qpos.device
+        z = torch.empty(0, device=_dev)
+        d = d.replace(efc_J=torch.empty((0, m.nv), device=_dev))
+        d = d.replace(efc_D=z, efc_aref=z, efc_frictionloss=z, nefc=_ZERO_I32.get(torch.int32, _dev))
         return d
 
     efc = torch.cat(list(efcs))
+    refsafe = precomp["refsafe"]
 
     @torch.vmap
     def fn(efc):
-        k, b, imp = _kbi(m, efc.solref, efc.solimp, efc.pos_norm)
+        k, b, imp = _kbi(m, efc.solref, efc.solimp, efc.pos_norm, refsafe=refsafe)
         r = torch.maximum(
             efc.invweight * (1 - imp) / imp,
-            torch.tensor(mujoco.mjMINVAL, dtype=efc.invweight.dtype, device=efc.invweight.device),
+            _MJMINVAL.get(efc.invweight.dtype, efc.invweight.device),
         )
         aref = -b * (efc.J @ d.qvel) - k * imp * efc.pos
         return aref, r
 
     aref, r = fn(efc)
     d = d.replace(efc_J=efc.J, efc_D=1 / r, efc_aref=aref)
-    d = d.replace(efc_frictionloss=efc.frictionloss, nefc=torch.tensor(r.shape[0], dtype=torch.int32))
+    d = d.replace(efc_frictionloss=efc.frictionloss, nefc=torch.tensor(r.shape[0], dtype=torch.int32, device=r.device))
 
     return d

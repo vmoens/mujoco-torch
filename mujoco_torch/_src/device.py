@@ -26,7 +26,7 @@ import numpy as np
 import torch
 from torch.utils._pytree import tree_map
 
-from mujoco_torch._src import collision_driver, mesh, types
+from mujoco_torch._src import collision_driver, mesh, scan, types
 from mujoco_torch._src.dataclasses import MjTensorClass
 
 _MJ_TYPE_ATTR = {
@@ -124,7 +124,37 @@ _DERIVED = mesh.DERIVED.union(
         (types.Model, "actuator_info"),
         (types.Model, "constraint_sizes_py"),
         (types.Model, "condim_counts_py"),
+        (types.Model, "condim_tensor_py"),
+        (types.Model, "constraint_data_py"),
+        (types.Model, "collision_groups_py"),
+        (types.Model, "collision_max_cp_py"),
+        (types.Model, "collision_total_contacts_py"),
+        (types.Model, "sensor_groups_pos_py"),
+        (types.Model, "sensor_groups_vel_py"),
+        (types.Model, "sensor_groups_acc_py"),
+        (types.Model, "sensor_disabled_py"),
         (types.Model, "cache_id"),
+        # Pre-cached tensor versions of numpy model fields
+        (types.Model, "body_rootid_t"),
+        (types.Model, "dof_bodyid_t"),
+        (types.Model, "dof_Madr_t"),
+        (types.Model, "dof_tri_row_t"),
+        (types.Model, "dof_tri_col_t"),
+        (types.Model, "geom_bodyid_t"),
+        (types.Model, "site_bodyid_t"),
+        (types.Model, "dof_jntid_t"),
+        (types.Model, "actuator_ctrllimited_bool"),
+        (types.Model, "actuator_forcelimited_bool"),
+        (types.Model, "jnt_actfrclimited_bool"),
+        (types.Model, "actuator_actlimited_bool"),
+        (types.Model, "actuator_actadr_neg1"),
+        (types.Model, "sparse_i_t"),
+        (types.Model, "sparse_j_t"),
+        (types.Model, "sparse_madr_t"),
+        (types.Model, "factor_m_madr_ds_t"),
+        (types.Model, "factor_m_updates"),
+        (types.Model, "solve_m_updates_j"),
+        (types.Model, "solve_m_updates_i"),
     }
 )
 
@@ -198,6 +228,274 @@ def _compute_constraint_sizes(value: mujoco.MjModel) -> tuple[int, int, int, int
     return (ne, nf, nl, ncon_, nefc)
 
 
+def _compute_constraint_data(value: mujoco.MjModel) -> dict:
+    """Pre-compute numpy-derived constraint data at device_put time.
+
+    Returns a dict mapping constraint type names to their pre-computed
+    data (or None if the type is inactive).  These are consumed by the
+    ``_instantiate_*`` functions in ``constraint.py`` so that they never
+    need ``np.nonzero`` or similar numpy ops at compile time.
+    """
+    disableflags = int(value.opt.disableflags)
+    result: dict = {}
+
+    if disableflags & types.DisableBit.CONSTRAINT:
+        return {
+            "eq_connect": None, "eq_weld": None, "eq_joint": None,
+            "friction": None,
+            "limit_ball": None, "limit_slide_hinge": None, "limit_tendon": None,
+            "refsafe": bool(disableflags & types.DisableBit.REFSAFE),
+        }
+
+    # -- equality constraints --
+    _cached = scan._cached_long
+    if disableflags & types.DisableBit.EQUALITY:
+        result["eq_connect"] = None
+        result["eq_weld"] = None
+        result["eq_joint"] = None
+    else:
+        for key, eq_val, multiplier in [
+            ("eq_connect", types.EqType.CONNECT, 3),
+            ("eq_weld", types.EqType.WELD, 6),
+            ("eq_joint", types.EqType.JOINT, 1),
+        ]:
+            ids = np.nonzero(value.eq_type == eq_val)[0]
+            if ids.size == 0:
+                result[key] = None
+                continue
+            id1 = np.array(value.eq_obj1id[ids])
+            id2 = np.array(value.eq_obj2id[ids])
+            entry = {
+                "ids": _cached(ids), "id1": _cached(id1), "id2": _cached(id2),
+                "multiplier": multiplier,
+            }
+            if key == "eq_joint":
+                entry["dofadr1"] = _cached(value.jnt_dofadr[id1])
+                entry["dofadr2"] = _cached(value.jnt_dofadr[id2])
+                entry["qposadr1"] = _cached(value.jnt_qposadr[id1])
+                entry["qposadr2"] = _cached(value.jnt_qposadr[id2])
+            result[key] = entry
+
+    # -- friction --
+    if disableflags & types.DisableBit.FRICTIONLOSS:
+        result["friction"] = None
+    else:
+        dof_ids = np.nonzero(value.dof_frictionloss > 0)[0]
+        tendon_ids = np.nonzero(value.tendon_frictionloss > 0)[0]
+        size = int(dof_ids.size + tendon_ids.size)
+        if size == 0:
+            result["friction"] = None
+        else:
+            result["friction"] = {
+                "dof_ids": _cached(dof_ids),
+                "tendon_ids": _cached(tendon_ids),
+                "size": size,
+            }
+
+    # -- limit: ball --
+    if disableflags & types.DisableBit.LIMIT:
+        result["limit_ball"] = None
+        result["limit_slide_hinge"] = None
+        result["limit_tendon"] = None
+    else:
+        ids = np.nonzero(
+            (value.jnt_type == types.JointType.BALL) & value.jnt_limited
+        )[0]
+        if ids.size == 0:
+            result["limit_ball"] = None
+        else:
+            qposadr = torch.stack(
+                [torch.arange(q, q + 4) for q in value.jnt_qposadr[ids]]
+            )
+            dofadr = torch.stack(
+                [torch.arange(da, da + 3) for da in value.jnt_dofadr[ids]]
+            )
+            dofadr_first = torch.as_tensor(
+                np.array(value.jnt_dofadr[ids]), dtype=torch.long,
+            )
+            result["limit_ball"] = {
+                "ids": _cached(ids),
+                "qposadr": scan._DeviceCachedTensor(qposadr),
+                "dofadr": scan._DeviceCachedTensor(dofadr),
+                "dofadr_first": scan._DeviceCachedTensor(dofadr_first),
+            }
+
+        slide_hinge = np.isin(
+            value.jnt_type, (types.JointType.SLIDE, types.JointType.HINGE)
+        )
+        ids = np.nonzero(slide_hinge & value.jnt_limited)[0]
+        if ids.size == 0:
+            result["limit_slide_hinge"] = None
+        else:
+            result["limit_slide_hinge"] = {
+                "ids": _cached(ids),
+                "qposadr": _cached(value.jnt_qposadr[ids]),
+                "dofadr": _cached(value.jnt_dofadr[ids]),
+            }
+
+        tendon_id = np.nonzero(value.tendon_limited)[0]
+        if tendon_id.size == 0:
+            result["limit_tendon"] = None
+        else:
+            result["limit_tendon"] = {"tendon_id": _cached(tendon_id)}
+
+    result["refsafe"] = bool(disableflags & types.DisableBit.REFSAFE)
+    return result
+
+
+def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
+    """Pre-compute sensor group data for all three stages.
+
+    Each stage produces a tuple of group dicts.  Every dict contains at
+    least ``type``, ``data_type``, ``objid``, ``adr``, and ``cutoff``
+    (all as tensors / ints).  Sensor-type-specific keys are added where
+    the runtime computation would otherwise need numpy model indexing.
+    """
+    SType = types.SensorType
+    OType = types.ObjType
+
+    result: dict[str, tuple | bool] = {}
+    result["sensor_disabled_py"] = bool(
+        int(value.opt.disableflags) & types.DisableBit.SENSOR
+    )
+
+    for stage_key, stage_val in (
+        ("sensor_groups_pos_py", mujoco.mjtStage.mjSTAGE_POS),
+        ("sensor_groups_vel_py", mujoco.mjtStage.mjSTAGE_VEL),
+        ("sensor_groups_acc_py", mujoco.mjtStage.mjSTAGE_ACC),
+    ):
+        stage_mask = value.sensor_needstage == stage_val
+        sensor_type_values = sorted(set(value.sensor_type[stage_mask]))
+
+        groups: list[dict] = []
+        for st_val in sensor_type_values:
+            idx = value.sensor_type == st_val
+            objid_np = value.sensor_objid[idx]
+            adr_np = value.sensor_adr[idx]
+            cutoff_np = value.sensor_cutoff[idx]
+            data_type_val = int(value.sensor_datatype[idx][0])
+
+            group: dict = {
+                "type": int(st_val),
+                "data_type": data_type_val,
+                "objid": torch.tensor(objid_np, dtype=torch.long),
+                "adr": torch.tensor(adr_np, dtype=torch.long),
+                "cutoff": torch.tensor(cutoff_np, dtype=torch.float64),
+            }
+
+            st_int = int(st_val)
+
+            # -- position stage extras --
+            if st_int == SType.JOINTPOS:
+                group["qposadr"] = torch.tensor(
+                    value.jnt_qposadr[objid_np], dtype=torch.long,
+                )
+            elif st_int == SType.BALLQUAT:
+                group["qposadr_2d"] = torch.tensor(
+                    value.jnt_qposadr[objid_np, None] + np.arange(4)[None],
+                    dtype=torch.long,
+                )
+            elif st_int == SType.RANGEFINDER:
+                site_bodyid = value.site_bodyid[objid_np]
+                body_groups: list[dict] = []
+                for sid in sorted(set(site_bodyid)):
+                    idxs = site_bodyid == sid
+                    body_groups.append({
+                        "sid": int(sid),
+                        "objid": torch.tensor(objid_np[idxs], dtype=torch.long),
+                        "cutoff": torch.tensor(cutoff_np[idxs], dtype=torch.float64),
+                        "adr": torch.tensor(adr_np[idxs], dtype=torch.long),
+                    })
+                group["body_groups"] = tuple(body_groups)
+            elif st_int in (
+                SType.FRAMEPOS, SType.FRAMEXAXIS, SType.FRAMEYAXIS,
+                SType.FRAMEZAXIS, SType.FRAMEQUAT,
+            ):
+                objtype_np = value.sensor_objtype[idx]
+                reftype_np = value.sensor_reftype[idx]
+                refid_np = value.sensor_refid[idx]
+
+                _bodyid_src = {
+                    int(OType.GEOM): value.geom_bodyid,
+                    int(OType.SITE): value.site_bodyid,
+                    int(OType.CAMERA): value.cam_bodyid,
+                }
+
+                ot_rt_groups: list[dict] = []
+                for ot_val, rt_val in sorted(set(zip(objtype_np, reftype_np))):
+                    idxt = (objtype_np == ot_val) & (reftype_np == rt_val)
+                    sub_objid = objid_np[idxt]
+                    sub_refid = refid_np[idxt]
+
+                    sub: dict = {
+                        "ot": int(ot_val),
+                        "rt": int(rt_val),
+                        "objid": torch.tensor(sub_objid, dtype=torch.long),
+                        "refid": torch.tensor(sub_refid, dtype=torch.long),
+                        "cutoff": torch.tensor(cutoff_np[idxt], dtype=torch.float64),
+                        "adr": torch.tensor(adr_np[idxt], dtype=torch.long),
+                        "obj_bodyid": None,
+                        "ref_bodyid": None,
+                    }
+
+                    if st_int == SType.FRAMEQUAT:
+                        if int(ot_val) in _bodyid_src:
+                            sub["obj_bodyid"] = torch.tensor(
+                                _bodyid_src[int(ot_val)][sub_objid], dtype=torch.long,
+                            )
+                        if int(rt_val) in _bodyid_src:
+                            sub["ref_bodyid"] = torch.tensor(
+                                _bodyid_src[int(rt_val)][sub_refid], dtype=torch.long,
+                            )
+
+                    ot_rt_groups.append(sub)
+                group["ot_rt_groups"] = tuple(ot_rt_groups)
+            elif st_int == SType.CLOCK:
+                group["count"] = int(idx.sum())
+
+            # -- velocity stage extras --
+            elif st_int in (SType.VELOCIMETER, SType.GYRO):
+                bodyid_np = value.site_bodyid[objid_np]
+                group["bodyid"] = torch.tensor(bodyid_np, dtype=torch.long)
+                group["rootid"] = torch.tensor(
+                    value.body_rootid[bodyid_np], dtype=torch.long,
+                )
+            elif st_int == SType.JOINTVEL:
+                group["dofadr"] = torch.tensor(
+                    value.jnt_dofadr[objid_np], dtype=torch.long,
+                )
+            elif st_int == SType.BALLANGVEL:
+                group["dofadr_2d"] = torch.tensor(
+                    value.jnt_dofadr[objid_np, None] + np.arange(3)[None],
+                    dtype=torch.long,
+                )
+
+            # -- acceleration stage extras --
+            elif st_int in (SType.ACCELEROMETER, SType.FORCE, SType.TORQUE):
+                bodyid_np = value.site_bodyid[objid_np]
+                group["bodyid"] = torch.tensor(bodyid_np, dtype=torch.long)
+                group["rootid"] = torch.tensor(
+                    value.body_rootid[bodyid_np], dtype=torch.long,
+                )
+            elif st_int == SType.JOINTACTFRC:
+                group["dofadr"] = torch.tensor(
+                    value.jnt_dofadr[objid_np], dtype=torch.long,
+                )
+            elif st_int == SType.TENDONACTFRC:
+                force_mask = np.stack([
+                    (value.actuator_trntype == int(types.TrnType.TENDON))
+                    & (value.actuator_trnid[:, 0] == tid)
+                    for tid in objid_np
+                ])
+                group["force_mask"] = torch.tensor(force_mask, dtype=torch.float64)
+
+            groups.append(group)
+
+        result[stage_key] = tuple(groups)
+
+    return result
+
+
 def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     global _model_cache_id_counter
     _model_cache_id_counter += 1
@@ -237,6 +535,137 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
 
     result["constraint_sizes_py"] = _compute_constraint_sizes(value)
     result["condim_counts_py"] = _compute_condim_counts(value)
+    result["condim_tensor_py"] = collision_driver.make_condim(value)
+    result["constraint_data_py"] = _compute_constraint_data(value)
+
+    geom_convex_data = (
+        result["geom_convex_face"],
+        result["geom_convex_vert"],
+        result["geom_convex_edge"],
+    )
+    candidate_set = collision_driver.collision_candidates(
+        value, geom_convex_data=geom_convex_data,
+    )
+    max_cp = collision_driver._max_contact_points(value)
+    collision_groups = []
+    total_contacts = 0
+    for key, cands in candidate_set.items():
+        geom_types = (types.GeomType(int(key[0])), types.GeomType(int(key[1])))
+        fn = collision_driver.get_collision_fn(geom_types)
+        collision_groups.append((fn, geom_types, cands))
+        if fn is not None:
+            total_contacts += fn.ncon * len(cands)
+    result["collision_groups_py"] = tuple(collision_groups)
+    result["collision_max_cp_py"] = max_cp
+    result["collision_total_contacts_py"] = total_contacts
+
+    result.update(_compute_sensor_groups(value))
+
+    scan.precompute_scan_caches(value, _model_cache_id_counter)
+
+    # Pre-cached tensor versions of numpy model fields.
+    # These are regular tensors on CPU; .to(device) on the Model moves them.
+    result["body_rootid_t"] = torch.as_tensor(np.array(value.body_rootid), dtype=torch.long)
+    result["dof_bodyid_t"] = torch.as_tensor(np.array(value.dof_bodyid), dtype=torch.long)
+    result["dof_Madr_t"] = torch.as_tensor(np.array(value.dof_Madr), dtype=torch.long)
+    result["dof_tri_row_t"] = torch.as_tensor(result["dof_tri_row"], dtype=torch.long)
+    result["dof_tri_col_t"] = torch.as_tensor(result["dof_tri_col"], dtype=torch.long)
+    result["geom_bodyid_t"] = torch.as_tensor(np.array(value.geom_bodyid), dtype=torch.long)
+    result["site_bodyid_t"] = torch.as_tensor(np.array(value.site_bodyid), dtype=torch.long)
+    result["dof_jntid_t"] = torch.as_tensor(np.array(value.dof_jntid), dtype=torch.long)
+    result["actuator_ctrllimited_bool"] = torch.as_tensor(
+        np.array(value.actuator_ctrllimited)[:, None], dtype=torch.bool
+    ) if value.nu > 0 else torch.empty((0, 1), dtype=torch.bool)
+    result["actuator_forcelimited_bool"] = torch.as_tensor(
+        np.array(value.actuator_forcelimited)[:, None], dtype=torch.bool
+    ) if value.nu > 0 else torch.empty((0, 1), dtype=torch.bool)
+    result["jnt_actfrclimited_bool"] = torch.as_tensor(
+        np.array(value.jnt_actfrclimited)[:, None], dtype=torch.bool
+    ) if value.njnt > 0 else torch.empty((0, 1), dtype=torch.bool)
+    result["actuator_actlimited_bool"] = torch.as_tensor(
+        np.array(value.actuator_actlimited)[:, None], dtype=torch.bool
+    ) if value.nu > 0 else torch.empty((0, 1), dtype=torch.bool)
+    result["actuator_actadr_neg1"] = torch.tensor(
+        np.array(value.actuator_actadr) == -1, dtype=torch.bool
+    ) if value.nu > 0 else torch.empty(0, dtype=torch.bool)
+
+    # Pre-compute sparse mass matrix index pattern
+    is_, js, madr_ijs = [], [], []
+    for i in range(value.nv):
+        madr_ij, j = int(value.dof_Madr[i]), i
+        while True:
+            madr_ij, j = madr_ij + 1, int(value.dof_parentid[j])
+            if j == -1:
+                break
+            is_.append(i)
+            js.append(j)
+            madr_ijs.append(madr_ij)
+    result["sparse_i_t"] = torch.tensor(is_, dtype=torch.long) if is_ else torch.empty(0, dtype=torch.long)
+    result["sparse_j_t"] = torch.tensor(js, dtype=torch.long) if js else torch.empty(0, dtype=torch.long)
+    result["sparse_madr_t"] = torch.tensor(madr_ijs, dtype=torch.long) if madr_ijs else torch.empty(0, dtype=torch.long)
+
+    # Pre-compute factor_m indices
+    depth = []
+    for i in range(value.nv):
+        pid = int(value.dof_parentid[i])
+        depth.append(depth[pid] + 1 if pid != -1 else 0)
+    factor_updates = {}
+    factor_madr_ds = []
+    for i in range(value.nv):
+        madr_d = madr_ij = int(value.dof_Madr[i])
+        j = i
+        while True:
+            factor_madr_ds.append(madr_d)
+            pid = int(value.dof_parentid[j])
+            madr_ij, j = madr_ij + 1, pid
+            if j == -1:
+                break
+            out_beg, out_end = int(value.dof_Madr[j]), int(value.dof_Madr[j + 1])
+            factor_updates.setdefault(depth[j], []).append((out_beg, out_end, madr_d, madr_ij))
+    result["factor_m_madr_ds_t"] = torch.tensor(factor_madr_ds, dtype=torch.long) if factor_madr_ds else torch.empty(0, dtype=torch.long)
+    # Pre-compute factored update index tensors as _DeviceCachedTensor for lazy GPU transfer
+    factor_m_updates_precomp = []
+    for _, updates_list in sorted(factor_updates.items(), reverse=True):
+        rows, madr_ijs_f, pivots, out = [], [], [], []
+        for b, e, madr_d, madr_ij_v in updates_list:
+            width = e - b
+            rows.extend(range(madr_ij_v, madr_ij_v + width))
+            madr_ijs_f.extend([madr_ij_v] * width)
+            pivots.extend([madr_d] * width)
+            out.extend(range(b, e))
+        factor_m_updates_precomp.append((
+            scan._DeviceCachedTensor(torch.tensor(rows, dtype=torch.long)),
+            scan._DeviceCachedTensor(torch.tensor(madr_ijs_f, dtype=torch.long)),
+            scan._DeviceCachedTensor(torch.tensor(pivots, dtype=torch.long)),
+            scan._DeviceCachedTensor(torch.tensor(out, dtype=torch.long)),
+        ))
+    result["factor_m_updates"] = tuple(factor_m_updates_precomp)
+
+    # Pre-compute solve_m indices
+    solve_updates_i, solve_updates_j = {}, {}
+    for i in range(value.nv):
+        madr_ij, j = int(value.dof_Madr[i]), i
+        while True:
+            pid = int(value.dof_parentid[j])
+            madr_ij, j = madr_ij + 1, pid
+            if j == -1:
+                break
+            solve_updates_i.setdefault(depth[i], []).append((i, madr_ij, j))
+            solve_updates_j.setdefault(depth[j], []).append((j, madr_ij, i))
+
+    def _build_solve_groups(updates_dict, reverse=False):
+        groups = []
+        for _, vals in sorted(updates_dict.items(), reverse=reverse):
+            t = torch.tensor(vals, dtype=torch.long)
+            groups.append((
+                scan._DeviceCachedTensor(t[:, 0]),
+                scan._DeviceCachedTensor(t[:, 1]),
+                scan._DeviceCachedTensor(t[:, 2]),
+            ))
+        return tuple(groups)
+
+    result["solve_m_updates_j"] = _build_solve_groups(solve_updates_j, reverse=True)
+    result["solve_m_updates_i"] = _build_solve_groups(solve_updates_i, reverse=False)
 
     return result
 

@@ -20,6 +20,13 @@ import mujoco
 import torch
 from torch._higher_order_ops.while_loop import while_loop as _torch_while_loop
 
+from mujoco_torch._src.math import _CachedConst
+
+_ZERO = _CachedConst(0.0)
+_INF = _CachedConst(float("inf"))
+_ZERO_INT = _CachedConst(0, dtype=torch.long)
+_TRUE = _CachedConst(True, dtype=torch.bool)
+
 
 def _inside_functorch() -> bool:
     """Return True when executing inside a functorch transform (vmap, grad, …)."""
@@ -160,33 +167,12 @@ def _make_solve_m_fn(m: Model, d: Data):
 
         return solve_m_fn
 
-    # Sparse path: precompute update index arrays from model topology.
+    # Sparse path: use pre-computed solve index arrays from device_put.
     qLD = d.qLD.clone()
     qLDiagInv = d.qLDiagInv.clone()
-
-    depth = []
-    for i in range(m.nv):
-        depth.append(depth[m.dof_parentid[i]] + 1 if m.dof_parentid[i] != -1 else 0)
-    updates_i, updates_j = {}, {}
-    for i in range(m.nv):
-        madr_ij, j = m.dof_Madr[i], i
-        while True:
-            madr_ij, j = madr_ij + 1, m.dof_parentid[j]
-            if j == -1:
-                break
-            updates_i.setdefault(depth[i], []).append((i, madr_ij, j))
-            updates_j.setdefault(depth[j], []).append((j, madr_ij, i))
-
-    # Pre-convert to tensors so the loop body is pure torch ops.
-    j_updates = []
-    for _, vals in sorted(updates_j.items(), reverse=True):
-        arr = torch.tensor(vals, dtype=torch.long)
-        j_updates.append((arr[:, 0], arr[:, 1], arr[:, 2]))
-
-    i_updates = []
-    for _, vals in sorted(updates_i.items()):
-        arr = torch.tensor(vals, dtype=torch.long)
-        i_updates.append((arr[:, 0], arr[:, 1], arr[:, 2]))
+    _dev = qLD.device
+    j_updates = [(j.to(_dev), madr.to(_dev), i.to(_dev)) for j, madr, i in m.solve_m_updates_j]
+    i_updates = [(i.to(_dev), madr.to(_dev), j.to(_dev)) for i, madr, j in m.solve_m_updates_i]
 
     def solve_m_fn(x):
         # x <- inv(L') * x
@@ -214,24 +200,12 @@ def _make_mul_m_fn(m: Model, d: Data):
 
         return mul_m_fn
 
-    # Sparse path: precompute index arrays.
+    # Sparse path: use precomputed index arrays.
     qM = d.qM.clone()
-    dof_Madr_t = torch.as_tensor(m.dof_Madr, device=d.qM.device).long()
-
-    is_, js, madr_ijs = [], [], []
-    for i in range(m.nv):
-        madr_ij, j = m.dof_Madr[i], i
-        while True:
-            madr_ij, j = madr_ij + 1, m.dof_parentid[j]
-            if j == -1:
-                break
-            is_.append(i)
-            js.append(j)
-            madr_ijs.append(madr_ij)
-
-    i_t = torch.tensor(is_, dtype=torch.long)
-    j_t = torch.tensor(js, dtype=torch.long)
-    madr_t = torch.tensor(madr_ijs, dtype=torch.long)
+    dof_Madr_t = m.dof_Madr_t
+    i_t = m.sparse_i_t
+    j_t = m.sparse_j_t
+    madr_t = m.sparse_madr_t
 
     def mul_m_fn(vec):
         diag_mul = qM[dof_Madr_t] * vec
@@ -248,25 +222,10 @@ def _make_dense_m(m: Model, d: Data) -> torch.Tensor:
     if not support.is_sparse(m):
         return d.qM.clone()
 
-    # Sparse path: build dense from sparse representation.
-    is_, js, madr_ijs = [], [], []
-    for i in range(m.nv):
-        madr_ij, j = m.dof_Madr[i], i
-        while True:
-            madr_ij, j = madr_ij + 1, m.dof_parentid[j]
-            if j == -1:
-                break
-            is_.append(i)
-            js.append(j)
-            madr_ijs.append(madr_ij)
-
-    i_idx = torch.tensor(is_, dtype=torch.int32, device=d.qM.device)
-    j_idx = torch.tensor(js, dtype=torch.int32, device=d.qM.device)
-    madr_idx = torch.tensor(madr_ijs, dtype=torch.int32, device=d.qM.device)
-
+    # Sparse path: use precomputed index arrays.
     mat = torch.zeros((m.nv, m.nv), dtype=d.qM.dtype, device=d.qM.device)
-    mat[(i_idx, j_idx)] = d.qM[madr_idx]
-    mat = torch.diag(d.qM[torch.as_tensor(m.dof_Madr, device=d.qM.device)]) + mat + mat.T
+    mat[(m.sparse_i_t, m.sparse_j_t)] = d.qM[m.sparse_madr_t]
+    mat = torch.diag(d.qM[m.dof_Madr_t]) + mat + mat.T
     return mat
 
 
@@ -304,7 +263,7 @@ def solve(m: Model, d: Data) -> Data:
     ne_nf = ne + nf
 
     # ---- Pre-compute mass matrix closures (no m/d access inside loop) ---------
-    dense_M = _make_dense_m(m, d) if use_dense else torch.empty(0, 0)
+    dense_M = _make_dense_m(m, d) if use_dense else torch.empty(0, 0, device=d.qM.device)
     solve_m_fn = _make_solve_m_fn(m, d)
     mul_m_fn = _make_mul_m_fn(m, d) if not use_dense else None
 
@@ -318,19 +277,20 @@ def solve(m: Model, d: Data) -> Data:
         jaref = efc_J @ qacc.to(efc_J.dtype) - efc_aref
         ma = dense_M @ qacc if use_dense else mul_m_fn(qacc)
         dtype = qacc.dtype
+        _dev = qacc.device
         ctx = _Context(
             qacc=qacc,
             qfrc_constraint=qfrc_con,
             Jaref=jaref,
-            efc_force=torch.zeros(nefc, dtype=dtype),
+            efc_force=torch.zeros(nefc, dtype=dtype, device=_dev),
             Ma=ma,
-            grad=torch.zeros((nv,), dtype=dtype),
-            Mgrad=torch.zeros((nv,), dtype=dtype),
-            search=torch.zeros((nv,), dtype=dtype),
-            gauss=torch.tensor(0.0, dtype=dtype),
-            cost=torch.tensor(float("inf"), dtype=dtype),
-            prev_cost=torch.tensor(0.0, dtype=dtype),
-            solver_niter=torch.tensor(0),
+            grad=torch.zeros((nv,), dtype=dtype, device=_dev),
+            Mgrad=torch.zeros((nv,), dtype=dtype, device=_dev),
+            search=torch.zeros((nv,), dtype=dtype, device=_dev),
+            gauss=_ZERO.get(dtype, _dev),
+            cost=_INF.get(dtype, _dev),
+            prev_cost=_ZERO.get(dtype, _dev),
+            solver_niter=_ZERO_INT.get(torch.long, _dev),
         )
         ctx = _update_constraint(ctx)
         if grad_flag:
@@ -433,12 +393,12 @@ def solve(m: Model, d: Data) -> Data:
             return (_LSContext(lo=lo, hi=hi, swap=swap, ls_iter=ls_ctx.ls_iter + 1),)
 
         # initialize interval
-        p0 = point_fn(torch.tensor(0.0))
+        p0 = point_fn(_ZERO.get(ctx.qacc.dtype, ctx.qacc.device))
         lo = point_fn(p0.alpha - p0.deriv_0 / p0.deriv_1)
         lesser_fn = lambda x, y: torch.where(lo.deriv_0 < p0.deriv_0, x, y)
         hi = torch.utils._pytree.tree_map(lesser_fn, p0, lo)
         lo = torch.utils._pytree.tree_map(lesser_fn, lo, p0)
-        ls_ctx = _LSContext(lo=lo, hi=hi, swap=torch.tensor(True), ls_iter=torch.tensor(0))
+        ls_ctx = _LSContext(lo=lo, hi=hi, swap=_TRUE.get(torch.bool, ctx.qacc.device), ls_iter=_ZERO_INT.get(torch.long, ctx.qacc.device))
         ls_ctx = while_loop(ls_cond, ls_body, (ls_ctx,), max_iter=ls_iterations)[0]
 
         # move to new solution if improved

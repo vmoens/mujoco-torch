@@ -16,6 +16,10 @@
 
 import torch
 
+from mujoco_torch._src.math import _CachedConst
+
+_EPS12 = _CachedConst(1e-12)
+
 from mujoco_torch._src import math, scan, support
 
 # pylint: disable=g-importing-member
@@ -37,7 +41,7 @@ def _inertia_box_fluid_model(
     box = inertia.unsqueeze(0).repeat(3, 1)
     box = box * (torch.ones((3, 3), dtype=inertia.dtype, device=inertia.device) - 2 * torch.eye(3))
     box = 6.0 * torch.clamp(torch.sum(box, dim=-1), min=1e-12)
-    box = torch.sqrt(box / torch.maximum(mass, torch.tensor(1e-12))) * (mass > 0.0)
+    box = torch.sqrt(box / torch.maximum(mass, _EPS12.get(mass.dtype, mass.device))) * (mass > 0.0)
 
     # transform to local coordinate frame
     offset = xipos - root_com
@@ -150,7 +154,7 @@ def _fluid(m: Model, d: Data) -> torch.Tensor:
         m,
         m.body_inertia,
         m.body_mass,
-        d.subtree_com[torch.as_tensor(m.body_rootid, device=d.subtree_com.device)],
+        d.subtree_com[m.body_rootid_t],
         d.xipos,
         d.ximat,
         d.cvel,

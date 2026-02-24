@@ -52,15 +52,15 @@ from mujoco_torch._src import (
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import BiasType, Data, DisableBit, DynType, GainType, IntegratorType, JointType, Model
 
-# RK4 tableau
-_RK4_A = torch.tensor(
+# RK4 tableau (cached per device to avoid CPU→CUDA copies during graph capture)
+_RK4_A = math._CachedConst(
     [
         [0.5, 0.0, 0.0],
         [0.0, 0.5, 0.0],
         [0.0, 0.0, 1.0],
     ]
 )
-_RK4_B = torch.tensor([1.0 / 6.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0])
+_RK4_B = math._CachedConst([1.0 / 6.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0])
 
 
 def _position(m: Model, d: Data) -> Data:
@@ -103,9 +103,9 @@ def _actuation(m: Model, d: Data) -> Data:
     ctrl = d.ctrl
     if not m.opt.disableflags & DisableBit.CLAMPCTRL:
         ctrlrange = torch.where(
-            torch.as_tensor(m.actuator_ctrllimited[:, None], dtype=torch.bool, device=ctrl.device),
+            m.actuator_ctrllimited_bool,
             m.actuator_ctrlrange,
-            torch.tensor([-torch.inf, torch.inf]),
+            math._INF_RANGE.get(ctrl.dtype, ctrl.device),
         )
         # ctrl = torch.clamp(ctrl, ctrlrange[:, 0], ctrlrange[:, 1])
         ctrl = torch.minimum(torch.maximum(ctrl, ctrlrange[:, 0]), ctrlrange[:, 1])
@@ -113,7 +113,7 @@ def _actuation(m: Model, d: Data) -> Data:
     # act_dot for stateful actuators
     def get_act_dot(dyn_typ, dyn_prm, ctrl, act):
         if dyn_typ == DynType.NONE:
-            act_dot = torch.tensor(0.0)
+            act_dot = torch.zeros_like(ctrl)
         elif dyn_typ == DynType.INTEGRATOR:
             act_dot = ctrl
         elif dyn_typ == DynType.FILTER:
@@ -122,7 +122,7 @@ def _actuation(m: Model, d: Data) -> Data:
             raise NotImplementedError(f"dyntype {dyn_typ.name} not implemented.")
         return act_dot
 
-    act_dot = torch.zeros((m.na,))
+    act_dot = torch.zeros((m.na,), dtype=d.qpos.dtype, device=d.qpos.device)
     if m.na:
         act_dot = scan.flat(
             m,
@@ -139,7 +139,7 @@ def _actuation(m: Model, d: Data) -> Data:
     ctrl_act = ctrl
     if m.na:
         act_last_dim = d.act[m.actuator_actadr + m.actuator_actnum - 1]
-        ctrl_act = torch.where(torch.as_tensor(m.actuator_actadr == -1, device=ctrl.device), ctrl, act_last_dim)
+        ctrl_act = torch.where(m.actuator_actadr_neg1, ctrl, act_last_dim)
 
     def get_force(*args):
         gain_t, gain_p, bias_t, bias_p, len_, vel, ctrl_act = args
@@ -153,7 +153,7 @@ def _actuation(m: Model, d: Data) -> Data:
             raise RuntimeError(f"unrecognized gaintype {typ.name}.")
 
         typ, prm = BiasType(bias_t), bias_p
-        bias = torch.tensor(0.0)
+        bias = torch.zeros_like(len_)
         if typ == BiasType.AFFINE:
             bias = prm[0] + prm[1] * len_ + prm[2] * vel
 
@@ -174,9 +174,9 @@ def _actuation(m: Model, d: Data) -> Data:
         group_by="u",
     )
     forcerange = torch.where(
-        torch.as_tensor(m.actuator_forcelimited[:, None], dtype=torch.bool, device=force.device),
+        m.actuator_forcelimited_bool,
         m.actuator_forcerange,
-        torch.tensor([-torch.inf, torch.inf]),
+        math._INF_RANGE.get(force.dtype, force.device),
     )
     force = torch.clamp(force, forcerange[:, 0], forcerange[:, 1])
 
@@ -188,11 +188,11 @@ def _actuation(m: Model, d: Data) -> Data:
 
     # clamp qfrc_actuator
     actfrcrange = torch.where(
-        torch.as_tensor(m.jnt_actfrclimited[:, None], dtype=torch.bool, device=qfrc_actuator.device),
+        m.jnt_actfrclimited_bool,
         m.jnt_actfrcrange,
-        torch.tensor([-torch.inf, torch.inf]),
+        math._INF_RANGE.get(qfrc_actuator.dtype, qfrc_actuator.device),
     )
-    actfrcrange = actfrcrange[torch.as_tensor(m.dof_jntid, device=actfrcrange.device)]
+    actfrcrange = actfrcrange[m.dof_jntid_t]
     qfrc_actuator = torch.clamp(qfrc_actuator, actfrcrange[:, 0], actfrcrange[:, 1])
 
     d = d.replace(act_dot=act_dot, qfrc_actuator=qfrc_actuator)
@@ -244,9 +244,9 @@ def _advance(
     if m.na:
         act = d.act + act_dot * m.opt.timestep
         actrange = torch.where(
-            torch.as_tensor(m.actuator_actlimited[:, None], dtype=torch.bool, device=act.device),
+            m.actuator_actlimited_bool,
             m.actuator_actrange,
-            torch.tensor([-torch.inf, torch.inf]),
+            math._INF_RANGE.get(act.dtype, act.device),
         )
         fn = lambda act, actrange: torch.clamp(act, actrange[0], actrange[1])
         act = scan.flat(m, fn, "au", "a", act, actrange, group_by="u")
@@ -272,7 +272,7 @@ def _euler(m: Model, d: Data) -> Data:
     if not m.opt.disableflags & DisableBit.EULERDAMP:
         if support.is_sparse(m):
             qM = d.qM.clone()
-            madr = torch.as_tensor(m.dof_Madr, device=d.qM.device).long()
+            madr = m.dof_Madr_t
             qM = qM.index_add(0, madr, m.opt.timestep * m.dof_damping)
         else:
             qM = d.qM + torch.diag(m.opt.timestep * m.dof_damping)
@@ -287,8 +287,8 @@ def _rungekutta4(m: Model, d: Data) -> Data:
     """Runge-Kutta explicit order 4 integrator."""
     d_t0 = d
     # pylint: disable=invalid-name
-    A_t = _RK4_A.to(dtype=d.qpos.dtype, device=d.qpos.device)
-    B_t = _RK4_B.to(dtype=d.qpos.dtype, device=d.qpos.device)
+    A_t = _RK4_A.get(d.qpos.dtype, d.qpos.device)
+    B_t = _RK4_B.get(d.qpos.dtype, d.qpos.device)
     C = torch.tril(A_t).sum(dim=0)  # C(i) = sum_j A(i,j)
     T = d.time + C * m.opt.timestep
     # pylint: enable=invalid-name
