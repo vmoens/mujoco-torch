@@ -265,7 +265,7 @@ def inert_mul(i: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     Returns:
       resultant force
     """
-    tri_id = torch.tensor([[0, 3, 4], [3, 1, 5], [4, 5, 2]])  # cinert inr order
+    tri_id = torch.tensor([[0, 3, 4], [3, 1, 5], [4, 5, 2]], device=i.device)
     inr, pos, mass = i[tri_id], i[6:9], i[9]
     ang = torch.mv(inr, v[:3]) + cross(pos, v[3:])
     vel = mass * v[3:] - cross(pos, v[:3])

@@ -71,7 +71,7 @@ def _kbi(
 
     dmin = torch.clamp(dmin, mujoco.mjMINIMP, mujoco.mjMAXIMP)
     dmax = torch.clamp(dmax, mujoco.mjMINIMP, mujoco.mjMAXIMP)
-    width = torch.maximum(torch.tensor(mujoco.mjMINVAL), width)
+    width = torch.maximum(torch.tensor(mujoco.mjMINVAL, dtype=width.dtype, device=width.device), width)
     mid = torch.clamp(mid, mujoco.mjMINIMP, mujoco.mjMAXIMP)
     power = torch.maximum(torch.tensor(1.0, dtype=power.dtype, device=power.device), power)
 
@@ -103,8 +103,9 @@ def _instantiate_equality_connect(m: Model, d: Data) -> _Efc | None:
 
     id1, id2, data = m.eq_obj1id[ids], m.eq_obj2id[ids], m.eq_data[ids]
     active = d.eq_active[ids]
-    id1_t = torch.as_tensor(id1, dtype=torch.long)
-    id2_t = torch.as_tensor(id2, dtype=torch.long)
+    _dev = d.qpos.device
+    id1_t = torch.as_tensor(id1, dtype=torch.long, device=_dev)
+    id2_t = torch.as_tensor(id2, dtype=torch.long, device=_dev)
 
     @torch.vmap
     def fn(data, id1, id2, active):
@@ -145,8 +146,9 @@ def _instantiate_equality_weld(m: Model, d: Data) -> _Efc | None:
 
     id1, id2, data = m.eq_obj1id[ids], m.eq_obj2id[ids], m.eq_data[ids]
     active = d.eq_active[ids]
-    id1_t = torch.as_tensor(id1, dtype=torch.long)
-    id2_t = torch.as_tensor(id2, dtype=torch.long)
+    _dev = d.qpos.device
+    id1_t = torch.as_tensor(id1, dtype=torch.long, device=_dev)
+    id2_t = torch.as_tensor(id2, dtype=torch.long, device=_dev)
 
     @torch.vmap
     def fn(data, id1, id2, active):
@@ -237,11 +239,12 @@ def _instantiate_equality_joint(m: Model, d: Data) -> _Efc | None:
     active = d.eq_active[ids]
     dofadr1, dofadr2 = m.jnt_dofadr[id1], m.jnt_dofadr[id2]
     qposadr1, qposadr2 = m.jnt_qposadr[id1], m.jnt_qposadr[id2]
-    id2_t = torch.as_tensor(id2, dtype=torch.long)
-    dofadr1_t = torch.as_tensor(dofadr1, dtype=torch.long)
-    dofadr2_t = torch.as_tensor(dofadr2, dtype=torch.long)
-    qposadr1_t = torch.as_tensor(qposadr1, dtype=torch.long)
-    qposadr2_t = torch.as_tensor(qposadr2, dtype=torch.long)
+    _dev = d.qpos.device
+    id2_t = torch.as_tensor(id2, dtype=torch.long, device=_dev)
+    dofadr1_t = torch.as_tensor(dofadr1, dtype=torch.long, device=_dev)
+    dofadr2_t = torch.as_tensor(dofadr2, dtype=torch.long, device=_dev)
+    qposadr1_t = torch.as_tensor(qposadr1, dtype=torch.long, device=_dev)
+    qposadr2_t = torch.as_tensor(qposadr2, dtype=torch.long, device=_dev)
 
     @torch.vmap
     def fn(data, id2, dofadr1, dofadr2, qposadr1, qposadr2, active):
@@ -365,13 +368,13 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc | None:
 
     Each condim=1 contact produces a single normal-force constraint row.
     """
-    dims = collision_driver.make_condim(m)
-    ncon_fl = int((dims == 1).sum())
+    ncon_fl, _ = m.condim_counts_py
     actual_ncon = d.contact.dist.shape[0]
     if (m.opt.disableflags & DisableBit.CONTACT) or ncon_fl == 0 or actual_ncon == 0:
         return None
 
-    geom_bodyid = torch.as_tensor(m.geom_bodyid, device=d.qpos.device)
+    _dev = d.qpos.device
+    geom_bodyid = torch.as_tensor(m.geom_bodyid, device=_dev)
 
     @torch.vmap
     def fn(c: Contact):
@@ -395,7 +398,7 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc | None:
     if contact.batch_size != torch.Size([actual_ncon]):
         contact = contact.clone(recurse=False)
         contact.auto_batch_size_()
-    contact = contact[:ncon_fl]
+    contact = contact[:ncon_fl].to(_dev)
     j, pos, invweight = fn(contact)
     solref = contact.solref
     solimp = contact.solimp
@@ -406,14 +409,13 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc | None:
 
 def _instantiate_contact(m: Model, d: Data) -> _Efc | None:
     """Calculates constraint rows for frictional (condim=3) pyramidal contacts."""
-    dims = collision_driver.make_condim(m)
-    ncon_fl = int((dims == 1).sum())
-    ncon_fr = int((dims == 3).sum())
+    ncon_fl, ncon_fr = m.condim_counts_py
     actual_ncon = d.contact.dist.shape[0]
     if (m.opt.disableflags & DisableBit.CONTACT) or ncon_fr == 0 or actual_ncon == 0:
         return None
 
-    geom_bodyid = torch.as_tensor(m.geom_bodyid, device=d.qpos.device)
+    _dev = d.qpos.device
+    geom_bodyid = torch.as_tensor(m.geom_bodyid, device=_dev)
 
     @torch.vmap
     def fn(c: Contact):
@@ -448,7 +450,7 @@ def _instantiate_contact(m: Model, d: Data) -> _Efc | None:
     if contact.batch_size != torch.Size([actual_ncon]):
         contact = contact.clone(recurse=False)
         contact.auto_batch_size_()
-    contact = contact[ncon_fl : ncon_fl + ncon_fr]
+    contact = contact[ncon_fl : ncon_fl + ncon_fr].to(_dev)
     res = fn(contact)
     # remove contact grouping dimension: flatten (ncon, 4, ...) to (ncon*4, ...)
     j, invweight, pos, solref, solimp = torch.utils._pytree.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), res)

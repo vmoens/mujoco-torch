@@ -123,6 +123,7 @@ _DERIVED = mesh.DERIVED.union(
         (types.Model, "dof_tri_col"),
         (types.Model, "actuator_info"),
         (types.Model, "constraint_sizes_py"),
+        (types.Model, "condim_counts_py"),
         (types.Model, "cache_id"),
     }
 )
@@ -148,6 +149,17 @@ torch.device_put = _device_put_torch
 
 
 _model_cache_id_counter = 0
+
+
+def _compute_condim_counts(value: mujoco.MjModel) -> tuple[int, int]:
+    """Pre-compute per-condim contact counts (ncon_condim1, ncon_condim3)."""
+    disableflags = int(value.opt.disableflags)
+    if disableflags & (types.DisableBit.CONSTRAINT | types.DisableBit.CONTACT):
+        return (0, 0)
+    dims = collision_driver.make_condim(value)
+    ncon_fl = int((dims == 1).sum())
+    ncon_fr = int((dims == 3).sum())
+    return (ncon_fl, ncon_fr)
 
 
 def _compute_constraint_sizes(value: mujoco.MjModel) -> tuple[int, int, int, int, int]:
@@ -224,6 +236,7 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     result["actuator_info"] = tuple(actuator_info)
 
     result["constraint_sizes_py"] = _compute_constraint_sizes(value)
+    result["condim_counts_py"] = _compute_condim_counts(value)
 
     return result
 

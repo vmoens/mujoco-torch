@@ -758,6 +758,7 @@ class Model(MjTensorClass):
     dof_tri_col: np.ndarray
     actuator_info: tuple
     constraint_sizes_py: tuple
+    condim_counts_py: tuple
     cache_id: int
 
 

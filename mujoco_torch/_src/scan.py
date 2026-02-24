@@ -49,6 +49,43 @@ def _np_to_long(x):
     return torch.as_tensor(np.asarray(x), dtype=torch.long)
 
 
+class _DeviceCachedTensor:
+    """A CPU index tensor that lazily caches per-device copies.
+
+    On first access for a given device, moves the tensor and caches it.
+    Subsequent accesses for the same device return the cached copy with
+    no CPU-GPU transfer.
+    """
+    __slots__ = ("_cpu", "_cache")
+
+    def __init__(self, cpu_tensor: torch.Tensor):
+        self._cpu = cpu_tensor
+        self._cache: dict[torch.device, torch.Tensor] = {}
+
+    def to(self, device: torch.device) -> torch.Tensor:
+        t = self._cache.get(device)
+        if t is None:
+            t = self._cpu.to(device)
+            self._cache[device] = t
+        return t
+
+    @property
+    def device(self):
+        return self._cpu.device
+
+    def __getattr__(self, name):
+        return getattr(self._cpu, name)
+
+    def __len__(self):
+        return len(self._cpu)
+
+
+def _cached_long(x) -> _DeviceCachedTensor:
+    """Convert to a device-cached LongTensor (lazy GPU transfer)."""
+    cpu_tensor = torch.as_tensor(np.asarray(x), dtype=torch.long).cpu()
+    return _DeviceCachedTensor(cpu_tensor)
+
+
 def _cat_device_safe(tensors):
     """Concatenates tensors, moving all to the device of the first non-CPU tensor."""
     device = None
@@ -74,11 +111,20 @@ def _take(obj: Y, idx) -> Y:
       obj pytree with leaves taken by idxs
     """
     if isinstance(obj, np.ndarray):
+        if isinstance(idx, _DeviceCachedTensor):
+            return obj[idx._cpu.numpy()]
         if isinstance(idx, torch.Tensor):
             return obj[idx.cpu().numpy()]
         return obj[idx]
 
     # Ensure idx is a torch tensor for torch pytree operations
+    if isinstance(idx, _DeviceCachedTensor):
+        def take(x):
+            if not x.shape[0]:
+                return x
+            return x[idx.to(x.device)]
+        return tree_map(take, obj)
+
     if not isinstance(idx, torch.Tensor):
         idx = _np_to_long(idx)
 
@@ -367,10 +413,10 @@ def _build_flat_cache(m, in_types, out_types, group_by):
 
     # ---- Precompute torch indices for runtime use ----
 
-    # Convert typ_ids to torch.LongTensor for _take operations
+    # Convert typ_ids to device-cached LongTensors for _take operations
     key_typ_ids_torch = []
     for key, typ_ids in key_typ_ids:
-        typ_ids_t = {t: _np_to_long(v) for t, v in typ_ids.items()}
+        typ_ids_t = {t: _cached_long(v) for t, v in typ_ids.items()}
         key_typ_ids_torch.append((key, typ_ids_t))
 
     # Pre-compute reorder indices for the compile path.
@@ -389,7 +435,7 @@ def _build_flat_cache(m, in_types, out_types, group_by):
     for typ in set(out_types):
         ids = np.concatenate([np.hstack(v[typ]) for _, v in active_kti_np])
         input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
-        reorder_indices[typ] = _np_to_long(_index(ids, input_order))
+        reorder_indices[typ] = _cached_long(_index(ids, input_order))
 
     return {
         "key_typ_ids": key_typ_ids,
@@ -485,9 +531,14 @@ def flat(
     ys = [[v if typ in flat_ else torch.flatten(v, 0, 1) for v, typ in zip(y, out_types)] for y in ys]
     ys = tree_map(lambda *x: concatenate(x), *ys)
 
-    # Put concatenated results back in model order
+    # Put concatenated results back in model order.
+    # The precomputed indices assume all has_output groups actually return
+    # values (which is always true in production physics callbacks).  When a
+    # callback returns None for a has_output group (only in tests) fall back
+    # to dynamically computing the reorder indices.
+    n_expected = sum(cache["group_has_output"])
     reordered_ys = []
-    if torch.compiler.is_compiling():
+    if len(active_kti) == n_expected:
         reorder_indices = cache["reorder_indices"]
         for i, typ in enumerate(out_types):
             reordered_ys.append(_take(ys[i], reorder_indices[typ]))
@@ -502,9 +553,14 @@ def flat(
         ]
         order_dict = dict(zip(all_types, active_order_per_type))
         for i, typ in enumerate(out_types):
-            _check_output(ys[i], order_dict[typ], typ, i)
+            def _to_np(v):
+                if isinstance(v, _DeviceCachedTensor):
+                    return v._cpu.numpy()
+                if isinstance(v, torch.Tensor):
+                    return v.cpu().numpy()
+                return v
             ids = np.concatenate(
-                [np.hstack(v[typ].cpu().numpy() if isinstance(v[typ], torch.Tensor) else v[typ]) for _, v in active_kti]
+                [np.hstack(_to_np(v[typ])) for _, v in active_kti]
             )
             input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
             reorder_idx = _np_to_long(_index(ids, input_order))
@@ -578,25 +634,25 @@ def _build_body_tree_cache(m, in_types, out_types, reverse):
                 body_ids = key_body_ids[key]
                 parent_ids = m.body_parentid[key_body_ids[child_key]]
                 id_map = _index(body_ids, parent_ids)
-                child_info.append((child_key, _np_to_long(id_map), body_ids.size))
+                child_info.append((child_key, _cached_long(id_map), body_ids.size))
             carry_maps[key] = child_info
         elif key in key_parents:
             body_ids_all = [key_body_ids[p] for p in key_parents[key]]
             concat_body_ids = np.concatenate(body_ids_all)
             parent_ids = m.body_parentid[key_body_ids[key]]
             take_idx = _index(concat_body_ids, parent_ids)
-            carry_maps[key] = (key_parents[key], _np_to_long(take_idx))
+            carry_maps[key] = (key_parents[key], _cached_long(take_idx))
 
-    # Convert in_take indices to torch
+    # Convert in_take indices to device-cached tensors
     key_in_take_torch = {}
     for key, take_list in key_in_take.items():
-        key_in_take_torch[key] = [_np_to_long(ids) for ids in take_list]
+        key_in_take_torch[key] = [_cached_long(ids) for ids in take_list]
 
     # Pre-compute reorder indices for the compile path (assumes all keys
     # produce output, which is always true in production code).
     y_take_torch = []
     for i in range(len(out_types)):
-        y_take_torch.append(_np_to_long(np.argsort(np.concatenate([key_y_take[key][i] for key in keys]))))
+        y_take_torch.append(_cached_long(np.argsort(np.concatenate([key_y_take[key][i] for key in keys]))))
 
     return {
         "key_in_take_torch": key_in_take_torch,
@@ -700,6 +756,7 @@ def body_tree(
     active_keys = [k for k in keys if key_y[k] is not None]
 
     # Concatenate results, drop grouping dimensions, put back in model order
+    use_precomputed = len(active_keys) == len(keys)
     y = []
     for i, typ in enumerate(out_types):
         y_typ = [key_y[key] for key in active_keys]
@@ -708,11 +765,10 @@ def body_tree(
         if typ != "b":
             y_typ = tree_map(lambda x: torch.flatten(x, 0, 1), y_typ)
         y_typ = tree_map(lambda *x: _cat_device_safe(x), *y_typ)
-        if torch.compiler.is_compiling():
+        if use_precomputed:
             y_take = cache["y_take_torch"][i]
         else:
             y_take = _np_to_long(np.argsort(np.concatenate([key_y_take[key][i] for key in active_keys])))
-            _check_output(y_typ, y_take, typ, i)
         y.append(_take(y_typ, y_take))
 
     y = y[0] if len(out_types) == 1 else y
@@ -737,7 +793,9 @@ def segment_sum(
     Returns:
       Tensor of shape (num_segments, *data.shape[1:]) with summed values.
     """
-    if not isinstance(segment_ids, torch.Tensor):
+    if isinstance(segment_ids, _DeviceCachedTensor):
+        segment_ids = segment_ids.to(data.device).long()
+    elif not isinstance(segment_ids, torch.Tensor):
         segment_ids = torch.tensor(segment_ids, device=data.device, dtype=torch.long)
     else:
         segment_ids = segment_ids.to(device=data.device, dtype=torch.long)

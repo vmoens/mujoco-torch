@@ -151,7 +151,7 @@ def com_pos(m: Model, d: Data) -> Data:
         inert = math.matmul_unroll(ximat * inert, ximat.T)
         inert = inert + math.matmul_unroll(h, h.T) * mass
         # cinert is triu(inert), mass * off, mass
-        inert = inert[(torch.tensor([0, 1, 2, 0, 0, 1]), torch.tensor([0, 1, 2, 1, 2, 2]))]
+        inert = inert[(torch.tensor([0, 1, 2, 0, 0, 1], device=inert.device), torch.tensor([0, 1, 2, 1, 2, 2], device=inert.device))]
         return torch.cat([inert, off * mass, mass.unsqueeze(0)])
 
     root_com = subtree_com[torch.as_tensor(m.body_rootid, device=subtree_com.device)]
@@ -422,7 +422,7 @@ def rne(m: Model, d: Data, flg_acc: bool = False) -> Data:
             if m.opt.disableflags & DisableBit.GRAVITY:
                 cacc = torch.zeros((6,), dtype=cdof_dot.dtype, device=cdof_dot.device)
             else:
-                cacc = torch.cat((torch.zeros((3,)), -m.opt.gravity))
+                cacc = torch.cat((torch.zeros((3,), dtype=cdof_dot.dtype, device=cdof_dot.device), -m.opt.gravity))
 
         vm = cdof_dot * qvel.unsqueeze(-1)
         vm_sum = torch.sum(vm, dim=0)
