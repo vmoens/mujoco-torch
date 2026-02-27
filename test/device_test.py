@@ -120,8 +120,7 @@ class ValidateInputTest(absltest.TestCase):
 
     def test_cone(self):
         m = mujoco.MjModel.from_xml_string('<mujoco><option cone="elliptic"/><worldbody/></mujoco>')
-        with self.assertRaises(NotImplementedError):
-            mujoco_torch.device_put(m)
+        mujoco_torch.device_put(m)
 
     def test_trn(self):
         m = test_util.load_test_file("ant.xml")
@@ -131,30 +130,25 @@ class ValidateInputTest(absltest.TestCase):
 
     def test_dyn(self):
         m = test_util.load_test_file("ant.xml")
-        m.actuator_dyntype[0] = mujoco.mjtDyn.mjDYN_MUSCLE
+        m.actuator_dyntype[0] = mujoco.mjtDyn.mjDYN_USER
         with self.assertRaises(NotImplementedError):
             mujoco_torch.device_put(m)
 
     def test_gain(self):
         m = test_util.load_test_file("ant.xml")
-        m.actuator_gaintype[0] = mujoco.mjtGain.mjGAIN_MUSCLE
+        m.actuator_gaintype[0] = mujoco.mjtGain.mjGAIN_USER
         with self.assertRaises(NotImplementedError):
             mujoco_torch.device_put(m)
 
     def test_bias(self):
         m = test_util.load_test_file("ant.xml")
-        m.actuator_gaintype[0] = mujoco.mjtGain.mjGAIN_MUSCLE
+        m.actuator_biastype[0] = mujoco.mjtBias.mjBIAS_USER
         with self.assertRaises(NotImplementedError):
             mujoco_torch.device_put(m)
 
     def test_condim(self):
         m = test_util.load_test_file("ant.xml")
-        for i in [4, 6]:
-            m.geom_condim[0] = i
-            with self.assertRaises(NotImplementedError):
-                mujoco_torch.device_put(m)
-        # condim=1 and condim=3 are accepted
-        for i in [1, 3]:
+        for i in [1, 3, 4, 6]:
             m.geom_condim[0] = i
             mujoco_torch.device_put(m)
 
