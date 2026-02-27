@@ -439,7 +439,7 @@ def make_constraint(m: Model, d: Data) -> Data:
         dims = d.contact.contact_dim
         rows_per = torch.where(dims == 1, 1, (dims - 1) * 2)
         offsets = torch.cumsum(
-            torch.cat([torch.zeros(1, dtype=rows_per.dtype), rows_per[:-1]]),
+            torch.cat([torch.zeros(1, dtype=rows_per.dtype, device=rows_per.device), rows_per[:-1]]),
             dim=0,
         )
         efc_address = (ns + offsets).to(torch.int64)
