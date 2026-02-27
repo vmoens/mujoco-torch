@@ -154,7 +154,8 @@ class SolverTest(parameterized.TestCase):
             dx = forward_jit_fn(mx, dx)
 
             self.assertLessEqual(
-                dx.solver_niter[0], d.solver_niter[0] + 10,
+                dx.solver_niter[0],
+                d.solver_niter[0] + 10,
                 msg=f"solver took too many iterations at step {i}",
             )
 

@@ -41,10 +41,16 @@ class MujocoTorchGymEnv(gym.Env):
         obs_size = nq + nv
 
         self.observation_space = gym.spaces.Box(
-            low=-np.inf, high=np.inf, shape=(obs_size,), dtype=np.float64,
+            low=-np.inf,
+            high=np.inf,
+            shape=(obs_size,),
+            dtype=np.float64,
         )
         self.action_space = gym.spaces.Box(
-            low=-1.0, high=1.0, shape=(nu,), dtype=np.float64,
+            low=-1.0,
+            high=1.0,
+            shape=(nu,),
+            dtype=np.float64,
         )
 
         self._dx = None
