@@ -63,3 +63,5 @@ ignore = [
 "examples/*" = ["T201"]
 "test/*" = ["T201"]
 "benchmarks/*" = ["T201"]
+"gpu_bench*.py" = ["T201"]
+"test_fullgraph.py" = ["T201"]

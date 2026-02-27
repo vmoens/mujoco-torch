@@ -23,7 +23,6 @@ import mujoco_torch
 from mujoco_torch._src import forward, sensor, test_util
 from mujoco_torch._src.types import SensorType as ST
 
-
 _SUPPORTED_SENSOR_TYPES = {
     int(ST.MAGNETOMETER), int(ST.RANGEFINDER), int(ST.JOINTPOS),
     int(ST.TENDONPOS), int(ST.ACTUATORPOS), int(ST.BALLQUAT),

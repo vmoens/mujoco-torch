@@ -429,7 +429,9 @@ def tendon(m: Model, d: Data) -> Data:
     qpos_vals = d.qpos[m.jnt_qposadr[wrap_objid_jnt]]
 
     # tendon length = sum of (coefficient * joint position) per tendon
-    segment_ids = torch.arange(ntendon_jnt, device=d.qpos.device).repeat_interleave(torch.as_tensor(tendon_num_jnt, device=d.qpos.device))
+    segment_ids = torch.arange(ntendon_jnt, device=d.qpos.device).repeat_interleave(
+        torch.as_tensor(tendon_num_jnt, device=d.qpos.device)
+    )
     ten_length = torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device)
     ten_length_jnt = torch.zeros(ntendon_jnt, dtype=d.qpos.dtype, device=d.qpos.device)
     ten_length_jnt = ten_length_jnt.index_add(0, segment_ids, moment_jnt * qpos_vals)
@@ -437,7 +439,9 @@ def tendon(m: Model, d: Data) -> Data:
 
     # tendon Jacobian: ten_J[tendon_id, dof_adr] = wrap_prm (coefficient)
     ten_J = torch.zeros((m.ntendon, m.nv), dtype=d.qpos.dtype, device=d.qpos.device)
-    adr_moment_jnt = torch.as_tensor(tendon_id_jnt, device=d.qpos.device).repeat_interleave(torch.as_tensor(tendon_num_jnt, device=d.qpos.device))
+    adr_moment_jnt = torch.as_tensor(tendon_id_jnt, device=d.qpos.device).repeat_interleave(
+        torch.as_tensor(tendon_num_jnt, device=d.qpos.device)
+    )
     dofadr_moment_jnt = m.jnt_dofadr[wrap_objid_jnt]
     ten_J[adr_moment_jnt, dofadr_moment_jnt] = moment_jnt
 

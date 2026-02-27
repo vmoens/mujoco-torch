@@ -31,8 +31,10 @@ def _ray_quad(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> tuple[torch.
 
     x0 = math.safe_div(-b - det_2, a)
     x1 = math.safe_div(-b + det_2, a)
-    x0 = torch.where((det < mujoco.mjMINVAL) | (x0 < 0), torch.full((), torch.inf, dtype=x0.dtype, device=x0.device), x0)
-    x1 = torch.where((det < mujoco.mjMINVAL) | (x1 < 0), torch.full((), torch.inf, dtype=x1.dtype, device=x1.device), x1)
+    inf = x0.new_full((), torch.inf)
+    invalid = lambda x: (det < mujoco.mjMINVAL) | (x < 0)
+    x0 = torch.where(invalid(x0), inf, x0)
+    x1 = torch.where(invalid(x1), inf, x1)
 
     return x0, x1
 

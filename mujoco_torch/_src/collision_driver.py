@@ -687,7 +687,8 @@ def collision(m: Model, d: Data) -> Data:
     ns = ne + nf + nl
     dims_t = contact.contact_dim
     rows_per_contact = torch.where(dims_t == 1, 1, (dims_t - 1) * 2)
-    offsets = torch.cumsum(torch.cat([torch.zeros(1, dtype=rows_per_contact.dtype, device=rows_per_contact.device), rows_per_contact[:-1]]), dim=0)
+    zeros = torch.zeros(1, dtype=rows_per_contact.dtype, device=rows_per_contact.device)
+    offsets = torch.cumsum(torch.cat([zeros, rows_per_contact[:-1]]), dim=0)
     contact = contact.replace(
         efc_address=(ns + offsets).to(torch.int64),
     )

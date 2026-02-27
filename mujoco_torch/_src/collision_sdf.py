@@ -115,9 +115,11 @@ class _CylinderSDF(torch.autograd.Function):
         a1 = torch.abs(pos[2]) - size[1]
         b0 = torch.maximum(a0, torch.full((), 0.0, dtype=pos.dtype, device=pos.device))
         b1 = torch.maximum(a1, torch.full((), 0.0, dtype=pos.dtype, device=pos.device))
-        return torch.minimum(torch.maximum(a0, a1), torch.full((), 0.0, dtype=pos.dtype, device=pos.device)) + torch.sqrt(
-            b0 * b0 + b1 * b1
+        inner = torch.minimum(
+            torch.maximum(a0, a1),
+            torch.full((), 0.0, dtype=pos.dtype, device=pos.device),
         )
+        return inner + torch.sqrt(b0 * b0 + b1 * b1)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None]:

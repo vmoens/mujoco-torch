@@ -628,7 +628,11 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
                 break
             out_beg, out_end = int(value.dof_Madr[j]), int(value.dof_Madr[j + 1])
             factor_updates.setdefault(depth[j], []).append((out_beg, out_end, madr_d, madr_ij))
-    result["factor_m_madr_ds_t"] = torch.tensor(factor_madr_ds, dtype=torch.long) if factor_madr_ds else torch.empty(0, dtype=torch.long)
+    result["factor_m_madr_ds_t"] = (
+        torch.tensor(factor_madr_ds, dtype=torch.long)
+        if factor_madr_ds
+        else torch.empty(0, dtype=torch.long)
+    )
     # Pre-compute factored update index tensors as _DeviceCachedTensor for lazy GPU transfer
     factor_m_updates_precomp = []
     for _, updates_list in sorted(factor_updates.items(), reverse=True):

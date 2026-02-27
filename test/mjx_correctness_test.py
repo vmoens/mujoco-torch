@@ -92,7 +92,7 @@ def _run_torch_vmap(m_mj, qvel_kick, nsteps, batch_size=4, disable_constraint=Fa
     mx = mujoco_torch.device_put(m_mj)
 
     envs = []
-    for i in range(batch_size):
+    for _ in range(batch_size):
         d_mj = mujoco.MjData(m_mj)
         d_mj.qvel[:] = qvel_kick
         envs.append(mujoco_torch.device_put(d_mj))

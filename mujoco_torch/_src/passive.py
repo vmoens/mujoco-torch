@@ -159,7 +159,9 @@ def _fluid(m: Model, d: Data) -> torch.Tensor:
         d.ximat,
         d.cvel,
     )
-    qfrc = torch.vmap(support.apply_ft, (None, None, 0, 0, 0, 0))(m, d, force, torque, d.xipos, torch.arange(m.nbody, device=d.xipos.device))
+    qfrc = torch.vmap(support.apply_ft, (None, None, 0, 0, 0, 0))(
+        m, d, force, torque, d.xipos, torch.arange(m.nbody, device=d.xipos.device)
+    )
 
     return torch.sum(qfrc, dim=0)
 

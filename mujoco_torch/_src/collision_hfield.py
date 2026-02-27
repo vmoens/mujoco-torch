@@ -20,7 +20,6 @@ import torch.nn.functional as F
 
 from mujoco_torch._src import math
 from mujoco_torch._src import mesh as mesh_module
-from mujoco_torch._src.math import _CachedConst
 from mujoco_torch._src.collision_convex import (
     _clip_edge_to_planes,
     _manifold_points,
@@ -36,6 +35,7 @@ from mujoco_torch._src.collision_types import (
     GeomInfo,
     HFieldInfo,
 )
+from mujoco_torch._src.math import _CachedConst
 
 _MANIFOLD_TOL = _CachedConst(1e-3)
 

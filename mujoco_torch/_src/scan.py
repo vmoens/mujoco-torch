@@ -174,7 +174,6 @@ def _cached_long(x) -> _DeviceCachedTensor:
     return _DeviceCachedTensor(cpu_tensor)
 
 
-from mujoco_torch._src.math import _CachedConst
 
 
 def _cat_device_safe(tensors):

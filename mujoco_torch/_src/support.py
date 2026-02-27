@@ -112,7 +112,11 @@ def vmap_compatible_index_select(tensor, dim, index):
     scalar_index = not isinstance(index, torch.Tensor) and isinstance(index, (int, np.integer))
     if not isinstance(index, torch.Tensor):
         device = tensor.device if isinstance(tensor, torch.Tensor) else None
-        index = torch.tensor([index], device=device).long() if scalar_index else torch.as_tensor(index).long().to(device=device)
+        index = (
+            torch.tensor([index], device=device).long()
+            if scalar_index
+            else torch.as_tensor(index).long().to(device=device)
+        )
 
     is_batched = False
     if not torch.compiler.is_compiling() and is_batchedtensor(index):

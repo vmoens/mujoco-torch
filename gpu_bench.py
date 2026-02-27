@@ -262,31 +262,31 @@ def main():
     only = args.only
 
     if only in (None, "compile"):
-        print(f"\n  torch compile(fullgraph=True):", flush=True)
+        print("\n  torch compile(fullgraph=True):", flush=True)
         model_results["torch compile"] = bench_compile(mx, m_mj, args.batch_sizes, args.nsteps)
 
     if only in (None, "c"):
-        print(f"\n  MuJoCo C (sequential, B=1):", flush=True)
+        print("\n  MuJoCo C (sequential, B=1):", flush=True)
         r = bench_mujoco_c(m_mj, args.nsteps)
         sps = r["B=1"]["steps_per_s"]
         print(f"    B=    1: {r['B=1']['elapsed_s'] * 1e3:8.1f} ms  ({sps:>12,.0f} steps/s)", flush=True)
         model_results["MuJoCo C (seq)"] = r
 
     if only in (None, "loop"):
-        print(f"\n  mujoco-torch loop (B=1):", flush=True)
+        print("\n  mujoco-torch loop (B=1):", flush=True)
         r = bench_torch_loop(mx, m_mj, args.nsteps)
         sps = r["B=1"]["steps_per_s"]
         print(f"    B=    1: {r['B=1']['elapsed_s'] * 1e3:8.1f} ms  ({sps:>12,.0f} steps/s)", flush=True)
         model_results["torch loop (seq)"] = r
 
     if only in (None, "vmap"):
-        print(f"\n  mujoco-torch vmap (eager):", flush=True)
+        print("\n  mujoco-torch vmap (eager):", flush=True)
         model_results["torch vmap (eager)"] = bench_vmap(mx, m_mj, args.batch_sizes, args.nsteps)
 
     if only in (None, "mjx"):
         gc.collect()
         torch.cuda.empty_cache()
-        print(f"\n  MJX jit(vmap(step)):", flush=True)
+        print("\n  MJX jit(vmap(step)):", flush=True)
         mjx_r = bench_mjx(m_mj, args.batch_sizes, args.nsteps)
         if mjx_r is not None:
             model_results["MJX jit(vmap)"] = mjx_r

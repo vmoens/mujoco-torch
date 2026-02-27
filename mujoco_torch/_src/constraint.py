@@ -130,7 +130,16 @@ def _instantiate_equality_connect(m: Model, d: Data, precomp: dict) -> _Efc:
     solimp = torch.tile(m.eq_solimp[ids], (3, 1))
     frictionloss = torch.zeros_like(pos_norm)
 
-    return _Efc(J=j, pos=pos, pos_norm=pos_norm, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
+    return _Efc(
+        J=j,
+        pos=pos,
+        pos_norm=pos_norm,
+        invweight=invweight,
+        solref=solref,
+        solimp=solimp,
+        frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
+    )
 
 
 def _instantiate_equality_weld(m: Model, d: Data, precomp: dict) -> _Efc:
@@ -178,7 +187,16 @@ def _instantiate_equality_weld(m: Model, d: Data, precomp: dict) -> _Efc:
     solimp = torch.tile(m.eq_solimp[ids], (6, 1))
     frictionloss = torch.zeros_like(pos_norm)
 
-    return _Efc(J=j, pos=pos, pos_norm=pos_norm, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
+    return _Efc(
+        J=j,
+        pos=pos,
+        pos_norm=pos_norm,
+        invweight=invweight,
+        solref=solref,
+        solimp=solimp,
+        frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
+    )
 
 
 def _instantiate_friction(m: Model, d: Data, precomp: dict) -> _Efc:
@@ -209,14 +227,23 @@ def _instantiate_friction(m: Model, d: Data, precomp: dict) -> _Efc:
     solimp = torch.cat([si_dof, si_ten])
     pos = torch.zeros(size, dtype=frictionloss.dtype, device=frictionloss.device)
 
-    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[size])
+    return _Efc(
+        J=j,
+        pos=pos,
+        pos_norm=pos,
+        invweight=invweight,
+        solref=solref,
+        solimp=solimp,
+        frictionloss=frictionloss,
+        batch_size=[size],
+    )
 
 
 def _instantiate_equality_joint(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for joint equality constraints."""
     _dev = d.qpos.device
     ids = precomp["ids"].to(_dev)
-    id1_t = precomp["id1"].to(_dev)
+    _id1_t = precomp["id1"].to(_dev)
     id2_t = precomp["id2"].to(_dev)
     dofadr1_t = precomp["dofadr1"].to(_dev)
     dofadr2_t = precomp["dofadr2"].to(_dev)
@@ -249,7 +276,16 @@ def _instantiate_equality_joint(m: Model, d: Data, precomp: dict) -> _Efc:
     solref, solimp = m.eq_solref[ids], m.eq_solimp[ids]
     frictionloss = torch.zeros_like(pos)
 
-    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
+    return _Efc(
+        J=j,
+        pos=pos,
+        pos_norm=pos,
+        invweight=invweight,
+        solref=solref,
+        solimp=solimp,
+        frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
+    )
 
 
 def _instantiate_limit_ball(m: Model, d: Data, precomp: dict) -> _Efc:
@@ -277,7 +313,16 @@ def _instantiate_limit_ball(m: Model, d: Data, precomp: dict) -> _Efc:
     solref, solimp = m.jnt_solref[ids], m.jnt_solimp[ids]
     frictionloss = torch.zeros_like(pos)
 
-    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
+    return _Efc(
+        J=j,
+        pos=pos,
+        pos_norm=pos,
+        invweight=invweight,
+        solref=solref,
+        solimp=solimp,
+        frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
+    )
 
 
 def _instantiate_limit_slide_hinge(m: Model, d: Data, precomp: dict) -> _Efc:
@@ -306,7 +351,16 @@ def _instantiate_limit_slide_hinge(m: Model, d: Data, precomp: dict) -> _Efc:
     solref, solimp = m.jnt_solref[ids], m.jnt_solimp[ids]
     frictionloss = torch.zeros_like(pos)
 
-    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
+    return _Efc(
+        J=j,
+        pos=pos,
+        pos_norm=pos,
+        invweight=invweight,
+        solref=solref,
+        solimp=solimp,
+        frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
+    )
 
 
 def _instantiate_limit_tendon(m: Model, d: Data, precomp: dict) -> _Efc:
@@ -331,7 +385,16 @@ def _instantiate_limit_tendon(m: Model, d: Data, precomp: dict) -> _Efc:
     pos = pos * active
     frictionloss = torch.zeros_like(pos)
 
-    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
+    return _Efc(
+        J=j,
+        pos=pos,
+        pos_norm=pos,
+        invweight=invweight,
+        solref=solref,
+        solimp=solimp,
+        frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
+    )
 
 
 def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc:
@@ -367,7 +430,16 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc:
     solimp = contact.solimp
     frictionloss = torch.zeros_like(pos)
 
-    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
+    return _Efc(
+        J=j,
+        pos=pos,
+        pos_norm=pos,
+        invweight=invweight,
+        solref=solref,
+        solimp=solimp,
+        frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
+    )
 
 
 def _instantiate_contact(m: Model, d: Data) -> _Efc:
@@ -412,7 +484,16 @@ def _instantiate_contact(m: Model, d: Data) -> _Efc:
     j, invweight, pos, solref, solimp = torch.utils._pytree.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), res)
     frictionloss = torch.zeros_like(pos)
 
-    return _Efc(J=j, pos=pos, pos_norm=pos, invweight=invweight, solref=solref, solimp=solimp, frictionloss=frictionloss, batch_size=[j.shape[0]])
+    return _Efc(
+        J=j,
+        pos=pos,
+        pos_norm=pos,
+        invweight=invweight,
+        solref=solref,
+        solimp=solimp,
+        frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
+    )
 
 
 constraint_sizes = collision_driver.constraint_sizes
@@ -493,6 +574,9 @@ def make_constraint(m: Model, d: Data) -> Data:
 
     aref, r = fn(efc)
     d = d.replace(efc_J=efc.J, efc_D=1 / r, efc_aref=aref)
-    d = d.replace(efc_frictionloss=efc.frictionloss, nefc=torch.full((), r.shape[0], dtype=torch.int32, device=r.device))
+    d = d.replace(
+        efc_frictionloss=efc.frictionloss,
+        nefc=torch.full((), r.shape[0], dtype=torch.int32, device=r.device),
+    )
 
     return d
