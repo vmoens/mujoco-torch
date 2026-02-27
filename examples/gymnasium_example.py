@@ -55,7 +55,6 @@ class MujocoTorchGymEnv(gym.Env):
 
         self._dx = None
         self._step_count = 0
-        self._prev_xpos = 0.0
 
         if render_mode == "human":
             self._d_mj = mujoco.MjData(self._m_mj)
@@ -68,11 +67,11 @@ class MujocoTorchGymEnv(gym.Env):
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         d_mj = mujoco.MjData(self._m_mj)
+        mujoco.mj_forward(self._m_mj, d_mj)
         self._dx = mujoco_torch.device_put(d_mj)
         if self._device is not None:
             self._dx = self._dx.to(self._device)
         self._step_count = 0
-        self._prev_xpos = float(self._dx.xipos[1, 0])
         return self._get_obs(), {}
 
     def step(self, action):
@@ -83,23 +82,18 @@ class MujocoTorchGymEnv(gym.Env):
         self._dx = mujoco_torch.step(self.mx, self._dx)
         self._step_count += 1
 
-        xpos = float(self._dx.xipos[1, 0])
-        forward_reward = (xpos - self._prev_xpos) / self.mx.opt.timestep
-        self._prev_xpos = xpos
-
         ctrl_cost = 0.5 * float((ctrl**2).sum())
-        reward = forward_reward - ctrl_cost
+        reward = -ctrl_cost
 
-        terminated = float(self._dx.qpos[2]) < 0.2
+        terminated = False
         truncated = self._step_count >= self.max_episode_steps
 
         obs = self._get_obs()
-        info = {"x_position": xpos}
 
         if self.render_mode == "human":
             self.render()
 
-        return obs, reward, terminated, truncated, info
+        return obs, reward, terminated, truncated, {}
 
     def render(self):
         if self.render_mode != "human":

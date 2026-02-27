@@ -57,11 +57,11 @@ class MujocoTorchEnv(EnvBase):
 
     def _reset(self, tensordict=None, **kwargs):
         d_mj = mujoco.MjData(self._m_mj)
+        mujoco.mj_forward(self._m_mj, d_mj)
         self._dx = mujoco_torch.device_put(d_mj)
         if self.device is not None:
             self._dx = self._dx.to(self.device)
         self._step_count = 0
-        self._prev_xpos = self._dx.xipos[1, 0].clone()
 
         return TensorDict(
             {
@@ -80,14 +80,10 @@ class MujocoTorchEnv(EnvBase):
         self._dx = mujoco_torch.step(self.mx, self._dx)
         self._step_count += 1
 
-        xpos = self._dx.xipos[1, 0]
-        forward_reward = (xpos - self._prev_xpos) / self.mx.opt.timestep
-        self._prev_xpos = xpos.clone()
-
         ctrl_cost = 0.5 * (action**2).sum()
-        reward = (forward_reward - ctrl_cost).unsqueeze(0).to(self.dtype)
+        reward = (-ctrl_cost).unsqueeze(0).to(self.dtype)
 
-        terminated = self._dx.qpos[2] < 0.2
+        terminated = torch.tensor(False)
         truncated = self._step_count >= self.max_episode_steps
         done = terminated | truncated
 
