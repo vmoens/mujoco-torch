@@ -72,8 +72,6 @@ class Solver64Test(parameterized.TestCase):
 
 
 class SolverTest(parameterized.TestCase):
-    # TODO: humanoid.xml excluded due to boundary contact precision differences
-    # between our kinematics and MuJoCo's. Contacts at dist~0 flip active/inactive.
     @parameterized.parameters(enumerate(("ant.xml",)))
     def test_cg(self, seed, fname):
         """Test mujoco_torch cg solver is close to mj at 32 bit precision.
@@ -125,6 +123,40 @@ class SolverTest(parameterized.TestCase):
             )
             _assert_attr_eq(d, dx, "qfrc_constraint", i, fname, atol=1e-1, rtol=1e-1)
             _assert_attr_eq(d, dx, "qacc", i, fname, atol=1e-1, rtol=1e-1)
+
+    @parameterized.parameters(enumerate(("humanoid.xml",)))
+    def test_cg_humanoid(self, seed, fname):
+        """Test solver on humanoid.
+
+        Humanoid has contacts at dist~0 that flip active/inactive differently
+        between mujoco-torch and MuJoCo C due to tiny kinematics differences.
+        This means the constraint sets are different, so we only verify that
+        the solver converges and produces reasonable dynamics -- not that
+        qfrc_constraint matches element-wise.
+        """
+        f = epath.resource_path("mujoco_torch") / "test_data" / fname
+        m = mujoco.MjModel.from_xml_string(f.read_text())
+        d = mujoco.MjData(m)
+        mx = mujoco_torch.device_put(m)
+
+        forward_jit_fn = mujoco_torch.forward
+
+        np.random.seed(seed)
+        d.qvel = 0.01 * np.random.random(m.nv)
+
+        for i in range(100):
+            save = d.qpos, d.qvel, d.time, d.qacc_warmstart, d.qacc_smooth
+            d = mujoco.MjData(m)
+            d.qpos, d.qvel, d.time, d.qacc_warmstart, d.qacc_smooth = save
+            dx = mujoco_torch.device_put(d)
+
+            mujoco.mj_step(m, d)
+            dx = forward_jit_fn(mx, dx)
+
+            self.assertLessEqual(
+                dx.solver_niter[0], d.solver_niter[0] + 10,
+                msg=f"solver took too many iterations at step {i}",
+            )
 
 
 if __name__ == "__main__":
