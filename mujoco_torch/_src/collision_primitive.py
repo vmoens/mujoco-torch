@@ -110,7 +110,7 @@ def plane_cylinder(plane: GeomInfo, cylinder: GeomInfo) -> Contact:
     # compute sideways vector: vec1
     prjvec1 = -prjvec * 0.5
     vec1 = math.normalize(math.cross(vec, axis)) * cylinder.geom_size[0]
-    vec1 = vec1 * (torch.sqrt(torch.tensor(3.0, device=vec.device)) * 0.5)
+    vec1 = vec1 * (torch.sqrt(torch.full((), 3.0, device=vec.device)) * 0.5)
 
     # disk parallel to plane
     d1 = dist0 + prjaxis + prjvec

@@ -642,4 +642,4 @@ def collision(m: Model, d: Data) -> Data:
         efc_address=(ns + offsets).to(torch.int64),
     )
 
-    return d.replace(contact=contact, ncon=torch.tensor(ncon_, dtype=torch.int32, device=contact.dist.device))
+    return d.replace(contact=contact, ncon=torch.full((), ncon_, dtype=torch.int32, device=contact.dist.device))

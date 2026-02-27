@@ -453,7 +453,7 @@ def _sat_hull_hull(
         sign = torch.where(dist1 > dist2, -1, 1)
         dist = torch.minimum(dist1, dist2)
         dist = torch.where(
-            ~torch.all(axis == 0.0), dist, torch.tensor(1e6, dtype=dist.dtype, device=dist.device)
+            ~torch.all(axis == 0.0), dist, torch.full((), 1e6, dtype=dist.dtype, device=dist.device)
         )  # degenerate axis
         return dist, sign
 
@@ -543,7 +543,7 @@ def sphere_convex(sphere: GeomInfo, convex: GeomInfo) -> Contact:
     support = get_support(faces, normals)
 
     # Pick the face with minimal penetration as long as it has support.
-    support = torch.where(support >= 0, torch.tensor(-1e12, dtype=support.dtype, device=support.device), support)
+    support = torch.where(support >= 0, torch.full((), -1e12, dtype=support.dtype, device=support.device), support)
     best_idx = support.argmax()
     face = _vmap_select(faces, best_idx)
     normal = _vmap_select(normals, best_idx)
@@ -566,7 +566,7 @@ def sphere_convex(sphere: GeomInfo, convex: GeomInfo) -> Contact:
     degenerate_edge = torch.all(edge_normals == 0, dim=1)
     behind = edge_dist < 0.0
     edge_dist = torch.where(
-        degenerate_edge | behind, torch.tensor(1e12, dtype=edge_dist.dtype, device=edge_dist.device), edge_dist
+        degenerate_edge | behind, torch.full((), 1e12, dtype=edge_dist.dtype, device=edge_dist.device), edge_dist
     )
     idx = edge_dist.argmin()
     edge_pt = math.closest_segment_point(_vmap_select(edge_p0, idx), _vmap_select(edge_p1, idx), pt)
@@ -615,7 +615,7 @@ def capsule_convex(cap: GeomInfo, convex: GeomInfo) -> Contact:
     has_support = torch.all(support < 0)
 
     # Pick the face with minimal penetration as long as it has support.
-    support = torch.where(support >= 0, torch.tensor(-1e12, dtype=support.dtype, device=support.device), support)
+    support = torch.where(support >= 0, torch.full((), -1e12, dtype=support.dtype, device=support.device), support)
     best_idx = support.argmax()
     face = _vmap_select(faces, best_idx)
     normal = _vmap_select(normals, best_idx)
@@ -637,7 +637,7 @@ def capsule_convex(cap: GeomInfo, convex: GeomInfo) -> Contact:
     penetration = torch.where(
         mask & has_support,
         (face_pts - cap_pts_clipped) @ normal,
-        torch.tensor(-1.0, dtype=face_pts.dtype, device=face_pts.device),
+        torch.full((), -1.0, dtype=face_pts.dtype, device=face_pts.device),
     )
 
     # Get a potential edge contact.

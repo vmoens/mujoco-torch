@@ -74,8 +74,8 @@ def _cylinder_grad(x: torch.Tensor, size: torch.Tensor) -> torch.Tensor:
     a = torch.stack([c - size[0], e - size[1]])
     b = torch.stack(
         [
-            torch.maximum(a[0], torch.tensor(0.0, dtype=x.dtype, device=x.device)),
-            torch.maximum(a[1], torch.tensor(0.0, dtype=x.dtype, device=x.device)),
+            torch.maximum(a[0], torch.full((), 0.0, dtype=x.dtype, device=x.device)),
+            torch.maximum(a[1], torch.full((), 0.0, dtype=x.dtype, device=x.device)),
         ]
     )
     j = torch.argmax(a)
@@ -90,11 +90,11 @@ def _cylinder_grad(x: torch.Tensor, size: torch.Tensor) -> torch.Tensor:
     )
     gradm = torch.stack(
         [
-            torch.stack([grada[0], grada[1], torch.tensor(0.0, dtype=x.dtype, device=x.device)]),
+            torch.stack([grada[0], grada[1], torch.full((), 0.0, dtype=x.dtype, device=x.device)]),
             torch.stack(
                 [
-                    torch.tensor(0.0, dtype=x.dtype, device=x.device),
-                    torch.tensor(0.0, dtype=x.dtype, device=x.device),
+                    torch.full((), 0.0, dtype=x.dtype, device=x.device),
+                    torch.full((), 0.0, dtype=x.dtype, device=x.device),
                     grada[2],
                 ]
             ),
@@ -113,9 +113,9 @@ class _CylinderSDF(torch.autograd.Function):
         ctx.save_for_backward(pos, size)
         a0 = torch.sqrt(pos[0] * pos[0] + pos[1] * pos[1]) - size[0]
         a1 = torch.abs(pos[2]) - size[1]
-        b0 = torch.maximum(a0, torch.tensor(0.0, dtype=pos.dtype, device=pos.device))
-        b1 = torch.maximum(a1, torch.tensor(0.0, dtype=pos.dtype, device=pos.device))
-        return torch.minimum(torch.maximum(a0, a1), torch.tensor(0.0, dtype=pos.dtype, device=pos.device)) + torch.sqrt(
+        b0 = torch.maximum(a0, torch.full((), 0.0, dtype=pos.dtype, device=pos.device))
+        b1 = torch.maximum(a1, torch.full((), 0.0, dtype=pos.dtype, device=pos.device))
+        return torch.minimum(torch.maximum(a0, a1), torch.full((), 0.0, dtype=pos.dtype, device=pos.device)) + torch.sqrt(
             b0 * b0 + b1 * b1
         )
 
@@ -164,8 +164,8 @@ def _gradient_step(objective: SDFFn, state: tuple[torch.Tensor, torch.Tensor]) -
     amax = 2.0
     nlinesearch = 10
     alpha = torch.logspace(
-        torch.log10(torch.tensor(amin, dtype=x.dtype, device=x.device)),
-        torch.log10(torch.tensor(amax, dtype=x.dtype, device=x.device)),
+        torch.log10(torch.full((), amin, dtype=x.dtype, device=x.device)),
+        torch.log10(torch.full((), amax, dtype=x.dtype, device=x.device)),
         nlinesearch,
     )
     x_grad = x.detach().clone().requires_grad_(True)
@@ -182,7 +182,7 @@ def _gradient_descent(
     niter: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Performs gradient descent with backtracking line search."""
-    dist = torch.tensor(1e10, dtype=x.dtype, device=x.device)
+    dist = torch.full((), 1e10, dtype=x.dtype, device=x.device)
     init = (dist, x)
 
     def combine_fn(carry, _unused):

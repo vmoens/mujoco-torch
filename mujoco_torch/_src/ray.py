@@ -31,8 +31,8 @@ def _ray_quad(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> tuple[torch.
 
     x0 = math.safe_div(-b - det_2, a)
     x1 = math.safe_div(-b + det_2, a)
-    x0 = torch.where((det < mujoco.mjMINVAL) | (x0 < 0), torch.tensor(torch.inf, dtype=x0.dtype, device=x0.device), x0)
-    x1 = torch.where((det < mujoco.mjMINVAL) | (x1 < 0), torch.tensor(torch.inf, dtype=x1.dtype, device=x1.device), x1)
+    x0 = torch.where((det < mujoco.mjMINVAL) | (x0 < 0), torch.full((), torch.inf, dtype=x0.dtype, device=x0.device), x0)
+    x1 = torch.where((det < mujoco.mjMINVAL) | (x1 < 0), torch.full((), torch.inf, dtype=x1.dtype, device=x1.device), x1)
 
     return x0, x1
 
@@ -51,7 +51,7 @@ def _ray_plane(
     p = pnt[0:2] + x * vec[0:2]
     valid = valid & torch.all((size[0:2] <= 0) | (torch.abs(p) <= size[0:2]))
 
-    return torch.where(valid, x, torch.tensor(torch.inf, dtype=x.dtype, device=x.device))
+    return torch.where(valid, x, torch.full((), torch.inf, dtype=x.dtype, device=x.device))
 
 
 def _ray_sphere(
@@ -84,7 +84,7 @@ def _ray_capsule(
 
     # make sure round solution is between flat sides
     x = torch.where(
-        torch.abs(pnt[2] + x * vec[2]) <= size[1], x, torch.tensor(torch.inf, dtype=x.dtype, device=x.device)
+        torch.abs(pnt[2] + x * vec[2]) <= size[1], x, torch.full((), torch.inf, dtype=x.dtype, device=x.device)
     )
 
     # top cap
@@ -155,7 +155,7 @@ def _ray_box(
     valid = valid & (torch.abs(p1) <= size[iface[:, 1]])
     valid = valid & (x >= 0)
 
-    return torch.min(torch.where(valid, x, torch.tensor(torch.inf, dtype=x.dtype, device=x.device)))
+    return torch.min(torch.where(valid, x, torch.full((), torch.inf, dtype=x.dtype, device=x.device)))
 
 
 def _ray_triangle(
@@ -185,7 +185,7 @@ def _ray_triangle(
         torch.dot(vec, nrm),
     )
     valid = valid & (dist >= 0)
-    dist = torch.where(valid, dist, torch.tensor(torch.inf, dtype=dist.dtype, device=dist.device))
+    dist = torch.where(valid, dist, torch.full((), torch.inf, dtype=dist.dtype, device=dist.device))
 
     return dist
 
@@ -293,21 +293,21 @@ def ray(
         else:
             dist = torch.vmap(fn)(*args)
 
-        dist = torch.where(geom_filter_dyn[id_], dist, torch.tensor(torch.inf, dtype=dist.dtype, device=dist.device))
+        dist = torch.where(geom_filter_dyn[id_], dist, torch.full((), torch.inf, dtype=dist.dtype, device=dist.device))
         dists.append(dist)
         ids.append(id_)
 
     if not ids:
         device = pnt.device if isinstance(pnt, torch.Tensor) else None
-        return torch.tensor(-1, dtype=torch.long, device=device), torch.tensor(-1.0, dtype=pnt.dtype, device=device)
+        return torch.full((), -1, dtype=torch.long, device=device), torch.full((), -1.0, dtype=pnt.dtype, device=device)
 
     dists = torch.cat(dists)
     ids_cat = torch.cat([torch.tensor(x, dtype=torch.long, device=pnt.device) for x in ids])
     min_id = torch.argmin(dists)
     min_dist = dists.gather(0, min_id.unsqueeze(0)).squeeze(0)
     min_geom_id = ids_cat.gather(0, min_id.unsqueeze(0)).squeeze(0)
-    dist = torch.where(torch.isinf(min_dist), torch.tensor(-1.0, dtype=dists.dtype, device=dists.device), min_dist)
-    id_ = torch.where(torch.isinf(min_dist), torch.tensor(-1, dtype=torch.long, device=ids_cat.device), min_geom_id)
+    dist = torch.where(torch.isinf(min_dist), torch.full((), -1.0, dtype=dists.dtype, device=dists.device), min_dist)
+    id_ = torch.where(torch.isinf(min_dist), torch.full((), -1, dtype=torch.long, device=ids_cat.device), min_geom_id)
 
     return dist, id_
 

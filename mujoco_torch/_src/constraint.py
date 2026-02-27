@@ -493,6 +493,6 @@ def make_constraint(m: Model, d: Data) -> Data:
 
     aref, r = fn(efc)
     d = d.replace(efc_J=efc.J, efc_D=1 / r, efc_aref=aref)
-    d = d.replace(efc_frictionloss=efc.frictionloss, nefc=torch.tensor(r.shape[0], dtype=torch.int32, device=r.device))
+    d = d.replace(efc_frictionloss=efc.frictionloss, nefc=torch.full((), r.shape[0], dtype=torch.int32, device=r.device))
 
     return d

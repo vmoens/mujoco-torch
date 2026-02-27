@@ -52,7 +52,7 @@ def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, to
     support = get_support(faces, normals)
     support = torch.where(
         support >= 0,
-        torch.tensor(-1e12, dtype=support.dtype, device=support.device),
+        torch.full((), -1e12, dtype=support.dtype, device=support.device),
         support,
     )
     best_idx = support.argmax()
@@ -70,7 +70,7 @@ def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, to
     behind = edge_dist < 0.0
     edge_dist = torch.where(
         degenerate | behind,
-        torch.tensor(1e12, dtype=edge_dist.dtype, device=edge_dist.device),
+        torch.full((), 1e12, dtype=edge_dist.dtype, device=edge_dist.device),
         edge_dist,
     )
     idx = edge_dist.argmin()
