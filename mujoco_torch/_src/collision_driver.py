@@ -243,7 +243,8 @@ def _dynamic_params(
 
 def _pair_info(m: Model, d: Data, geom1: Sequence[int], geom2: Sequence[int]) -> tuple[GeomInfo, GeomInfo, int]:
     """Returns geom pair info for calculating collision."""
-    g1, g2 = torch.tensor(geom1), torch.tensor(geom2)
+    g1 = torch.tensor(geom1, device=d.geom_xpos.device)
+    g2 = torch.tensor(geom2, device=d.geom_xpos.device)
     n1, n2 = g1.shape[0], g2.shape[0]
     info1 = GeomInfo(
         pos=d.geom_xpos[g1],
@@ -381,9 +382,9 @@ def _collide_hfield_geoms(
         return np.concatenate(x, axis=0) if isinstance(x[0], np.ndarray) else torch.cat(x, dim=0)
 
     params = torch.utils._pytree.tree_map(_concat, *params) if len(params) > 1 else params[0]
-    geom1_t = torch.tensor(geom1_ids)
-    geom2_t = torch.tensor(geom2_ids)
-    contact_dim = torch.tensor(dims, dtype=torch.int32)
+    geom1_t = torch.tensor(geom1_ids, device=dist.device)
+    geom2_t = torch.tensor(geom2_ids, device=dist.device)
+    contact_dim = torch.tensor(dims, dtype=torch.int32, device=dist.device)
     n_repeat = ncon_per_pair
     geom1_t, geom2_t, contact_dim, params = torch.utils._pytree.tree_map(
         lambda x: x.repeat_interleave(n_repeat, dim=0),
@@ -457,8 +458,9 @@ def _collide_geoms(
         return np.concatenate(x, axis=0) if isinstance(x[0], np.ndarray) else torch.cat(x, dim=0)
 
     params = torch.utils._pytree.tree_map(_concat, *params) if len(params) > 1 else params[0]
-    geom1, geom2 = torch.tensor(geom1), torch.tensor(geom2)
-    contact_dim = torch.tensor(dims, dtype=torch.int32)
+    geom1 = torch.tensor(geom1, device=dist.device)
+    geom2 = torch.tensor(geom2, device=dist.device)
+    contact_dim = torch.tensor(dims, dtype=torch.int32, device=dist.device)
     # repeat params by the number of contacts per geom pair
     n_repeat = ncon_per_pair
     geom1, geom2, contact_dim, params = torch.utils._pytree.tree_map(
