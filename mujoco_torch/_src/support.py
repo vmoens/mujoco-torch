@@ -111,7 +111,8 @@ def local_to_global(
 def vmap_compatible_index_select(tensor, dim, index):
     scalar_index = not isinstance(index, torch.Tensor) and isinstance(index, (int, np.integer))
     if not isinstance(index, torch.Tensor):
-        index = torch.tensor([index]).long() if scalar_index else torch.as_tensor(index).long()
+        device = tensor.device if isinstance(tensor, torch.Tensor) else None
+        index = torch.tensor([index], device=device).long() if scalar_index else torch.as_tensor(index).long().to(device=device)
 
     is_batched = False
     if not torch.compiler.is_compiling() and is_batchedtensor(index):
@@ -184,6 +185,6 @@ def xfrc_accumulate(m: Model, d: Data) -> torch.Tensor:
         d.xfrc_applied[:, :3],
         d.xfrc_applied[:, 3:],
         d.xipos,
-        torch.arange(m.nbody),
+        torch.arange(m.nbody, device=d.xipos.device),
     )
     return torch.sum(qfrc, axis=0)

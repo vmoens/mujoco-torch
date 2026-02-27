@@ -143,7 +143,7 @@ def _gravcomp(m: Model, d: Data) -> torch.Tensor:
     force = -m.opt.gravity * (m.body_mass * m.body_gravcomp).unsqueeze(-1)
 
     apply_f = lambda f, pos, body_id: support.jac(m, d, pos, body_id)[0] @ f
-    qfrc = torch.vmap(apply_f)(force, d.xipos, torch.arange(m.nbody)).sum(dim=0)
+    qfrc = torch.vmap(apply_f)(force, d.xipos, torch.arange(m.nbody, device=d.xipos.device)).sum(dim=0)
 
     return qfrc
 
@@ -159,7 +159,7 @@ def _fluid(m: Model, d: Data) -> torch.Tensor:
         d.ximat,
         d.cvel,
     )
-    qfrc = torch.vmap(support.apply_ft, (None, None, 0, 0, 0, 0))(m, d, force, torque, d.xipos, torch.arange(m.nbody))
+    qfrc = torch.vmap(support.apply_ft, (None, None, 0, 0, 0, 0))(m, d, force, torque, d.xipos, torch.arange(m.nbody, device=d.xipos.device))
 
     return torch.sum(qfrc, dim=0)
 

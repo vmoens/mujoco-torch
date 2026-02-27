@@ -45,6 +45,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
         return d
 
     _dtype = d.qpos.dtype
+    _dev = d.qpos.device
     objtype_data = {
         ObjType.UNKNOWN: (
             torch.zeros(1, 3, dtype=_dtype),
@@ -74,7 +75,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
 
         if sensor_type == SensorType.MAGNETOMETER:
             sensor = torch.vmap(lambda xmat: xmat.T @ m.opt.magnetic)(d.site_xmat[objid])
-            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
         elif sensor_type == SensorType.RANGEFINDER:
             for sub in group["body_groups"]:
                 sid = sub["sid"]
@@ -98,7 +99,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
         elif sensor_type == SensorType.BALLQUAT:
             quat = d.qpos[group["qposadr_2d"]]
             sensor = torch.vmap(math.normalize)(quat)
-            adr = (adr[:, None] + torch.arange(4)).reshape(-1)
+            adr = (adr[:, None] + torch.arange(4, device=_dev)).reshape(-1)
         elif sensor_type == SensorType.FRAMEPOS:
 
             def _framepos(xpos, xpos_ref, xmat_ref, refid):
@@ -115,7 +116,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 xmat_ref = xmat_ref[sub_refid]
                 sub_cutoff = sub["cutoff"]
                 sensor = torch.vmap(_framepos)(xpos, xpos_ref, xmat_ref, sub_refid)
-                adrt = sub["adr"][:, None] + torch.arange(3)
+                adrt = sub["adr"][:, None] + torch.arange(3, device=_dev)
                 sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type).reshape(-1))
                 adrs.append(adrt.reshape(-1))
             continue
@@ -135,7 +136,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 xmat_ref = xmat_ref[sub_refid]
                 sub_cutoff = sub["cutoff"]
                 sensor = torch.vmap(_frameaxis)(xmat, xmat_ref, sub_refid)
-                adrt = sub["adr"][:, None] + torch.arange(3)
+                adrt = sub["adr"][:, None] + torch.arange(3, device=_dev)
                 sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type).reshape(-1))
                 adrs.append(adrt.reshape(-1))
             continue
@@ -167,13 +168,13 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 sensor = torch.vmap(lambda q, r, rid: torch.where(rid == -1, q, math.quat_mul(math.quat_inv(r), q)))(
                     quat, refquat, sub_refid
                 )
-                adrt = sub["adr"][:, None] + torch.arange(4)
+                adrt = sub["adr"][:, None] + torch.arange(4, device=_dev)
                 sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type).reshape(-1))
                 adrs.append(adrt.reshape(-1))
             continue
         elif sensor_type == SensorType.SUBTREECOM:
             sensor = d.subtree_com[objid]
-            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
         elif sensor_type == SensorType.CLOCK:
             sensor = torch.repeat_interleave(d.time, group["count"])
         else:
@@ -198,6 +199,7 @@ def sensor_vel(m: Model, d: Data) -> Data:
     if m.sensor_disabled_py:
         return d
 
+    _dev = d.qpos.device
     groups = m.sensor_groups_vel_py
     group_types = {g["type"] for g in groups}
 
@@ -222,13 +224,13 @@ def sensor_vel(m: Model, d: Data) -> Data:
             sensor = torch.vmap(lambda vec, dif, rot: rot.T @ (vec[3:] - math.cross(dif, vec[:3])))(
                 cvel, pos - subtree_com, rot
             )
-            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
         elif sensor_type == SensorType.GYRO:
             bodyid = group["bodyid"]
             rot = d.site_xmat[objid]
             ang = d.cvel[bodyid, :3]
             sensor = torch.vmap(lambda ang, rot: rot.T @ ang)(ang, rot)
-            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
         elif sensor_type == SensorType.JOINTVEL:
             sensor = d.qvel[group["dofadr"]]
         elif sensor_type == SensorType.TENDONVEL:
@@ -237,13 +239,13 @@ def sensor_vel(m: Model, d: Data) -> Data:
             sensor = d.actuator_velocity[objid]
         elif sensor_type == SensorType.BALLANGVEL:
             sensor = d.qvel[group["dofadr_2d"]]
-            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
         elif sensor_type == SensorType.SUBTREELINVEL:
             sensor = d.subtree_linvel[objid]
-            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
         elif sensor_type == SensorType.SUBTREEANGMOM:
             sensor = d.subtree_angmom[objid]
-            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
         else:
             continue
 
@@ -266,6 +268,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
     if m.sensor_disabled_py:
         return d
 
+    _dev = d.qpos.device
     groups = m.sensor_groups_acc_py
     group_types = {g["type"] for g in groups}
 
@@ -306,7 +309,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
                 sensor = torch.vmap(_accelerometer)(cvel, cacc, dif, rot)
             else:
                 continue
-            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
         elif sensor_type == SensorType.FORCE:
             if hasattr(d, "cfrc_int"):
                 bodyid = group["bodyid"]
@@ -315,7 +318,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
                 sensor = torch.vmap(lambda mat, vec: mat.T @ vec)(site_xmat, cfrc_int[:, 3:])
             else:
                 continue
-            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
         elif sensor_type == SensorType.TORQUE:
             if hasattr(d, "cfrc_int"):
                 bodyid = group["bodyid"]
@@ -330,7 +333,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
                 sensor = torch.vmap(_torque)(cfrc_int, dif, site_xmat)
             else:
                 continue
-            adr = (adr[:, None] + torch.arange(3)).reshape(-1)
+            adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
         elif sensor_type == SensorType.ACTUATORFRC:
             sensor = d.actuator_force[objid]
         elif sensor_type == SensorType.JOINTACTFRC:
