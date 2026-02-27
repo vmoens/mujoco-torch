@@ -18,7 +18,7 @@ jobs:
       - name: Install CPU-only PyTorch
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Install JAX (CPU) and MJX
-        run: pip install "jax[cpu]" "mujoco[mjx]"
+        run: pip install "jax[cpu]" mujoco mujoco-mjx
       - name: Install mujoco-torch with test deps
         run: pip install -e ".[test]"
       - name: Run tests (including MJX correctness)
