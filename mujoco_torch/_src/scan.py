@@ -151,8 +151,6 @@ class _DeviceCachedTensor:
         self._cache: dict[torch.device, torch.Tensor] = {}
 
     def to(self, device: torch.device) -> torch.Tensor:
-        if torch.compiler.is_compiling():
-            return self._cpu.to(device)
         t = self._cache.get(device)
         if t is None:
             t = self._cpu.to(device)

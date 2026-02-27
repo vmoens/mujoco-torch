@@ -32,3 +32,23 @@ eggs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Ad-hoc benchmark/debug scripts (keep only gpu_bench.py and gpu_bench.sh)
+gpu_bench_*.py
+gpu_cudagraph_bench.py
+gpu_phase_profile.py
+gpu_profile.py
+gpu_setup*.sh
+gpu_setup_compile.sh
+build_pytorch.sh
+debug_td*.sh
+diag.sh
+fix_*.sh
+install_*.sh
+verify.sh
+run_profile.sh
+test_lapack.sh
+mre_*.py
+torch_compile_debug/
+*.json.gz
+bench_results.json

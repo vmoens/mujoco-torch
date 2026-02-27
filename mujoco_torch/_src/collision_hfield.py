@@ -20,6 +20,7 @@ import torch.nn.functional as F
 
 from mujoco_torch._src import math
 from mujoco_torch._src import mesh as mesh_module
+from mujoco_torch._src.math import _CachedConst
 from mujoco_torch._src.collision_convex import (
     _clip_edge_to_planes,
     _manifold_points,
@@ -35,6 +36,8 @@ from mujoco_torch._src.collision_types import (
     GeomInfo,
     HFieldInfo,
 )
+
+_MANIFOLD_TOL = _CachedConst(1e-3)
 
 
 def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -334,7 +337,7 @@ def _hfield_collision(
 def _select_manifold(dist, pos, n):
     """Selects 4 manifold contact points."""
     n_mean = torch.mean(n, dim=0)
-    mask = dist < torch.minimum(torch.zeros_like(dist), dist.min() + torch.tensor(1e-3, dtype=dist.dtype))
+    mask = dist < torch.minimum(torch.zeros_like(dist), dist.min() + _MANIFOLD_TOL.get(dist.dtype, dist.device))
     idx = _manifold_points(pos, mask, n_mean)
     dist = _vmap_take_1d(dist, idx)
     pos = _vmap_take(pos, idx)

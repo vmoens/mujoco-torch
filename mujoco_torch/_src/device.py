@@ -552,7 +552,10 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     for key, cands in candidate_set.items():
         geom_types = (types.GeomType(int(key[0])), types.GeomType(int(key[1])))
         fn = collision_driver.get_collision_fn(geom_types)
-        collision_groups.append((fn, geom_types, cands))
+        precomp = None
+        if fn is not None and geom_types[0] != types.GeomType.HFIELD:
+            precomp = collision_driver.precompute_collision_indices(cands)
+        collision_groups.append((fn, geom_types, cands, precomp))
         if fn is not None:
             total_contacts += fn.ncon * len(cands)
     result["collision_groups_py"] = tuple(collision_groups)
