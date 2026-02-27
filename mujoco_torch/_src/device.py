@@ -26,7 +26,7 @@ import numpy as np
 import torch
 from torch.utils._pytree import tree_map
 
-from mujoco_torch._src import collision_driver, mesh, scan, types
+from mujoco_torch._src import collision_driver, mesh, ray, scan, types
 from mujoco_torch._src.dataclasses import MjTensorClass
 
 _MJ_TYPE_ATTR = {
@@ -405,6 +405,9 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
                         "objid": torch.tensor(objid_np[idxs], dtype=torch.long),
                         "cutoff": torch.tensor(cutoff_np[idxs], dtype=torch.float64),
                         "adr": torch.tensor(adr_np[idxs], dtype=torch.long),
+                        "ray_precomp": ray.precompute_ray_data(
+                            value, flg_static=True, bodyexclude=int(sid),
+                        ),
                     })
                 group["body_groups"] = tuple(body_groups)
             elif st_int in (

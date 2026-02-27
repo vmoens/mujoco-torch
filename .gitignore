@@ -33,6 +33,9 @@ eggs/
 .DS_Store
 Thumbs.db
 
+# Scratch / working directory
+scratch/
+
 # Ad-hoc benchmark/debug scripts (keep only gpu_bench.py and gpu_bench.sh)
 gpu_bench_*.py
 gpu_cudagraph_bench.py

@@ -238,6 +238,108 @@ _RAY_FUNC = {
     GeomType.MESH: _ray_mesh,
 }
 
+_PRIMITIVE_RAY_FUNC = {
+    GeomType.PLANE: _ray_plane,
+    GeomType.SPHERE: _ray_sphere,
+    GeomType.CAPSULE: _ray_capsule,
+    GeomType.ELLIPSOID: _ray_ellipsoid,
+    GeomType.BOX: _ray_box,
+}
+
+
+def precompute_ray_data(m_np, flg_static, bodyexclude, geomgroup=()):
+    """Pre-compute geom filter indices for ray intersection (numpy model).
+
+    Called once during device_put to avoid numpy operations inside compile.
+
+    Returns a list of (fn, id_tensor, geom_size_tensor, dyn_filter_tensor)
+    tuples for each geom type that has matching geoms, plus an ``empty``
+    flag indicating no geom types matched.
+    """
+    from mujoco_torch._src.scan import _DeviceCachedTensor
+
+    if not isinstance(bodyexclude, Sequence):
+        bodyexclude = [bodyexclude]
+
+    geom_filter = flg_static | (m_np.body_weldid[m_np.geom_bodyid] != 0)
+    for bodyid in bodyexclude:
+        geom_filter = geom_filter & (m_np.geom_bodyid != bodyid)
+    if geomgroup:
+        geomgroup_arr = np.array(geomgroup, dtype=bool)
+        geom_filter = geom_filter & geomgroup_arr[np.clip(m_np.geom_group, 0, mujoco.mjNGROUP)]
+
+    geom_filter_dyn = (m_np.geom_matid != -1) | (m_np.geom_rgba[:, 3] != 0)
+    geom_filter_dyn = geom_filter_dyn & (
+        (m_np.geom_matid == -1) | (m_np.mat_rgba[m_np.geom_matid, 3] != 0)
+    )
+
+    entries = []
+    for geom_type, fn in _PRIMITIVE_RAY_FUNC.items():
+        (id_np,) = np.nonzero(geom_filter & (m_np.geom_type == geom_type))
+        if id_np.size == 0:
+            continue
+        id_t = _DeviceCachedTensor(torch.tensor(id_np, dtype=torch.long))
+        size_t = _DeviceCachedTensor(
+            torch.as_tensor(np.array(m_np.geom_size[id_np]), dtype=torch.float64)
+        )
+        dyn_t = _DeviceCachedTensor(
+            torch.tensor(geom_filter_dyn[id_np])
+        )
+        entries.append((fn, id_t, size_t, dyn_t))
+
+    return tuple(entries)
+
+
+def ray_precomputed(
+    precomp: tuple,
+    d: Data,
+    pnt: torch.Tensor,
+    vec: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compile-friendly ray intersection using pre-computed geom data."""
+    device = pnt.device
+
+    geom_pnts = torch.vmap(lambda x, y: x.T @ (pnt - y))(d.geom_xmat, d.geom_xpos)
+    geom_vecs = torch.vmap(lambda x: x.T @ vec)(d.geom_xmat)
+
+    dists, ids = [], []
+    for fn, id_cached, size_cached, dyn_cached in precomp:
+        id_t = id_cached.to(device)
+        geom_size = size_cached.to(device)
+        dyn_filter = dyn_cached.to(device)
+
+        dist = torch.vmap(fn)(geom_size, geom_pnts[id_t], geom_vecs[id_t])
+        dist = torch.where(
+            dyn_filter, dist,
+            torch.full((), torch.inf, dtype=dist.dtype, device=device),
+        )
+        dists.append(dist)
+        ids.append(id_t)
+
+    if not ids:
+        return (
+            torch.full((), -1, dtype=torch.long, device=device),
+            torch.full((), -1.0, dtype=pnt.dtype, device=device),
+        )
+
+    dists = torch.cat(dists)
+    ids_cat = torch.cat(ids)
+    min_id = torch.argmin(dists)
+    min_dist = dists.gather(0, min_id.unsqueeze(0)).squeeze(0)
+    min_geom_id = ids_cat.gather(0, min_id.unsqueeze(0)).squeeze(0)
+    dist = torch.where(
+        torch.isinf(min_dist),
+        torch.full((), -1.0, dtype=dists.dtype, device=device),
+        min_dist,
+    )
+    geom_id = torch.where(
+        torch.isinf(min_dist),
+        torch.full((), -1, dtype=torch.long, device=device),
+        min_geom_id,
+    )
+
+    return dist, geom_id
+
 
 def ray(
     m: Model,

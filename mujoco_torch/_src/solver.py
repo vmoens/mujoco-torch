@@ -20,12 +20,6 @@ import mujoco
 import torch
 from torch._higher_order_ops.while_loop import while_loop as _torch_while_loop
 
-from mujoco_torch._src.math import _CachedConst
-
-_ZERO = _CachedConst(0.0)
-_INF = _CachedConst(float("inf"))
-_ZERO_INT = _CachedConst(0, dtype=torch.long)
-_TRUE = _CachedConst(True, dtype=torch.bool)
 
 
 def _inside_functorch() -> bool:
@@ -284,10 +278,10 @@ def solve(m: Model, d: Data) -> Data:
             grad=torch.zeros((nv,), dtype=dtype, device=_dev),
             Mgrad=torch.zeros((nv,), dtype=dtype, device=_dev),
             search=torch.zeros((nv,), dtype=dtype, device=_dev),
-            gauss=_ZERO.get(dtype, _dev),
-            cost=_INF.get(dtype, _dev),
-            prev_cost=_ZERO.get(dtype, _dev),
-            solver_niter=_ZERO_INT.get(torch.long, _dev),
+            gauss=qacc.new_zeros(()),
+            cost=qacc.new_full((), float("inf")),
+            prev_cost=qacc.new_zeros(()),
+            solver_niter=qacc.new_zeros((), dtype=torch.long),
         )
         ctx = _update_constraint(ctx)
         if grad_flag:
@@ -390,12 +384,12 @@ def solve(m: Model, d: Data) -> Data:
             return (_LSContext(lo=lo, hi=hi, swap=swap, ls_iter=ls_ctx.ls_iter + 1),)
 
         # initialize interval
-        p0 = point_fn(_ZERO.get(ctx.qacc.dtype, ctx.qacc.device))
+        p0 = point_fn(ctx.qacc.new_zeros(()))
         lo = point_fn(p0.alpha - p0.deriv_0 / p0.deriv_1)
         lesser_fn = lambda x, y: torch.where(lo.deriv_0 < p0.deriv_0, x, y)
         hi = torch.utils._pytree.tree_map(lesser_fn, p0, lo)
         lo = torch.utils._pytree.tree_map(lesser_fn, lo, p0)
-        ls_ctx = _LSContext(lo=lo, hi=hi, swap=_TRUE.get(torch.bool, ctx.qacc.device), ls_iter=_ZERO_INT.get(torch.long, ctx.qacc.device))
+        ls_ctx = _LSContext(lo=lo, hi=hi, swap=ctx.qacc.new_ones((), dtype=torch.bool), ls_iter=ctx.qacc.new_zeros((), dtype=torch.long))
         ls_ctx = while_loop(ls_cond, ls_body, (ls_ctx,), max_iter=ls_iterations)[0]
 
         # move to new solution if improved

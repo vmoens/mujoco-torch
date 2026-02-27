@@ -22,14 +22,19 @@ class _CachedConst:
     """A constant tensor created from a Python literal, with per-(dtype,device) caching.
 
     Avoids CPU→CUDA copies during CUDA graph capture by caching the
-    device copy from warmup runs.
+    device copy from warmup runs.  Call ``warm_all`` after ``device_put``
+    to pre-populate every instance for the target device so that the first
+    ``torch.compile`` trace never records a DeviceCopy.
     """
+
+    _instances: list["_CachedConst"] = []
 
     __slots__ = ("_values", "_cache")
 
     def __init__(self, values, dtype=None):
         self._values = torch.tensor(values, dtype=dtype)
         self._cache: dict[tuple, torch.Tensor] = {}
+        _CachedConst._instances.append(self)
 
     def get(self, dtype, device) -> torch.Tensor:
         key = (dtype, str(device))
@@ -38,6 +43,16 @@ class _CachedConst:
             t = self._values.to(dtype=dtype, device=device)
             self._cache[key] = t
         return t
+
+    @classmethod
+    def warm_all(cls, device, dtypes=(torch.float64, torch.float32, torch.long, torch.int32, torch.bool)):
+        """Pre-populate the cache of every ``_CachedConst`` instance."""
+        for inst in cls._instances:
+            for dtype in dtypes:
+                try:
+                    inst.get(dtype, device)
+                except Exception:
+                    pass
 
 
 _QUAT_INV_SIGNS = _CachedConst([1, -1, -1, -1])

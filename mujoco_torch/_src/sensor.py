@@ -78,14 +78,15 @@ def sensor_pos(m: Model, d: Data) -> Data:
             adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
         elif sensor_type == SensorType.RANGEFINDER:
             for sub in group["body_groups"]:
-                sid = sub["sid"]
                 sub_objid = sub["objid"]
                 site_xpos = d.site_xpos[sub_objid]
                 site_mat = d.site_xmat[sub_objid].reshape((-1, 9))[:, torch.arange(3, device=d.qpos.device) * 3 + 2]
                 sub_cutoff = sub["cutoff"]
-                dist, _ = torch.vmap(ray.ray, in_dims=(None, None, 0, 0, None, None, None))(
-                    m, d, site_xpos, site_mat, (), True, sid
-                )
+                ray_precomp = sub["ray_precomp"]
+                dist, _ = torch.vmap(
+                    ray.ray_precomputed,
+                    in_dims=(None, None, 0, 0),
+                )(ray_precomp, d, site_xpos, site_mat)
                 sensor = dist
                 sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type))
                 adrs.append(sub["adr"])
