@@ -468,9 +468,7 @@ def _instantiate_contact_pyramidal(m: Model, d: Data, condim: int, start_idx: in
         t = invweight0.gather(0, body1.unsqueeze(0)).squeeze(0) + invweight0.gather(0, body2.unsqueeze(0)).squeeze(0)
 
         fri = c.friction[: condim - 1].repeat_interleave(2)
-        fri = fri * torch.tensor(
-            [1.0, -1.0] * (condim - 1), dtype=fri.dtype, device=fri.device
-        )
+        fri = fri * torch.tensor([1.0, -1.0] * (condim - 1), dtype=fri.dtype, device=fri.device)
         j = diff[0] + diff[1:condim].repeat_interleave(2, dim=0) * fri.unsqueeze(1)
 
         invweight = (t + fri[0] * fri[0] * t) * 2 * fri[0] * fri[0] / m.opt.impratio
