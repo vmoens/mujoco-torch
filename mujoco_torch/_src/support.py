@@ -19,8 +19,6 @@ import numpy as np
 import torch
 from torch._C._functorch import _add_batch_dim, _remove_batch_dim, is_batchedtensor, maybe_get_level
 
-from mujoco_torch._src import math
-
 from mujoco_torch._src import math, scan
 
 # pylint: disable=g-importing-member
