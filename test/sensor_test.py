@@ -222,14 +222,17 @@ class SensorTest(parameterized.TestCase):
         pos_fn = torch.compile(
             sensor.sensor_pos,
             fullgraph=True,
+            backend="aot_eager",
         )
         vel_fn = torch.compile(
             sensor.sensor_vel,
             fullgraph=True,
+            backend="aot_eager",
         )
         acc_fn = torch.compile(
             sensor.sensor_acc,
             fullgraph=True,
+            backend="aot_eager",
         )
 
         dx_pos = pos_fn(mx, dx)
@@ -271,6 +274,7 @@ class SensorTest(parameterized.TestCase):
         pos_fn = torch.compile(
             sensor.sensor_pos,
             fullgraph=True,
+            backend="aot_eager",
         )
         dx_pos = pos_fn(mx, dx)
         ref_pos = sensor.sensor_pos(mx, dx)

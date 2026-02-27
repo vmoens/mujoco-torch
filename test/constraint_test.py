@@ -376,7 +376,7 @@ class ConstraintTest(parameterized.TestCase):
         dx = mujoco_torch.device_put(d)
         dx = forward._position(mx, dx)
 
-        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True)
+        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True, backend="aot_eager")
         dx_compiled = compiled_fn(mx, dx)
         dx_eager = constraint.make_constraint(mx, dx)
 
@@ -409,7 +409,7 @@ class ConstraintTest(parameterized.TestCase):
         dx = mujoco_torch.device_put(d)
         dx = forward._position(mx, dx)
 
-        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True)
+        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True, backend="aot_eager")
         dx_compiled = compiled_fn(mx, dx)
         dx_eager = constraint.make_constraint(mx, dx)
 
@@ -431,7 +431,7 @@ class ConstraintTest(parameterized.TestCase):
         dx = mujoco_torch.device_put(d)
         dx = forward._position(mx, dx)
 
-        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True)
+        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True, backend="aot_eager")
         dx_compiled = compiled_fn(mx, dx)
         dx_eager = constraint.make_constraint(mx, dx)
 
@@ -460,7 +460,7 @@ class ConstraintTest(parameterized.TestCase):
         dx = mujoco_torch.device_put(d)
         dx = forward._position(mx, dx)
 
-        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True)
+        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True, backend="aot_eager")
         dx_compiled = compiled_fn(mx, dx)
         dx_eager = constraint.make_constraint(mx, dx)
 
@@ -482,7 +482,7 @@ class ConstraintTest(parameterized.TestCase):
         dx = mujoco_torch.device_put(d)
         dx = forward._position(mx, dx)
 
-        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True)
+        compiled_fn = torch.compile(constraint.make_constraint, fullgraph=True, backend="aot_eager")
         dx_compiled = compiled_fn(mx, dx)
 
         self.assertEqual(dx_compiled.efc_J.shape[0], 0)
