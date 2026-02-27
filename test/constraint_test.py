@@ -176,15 +176,15 @@ class ConstraintTest(parameterized.TestCase):
         m.opt.disableflags = m.opt.disableflags & ~DisableBit.CONTACT
         mx, dx = mujoco_torch.device_put(m), mujoco_torch.device_put(d)
         dx = dx.tree_replace({"contact.frame": dx.contact.frame.reshape((-1, 3, 3))})
-        ncon_fl, ncon_fr = mx.condim_counts_py
-        self.assertGreater(ncon_fr, 0)
-        efc = constraint._instantiate_contact(mx, dx)
+        ncon_1, ncon_3, ncon_4, ncon_6 = mx.condim_counts_py
+        self.assertGreater(ncon_3, 0)
+        efc = constraint._instantiate_contact_pyramidal(mx, dx, 3, ncon_1, ncon_3)
         self.assertIsNotNone(efc)
 
         m.opt.disableflags = m.opt.disableflags | DisableBit.CONTACT
         mx = mujoco_torch.device_put(m)
-        ncon_fl, ncon_fr = mx.condim_counts_py
-        self.assertEqual(ncon_fr, 0)
+        ncon_1, ncon_3, ncon_4, ncon_6 = mx.condim_counts_py
+        self.assertEqual(ncon_3, 0)
 
     _FRICTIONLOSS_XML = """
     <mujoco>
@@ -329,7 +329,7 @@ class ConstraintTest(parameterized.TestCase):
 
         mx = mujoco_torch.device_put(m)
         dx = mujoco_torch.device_put(d)
-        ncon_fl, _ = mx.condim_counts_py
+        ncon_fl = mx.condim_counts_py[0]
         if ncon_fl > 0:
             efc = constraint._instantiate_contact_frictionless(mx, dx)
             ncon = dx.contact.dist.shape[0]
