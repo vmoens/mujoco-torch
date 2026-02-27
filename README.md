@@ -86,6 +86,29 @@ compiled_step = torch.compile(vmap_step, fullgraph=True)
 d_batch = compiled_step(d_batch)
 ```
 
+## Feature matrix
+
+| Category | Supported | Not yet supported |
+|----------|-----------|-------------------|
+| **Integrators** | Euler, RK4, ImplicitFast | Implicit |
+| **Solvers** | CG, Newton | PGS |
+| **Geom types** | Plane, HField, Sphere, Capsule, Box, Mesh | Ellipsoid, Cylinder |
+| **Contact dim** | 1 (frictionless), 3 (frictional), 4 (torsional), 6 (rolling) | — |
+| **Friction cone** | Pyramidal, Elliptic | — |
+| **Joint types** | Free, Ball, Slide, Hinge | *(all supported)* |
+| **Equality constraints** | Connect, Weld, Joint | Tendon, Distance |
+| **Actuator dynamics** | None, Integrator, Filter, FilterExact, Muscle | User |
+| **Actuator gain** | Fixed, Affine, Muscle | User |
+| **Actuator bias** | None, Affine, Muscle | User |
+| **Sensors** | 30+ types (position, velocity, acceleration) | CamProjection, Touch, Contact, FrameLinVel/AngVel/LinAcc/AngAcc |
+| **Collision pairs** | 12 functions covering all supported geom combinations | — |
+
+## Known limitations
+
+- **Ellipsoid / Cylinder geoms** — no collision functions for these geom types.
+- **Tendon / Distance equality constraints** — not yet ported from MJX.
+- **PGS solver** — only CG and Newton solvers are available.
+
 ## Benchmarks
 
 ![Benchmark results](assets/benchmark.png)
@@ -98,19 +121,19 @@ are measured at B=1 since they scale linearly.
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 |
 |---|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 61,909 | *(linear)* | *(linear)* | *(linear)* |
-| mujoco-torch vmap (eager) | 10 | 1,296 | 10,372 | 40,925 |
-| **mujoco-torch compile** | **88** | **10,516** | **84,813** | **331,723** |
-| MJX (JAX jit+vmap) | 57 | 8,374 | 66,987 | 244,538 |
+| MuJoCo C (CPU, sequential) | 61,644 | *(linear)* | *(linear)* | *(linear)* |
+| mujoco-torch vmap (eager) | 11 | 1,249 | 10,139 | 40,001 |
+| **mujoco-torch compile** | **92** | **11,059** | **85,868** | **336,391** |
+| MJX (JAX jit+vmap) | 59 | 8,584 | 66,937 | 239,678 |
 
 ### Ant
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 |
 |---|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 106,873 | *(linear)* | *(linear)* | *(linear)* |
-| mujoco-torch vmap (eager) | 15 | 1,881 | 15,043 | 59,018 |
-| **mujoco-torch compile** | **116** | **12,395** | **97,145** | **288,718** |
-| MJX (JAX jit+vmap) | 98 | 12,046 | 72,646 | 232,681 |
+| MuJoCo C (CPU, sequential) | 106,163 | *(linear)* | *(linear)* | *(linear)* |
+| mujoco-torch vmap (eager) | 15 | 1,894 | 15,107 | 60,566 |
+| **mujoco-torch compile** | **119** | **11,245** | **89,627** | **280,053** |
+| MJX (JAX jit+vmap) | 100 | 12,069 | 69,308 | 238,268 |
 
 **Methodology.**  Each configuration runs 1 000 steps after warmup (5 compile
 iterations for compiled variants, 1 JIT warmup for MJX).  Wall-clock time is
@@ -137,3 +160,10 @@ pytest test/ -x -v
 ## License
 
 Apache 2.0 -- see [LICENSE](LICENSE).
+
+## Acknowledgments
+
+mujoco-torch is a derivative work of
+[MuJoCo MJX](https://github.com/google-deepmind/mujoco/tree/main/mjx),
+originally developed by Google DeepMind.  See the [NOTICE](NOTICE) file for
+attribution details.
