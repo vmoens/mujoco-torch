@@ -24,15 +24,33 @@ from mujoco_torch._src import forward, sensor, test_util
 from mujoco_torch._src.types import SensorType as ST
 
 _SUPPORTED_SENSOR_TYPES = {
-    int(ST.MAGNETOMETER), int(ST.RANGEFINDER), int(ST.JOINTPOS),
-    int(ST.TENDONPOS), int(ST.ACTUATORPOS), int(ST.BALLQUAT),
-    int(ST.FRAMEPOS), int(ST.FRAMEXAXIS), int(ST.FRAMEYAXIS),
-    int(ST.FRAMEZAXIS), int(ST.FRAMEQUAT), int(ST.SUBTREECOM),
-    int(ST.CLOCK), int(ST.VELOCIMETER), int(ST.GYRO),
-    int(ST.JOINTVEL), int(ST.TENDONVEL), int(ST.ACTUATORVEL),
-    int(ST.BALLANGVEL), int(ST.SUBTREELINVEL), int(ST.SUBTREEANGMOM),
-    int(ST.ACCELEROMETER), int(ST.FORCE), int(ST.TORQUE),
-    int(ST.ACTUATORFRC), int(ST.JOINTACTFRC), int(ST.TENDONACTFRC),
+    int(ST.MAGNETOMETER),
+    int(ST.RANGEFINDER),
+    int(ST.JOINTPOS),
+    int(ST.TENDONPOS),
+    int(ST.ACTUATORPOS),
+    int(ST.BALLQUAT),
+    int(ST.FRAMEPOS),
+    int(ST.FRAMEXAXIS),
+    int(ST.FRAMEYAXIS),
+    int(ST.FRAMEZAXIS),
+    int(ST.FRAMEQUAT),
+    int(ST.SUBTREECOM),
+    int(ST.CLOCK),
+    int(ST.VELOCIMETER),
+    int(ST.GYRO),
+    int(ST.JOINTVEL),
+    int(ST.TENDONVEL),
+    int(ST.ACTUATORVEL),
+    int(ST.BALLANGVEL),
+    int(ST.SUBTREELINVEL),
+    int(ST.SUBTREEANGMOM),
+    int(ST.ACCELEROMETER),
+    int(ST.FORCE),
+    int(ST.TORQUE),
+    int(ST.ACTUATORFRC),
+    int(ST.JOINTACTFRC),
+    int(ST.TENDONACTFRC),
 }
 
 
@@ -43,7 +61,7 @@ def _supported_mask(m):
         if int(m.sensor_type[i]) in _SUPPORTED_SENSOR_TYPES:
             adr = int(m.sensor_adr[i])
             dim = int(m.sensor_dim[i])
-            mask[adr:adr + dim] = True
+            mask[adr : adr + dim] = True
     return mask
 
 
@@ -116,7 +134,6 @@ def _run_forward(m, d, mx, dx):
 
 
 class SensorTest(parameterized.TestCase):
-
     def test_sensor_pos_vel_acc(self):
         """Position/velocity/acceleration sensors match MuJoCo."""
         m = mujoco.MjModel.from_xml_string(_SENSOR_XML)
@@ -135,7 +152,7 @@ class SensorTest(parameterized.TestCase):
         mask = _supported_mask(m)
         np.testing.assert_allclose(
             dx.sensordata.detach().numpy()[mask],
-            d.sensordata[:mx.nsensordata][mask],
+            d.sensordata[: mx.nsensordata][mask],
             atol=1e-3,
             rtol=1e-3,
             err_msg="sensordata mismatch",
@@ -158,16 +175,13 @@ class SensorTest(parameterized.TestCase):
         mask = _supported_mask(m)
         np.testing.assert_allclose(
             dx.sensordata.detach().numpy()[mask],
-            d.sensordata[:mx.nsensordata][mask],
+            d.sensordata[: mx.nsensordata][mask],
             atol=1e-3,
             rtol=1e-3,
             err_msg="framepos/axis sensordata mismatch",
         )
 
-    @parameterized.parameters(
-        f for f in test_util.TEST_FILES
-        if f not in ("equality.xml",)
-    )
+    @parameterized.parameters(f for f in test_util.TEST_FILES if f not in ("equality.xml",))
     def test_sensor_step(self, fname):
         """Sensors are correct after multiple steps."""
         m = test_util.load_test_file(fname)
@@ -190,13 +204,10 @@ class SensorTest(parameterized.TestCase):
 
             np.testing.assert_allclose(
                 dx.sensordata.detach().numpy()[mask],
-                d.sensordata[:mx.nsensordata][mask],
+                d.sensordata[: mx.nsensordata][mask],
                 atol=5e-2,
                 rtol=5e-2,
-                err_msg=(
-                    f"sensordata mismatch at step {i} "
-                    f"in {fname}"
-                ),
+                err_msg=(f"sensordata mismatch at step {i} in {fname}"),
             )
 
     def test_sensor_no_graph_breaks(self):
@@ -209,13 +220,16 @@ class SensorTest(parameterized.TestCase):
         dx = forward.forward(mx, dx)
 
         pos_fn = torch.compile(
-            sensor.sensor_pos, fullgraph=True,
+            sensor.sensor_pos,
+            fullgraph=True,
         )
         vel_fn = torch.compile(
-            sensor.sensor_vel, fullgraph=True,
+            sensor.sensor_vel,
+            fullgraph=True,
         )
         acc_fn = torch.compile(
-            sensor.sensor_acc, fullgraph=True,
+            sensor.sensor_acc,
+            fullgraph=True,
         )
 
         dx_pos = pos_fn(mx, dx)
@@ -255,7 +269,8 @@ class SensorTest(parameterized.TestCase):
         dx = forward.forward(mx, dx)
 
         pos_fn = torch.compile(
-            sensor.sensor_pos, fullgraph=True,
+            sensor.sensor_pos,
+            fullgraph=True,
         )
         dx_pos = pos_fn(mx, dx)
         ref_pos = sensor.sensor_pos(mx, dx)
@@ -273,12 +288,8 @@ class SensorTest(parameterized.TestCase):
         d = mujoco.MjData(m)
         mx = mujoco_torch.device_put(m)
 
-        d.qvel[:] = (
-            np.random.RandomState(7).randn(m.nv) * 0.05
-        )
-        d.ctrl[:] = (
-            np.random.RandomState(8).randn(m.nu) * 0.1
-        )
+        d.qvel[:] = np.random.RandomState(7).randn(m.nv) * 0.05
+        d.ctrl[:] = np.random.RandomState(8).randn(m.nu) * 0.1
         qpos = torch.tensor(d.qpos.copy())
         qvel = torch.tensor(d.qvel.copy())
         dx = mujoco_torch.device_put(d)
@@ -289,7 +300,7 @@ class SensorTest(parameterized.TestCase):
         mask = _supported_mask(m)
         np.testing.assert_allclose(
             dx.sensordata.detach().numpy()[mask],
-            d.sensordata[:mx.nsensordata][mask],
+            d.sensordata[: mx.nsensordata][mask],
             atol=1e-2,
             rtol=1e-2,
             err_msg="ant sensordata mismatch",

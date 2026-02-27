@@ -174,8 +174,6 @@ def _cached_long(x) -> _DeviceCachedTensor:
     return _DeviceCachedTensor(cpu_tensor)
 
 
-
-
 def _cat_device_safe(tensors):
     """Concatenates tensors, moving all to the device of the first non-CPU tensor."""
     device = None
@@ -518,8 +516,7 @@ def _build_flat_cache(m, in_types, out_types, group_by):
     active_order = [typ_ids for key, typ_ids in order if key in active_keys]
     active_order_per_type = [[o[t] for o in active_order] for t in all_types]
     active_order_per_type = [
-        (np.concatenate(o) if isinstance(o[0], np.ndarray) else np.array(o))
-        if o else np.array([], dtype=np.int64)
+        (np.concatenate(o) if isinstance(o[0], np.ndarray) else np.array(o)) if o else np.array([], dtype=np.int64)
         for o in active_order_per_type
     ]
     order_dict = dict(zip(all_types, active_order_per_type))
@@ -653,15 +650,15 @@ def flat(
         ]
         order_dict = dict(zip(all_types, active_order_per_type))
         for i, typ in enumerate(out_types):
+
             def _to_np(v):
                 if isinstance(v, _DeviceCachedTensor):
                     return v._cpu.numpy()
                 if isinstance(v, torch.Tensor):
                     return v.cpu().numpy()
                 return v
-            ids = np.concatenate(
-                [np.hstack(_to_np(v[typ])) for _, v in active_kti]
-            )
+
+            ids = np.concatenate([np.hstack(_to_np(v[typ])) for _, v in active_kti])
             input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
             reorder_idx = _np_to_long(_index(ids, input_order))
             reordered_ys.append(_take(ys[i], reorder_idx))

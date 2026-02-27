@@ -186,8 +186,13 @@ def _pair_params(
     gap = m.pair_gap[ipair]
 
     return SolverParams(
-        friction=friction, solref=solref, solreffriction=solreffriction,
-        solimp=solimp, margin=margin, gap=gap, batch_size=[],
+        friction=friction,
+        solref=solref,
+        solreffriction=solreffriction,
+        solimp=solimp,
+        margin=margin,
+        gap=gap,
+        batch_size=[],
     )
 
 
@@ -205,8 +210,13 @@ def _priority_params(
     gap = torch.amax(m.geom_gap[geom_pairs.T], axis=0)
 
     return SolverParams(
-        friction=friction, solref=solref, solreffriction=solreffriction,
-        solimp=solimp, margin=margin, gap=gap, batch_size=[],
+        friction=friction,
+        solref=solref,
+        solreffriction=solreffriction,
+        solimp=solimp,
+        margin=margin,
+        gap=gap,
+        batch_size=[],
     )
 
 
@@ -236,8 +246,13 @@ def _dynamic_params(
     gap = torch.maximum(m.geom_gap[g1], m.geom_gap[g2])
 
     return SolverParams(
-        friction=friction, solref=solref, solreffriction=solreffriction,
-        solimp=solimp, margin=margin, gap=gap, batch_size=[],
+        friction=friction,
+        solref=solref,
+        solreffriction=solreffriction,
+        solimp=solimp,
+        margin=margin,
+        gap=gap,
+        batch_size=[],
     )
 
 
@@ -442,19 +457,34 @@ def precompute_collision_indices(candidates: Sequence[Candidate]) -> dict:
         geom2_list.extend([c.geom2 for c in cands])
         dims_list.extend([c.dim for c in cands])
         if pair:
-            param_groups.append((_pair_params, {
-                "ipair": _DeviceCachedTensor(torch.tensor([c.ipair for c in cands])),
-            }))
+            param_groups.append(
+                (
+                    _pair_params,
+                    {
+                        "ipair": _DeviceCachedTensor(torch.tensor([c.ipair for c in cands])),
+                    },
+                )
+            )
         elif priority:
-            param_groups.append((_priority_params, {
-                "geomp": _DeviceCachedTensor(torch.tensor([c.geomp for c in cands])),
-                "geom_pairs": _DeviceCachedTensor(torch.tensor([(c.geom1, c.geom2) for c in cands])),
-            }))
+            param_groups.append(
+                (
+                    _priority_params,
+                    {
+                        "geomp": _DeviceCachedTensor(torch.tensor([c.geomp for c in cands])),
+                        "geom_pairs": _DeviceCachedTensor(torch.tensor([(c.geom1, c.geom2) for c in cands])),
+                    },
+                )
+            )
         else:
-            param_groups.append((_dynamic_params, {
-                "g1": _DeviceCachedTensor(torch.tensor([c.geom1 for c in cands])),
-                "g2": _DeviceCachedTensor(torch.tensor([c.geom2 for c in cands])),
-            }))
+            param_groups.append(
+                (
+                    _dynamic_params,
+                    {
+                        "g1": _DeviceCachedTensor(torch.tensor([c.geom1 for c in cands])),
+                        "g2": _DeviceCachedTensor(torch.tensor([c.geom2 for c in cands])),
+                    },
+                )
+            )
 
     return {
         "geom1_t": _DeviceCachedTensor(torch.tensor(geom1_list, dtype=torch.long)),
@@ -496,8 +526,12 @@ def _collide_geoms(
         params.append(params_fn(m, **device_indices))
 
     g1, g2, in_axes = _pair_info(
-        m, d, geom1_t, geom2_t,
-        precomp["geom1_list"], precomp["geom2_list"],
+        m,
+        d,
+        geom1_t,
+        geom2_t,
+        precomp["geom1_list"],
+        precomp["geom2_list"],
     )
     res = torch.vmap(fn, in_axes)(g1, g2)
     dist, pos, frame = res

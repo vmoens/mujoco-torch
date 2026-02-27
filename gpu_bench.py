@@ -31,15 +31,13 @@ SEED = 42
 
 def parse_args():
     parser = argparse.ArgumentParser(description="mujoco-torch GPU benchmark")
-    parser.add_argument("--model", default="humanoid",
-                        help="Model to benchmark (default: humanoid)")
-    parser.add_argument("--batch-sizes", nargs="+", type=int,
-                        default=[1, 128, 1024, 4096], help="Batch sizes")
+    parser.add_argument("--model", default="humanoid", help="Model to benchmark (default: humanoid)")
+    parser.add_argument("--batch-sizes", nargs="+", type=int, default=[1, 128, 1024, 4096], help="Batch sizes")
     parser.add_argument("--nsteps", type=int, default=1000, help="Steps per timing run")
-    parser.add_argument("--output", type=str, default=None,
-                        help="Output JSON file (default: bench_<model>.json)")
-    parser.add_argument("--only", type=str, default=None,
-                        help="Run only a specific benchmark (compile, c, loop, vmap, mjx)")
+    parser.add_argument("--output", type=str, default=None, help="Output JSON file (default: bench_<model>.json)")
+    parser.add_argument(
+        "--only", type=str, default=None, help="Run only a specific benchmark (compile, c, loop, vmap, mjx)"
+    )
     return parser.parse_args()
 
 

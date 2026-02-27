@@ -53,12 +53,14 @@ def _run_mjx(m_mj, qvel_kick, nsteps, disable_constraint=False):
     results = []
     for _ in range(nsteps):
         dx_jax = step_fn(mx_jax, dx_jax)
-        results.append({
-            "qpos": np.array(dx_jax.qpos),
-            "qvel": np.array(dx_jax.qvel),
-            "act": np.array(dx_jax.act),
-            "time": float(dx_jax.time),
-        })
+        results.append(
+            {
+                "qpos": np.array(dx_jax.qpos),
+                "qvel": np.array(dx_jax.qvel),
+                "act": np.array(dx_jax.act),
+                "time": float(dx_jax.time),
+            }
+        )
     return results
 
 
@@ -75,12 +77,14 @@ def _run_torch_single(m_mj, qvel_kick, nsteps, disable_constraint=False):
     results = []
     for _ in range(nsteps):
         dx = mujoco_torch.step(mx, dx)
-        results.append({
-            "qpos": dx.qpos.numpy(),
-            "qvel": dx.qvel.numpy(),
-            "act": dx.act.numpy(),
-            "time": float(dx.time),
-        })
+        results.append(
+            {
+                "qpos": dx.qpos.numpy(),
+                "qvel": dx.qvel.numpy(),
+                "act": dx.act.numpy(),
+                "time": float(dx.time),
+            }
+        )
     return results
 
 
@@ -103,12 +107,14 @@ def _run_torch_vmap(m_mj, qvel_kick, nsteps, batch_size=4, disable_constraint=Fa
     results = []
     for _ in range(nsteps):
         d_batch = vmap_step(d_batch)
-        results.append({
-            "qpos": d_batch.qpos[0].numpy(),
-            "qvel": d_batch.qvel[0].numpy(),
-            "act": d_batch.act[0].numpy(),
-            "time": float(d_batch.time[0]),
-        })
+        results.append(
+            {
+                "qpos": d_batch.qpos[0].numpy(),
+                "qvel": d_batch.qvel[0].numpy(),
+                "act": d_batch.act[0].numpy(),
+                "time": float(d_batch.time[0]),
+            }
+        )
     return results
 
 

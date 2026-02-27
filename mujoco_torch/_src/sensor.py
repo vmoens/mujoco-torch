@@ -341,7 +341,8 @@ def sensor_acc(m: Model, d: Data) -> Data:
             sensor = d.qfrc_actuator[group["dofadr"]]
         elif sensor_type == SensorType.TENDONACTFRC:
             force_mask = group["force_mask"].to(
-                dtype=d.actuator_force.dtype, device=d.actuator_force.device,
+                dtype=d.actuator_force.dtype,
+                device=d.actuator_force.device,
             )
             sensor = force_mask @ d.actuator_force
         else:

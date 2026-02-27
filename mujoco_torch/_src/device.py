@@ -241,9 +241,13 @@ def _compute_constraint_data(value: mujoco.MjModel) -> dict:
 
     if disableflags & types.DisableBit.CONSTRAINT:
         return {
-            "eq_connect": None, "eq_weld": None, "eq_joint": None,
+            "eq_connect": None,
+            "eq_weld": None,
+            "eq_joint": None,
             "friction": None,
-            "limit_ball": None, "limit_slide_hinge": None, "limit_tendon": None,
+            "limit_ball": None,
+            "limit_slide_hinge": None,
+            "limit_tendon": None,
             "refsafe": bool(disableflags & types.DisableBit.REFSAFE),
         }
 
@@ -266,7 +270,9 @@ def _compute_constraint_data(value: mujoco.MjModel) -> dict:
             id1 = np.array(value.eq_obj1id[ids])
             id2 = np.array(value.eq_obj2id[ids])
             entry = {
-                "ids": _cached(ids), "id1": _cached(id1), "id2": _cached(id2),
+                "ids": _cached(ids),
+                "id1": _cached(id1),
+                "id2": _cached(id2),
                 "multiplier": multiplier,
             }
             if key == "eq_joint":
@@ -298,20 +304,15 @@ def _compute_constraint_data(value: mujoco.MjModel) -> dict:
         result["limit_slide_hinge"] = None
         result["limit_tendon"] = None
     else:
-        ids = np.nonzero(
-            (value.jnt_type == types.JointType.BALL) & value.jnt_limited
-        )[0]
+        ids = np.nonzero((value.jnt_type == types.JointType.BALL) & value.jnt_limited)[0]
         if ids.size == 0:
             result["limit_ball"] = None
         else:
-            qposadr = torch.stack(
-                [torch.arange(q, q + 4) for q in value.jnt_qposadr[ids]]
-            )
-            dofadr = torch.stack(
-                [torch.arange(da, da + 3) for da in value.jnt_dofadr[ids]]
-            )
+            qposadr = torch.stack([torch.arange(q, q + 4) for q in value.jnt_qposadr[ids]])
+            dofadr = torch.stack([torch.arange(da, da + 3) for da in value.jnt_dofadr[ids]])
             dofadr_first = torch.as_tensor(
-                np.array(value.jnt_dofadr[ids]), dtype=torch.long,
+                np.array(value.jnt_dofadr[ids]),
+                dtype=torch.long,
             )
             result["limit_ball"] = {
                 "ids": _cached(ids),
@@ -320,9 +321,7 @@ def _compute_constraint_data(value: mujoco.MjModel) -> dict:
                 "dofadr_first": scan._DeviceCachedTensor(dofadr_first),
             }
 
-        slide_hinge = np.isin(
-            value.jnt_type, (types.JointType.SLIDE, types.JointType.HINGE)
-        )
+        slide_hinge = np.isin(value.jnt_type, (types.JointType.SLIDE, types.JointType.HINGE))
         ids = np.nonzero(slide_hinge & value.jnt_limited)[0]
         if ids.size == 0:
             result["limit_slide_hinge"] = None
@@ -355,9 +354,7 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
     OType = types.ObjType
 
     result: dict[str, tuple | bool] = {}
-    result["sensor_disabled_py"] = bool(
-        int(value.opt.disableflags) & types.DisableBit.SENSOR
-    )
+    result["sensor_disabled_py"] = bool(int(value.opt.disableflags) & types.DisableBit.SENSOR)
 
     for stage_key, stage_val in (
         ("sensor_groups_pos_py", mujoco.mjtStage.mjSTAGE_POS),
@@ -388,7 +385,8 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
             # -- position stage extras --
             if st_int == SType.JOINTPOS:
                 group["qposadr"] = torch.tensor(
-                    value.jnt_qposadr[objid_np], dtype=torch.long,
+                    value.jnt_qposadr[objid_np],
+                    dtype=torch.long,
                 )
             elif st_int == SType.BALLQUAT:
                 group["qposadr_2d"] = torch.tensor(
@@ -400,19 +398,26 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
                 body_groups: list[dict] = []
                 for sid in sorted(set(site_bodyid)):
                     idxs = site_bodyid == sid
-                    body_groups.append({
-                        "sid": int(sid),
-                        "objid": torch.tensor(objid_np[idxs], dtype=torch.long),
-                        "cutoff": torch.tensor(cutoff_np[idxs], dtype=torch.float64),
-                        "adr": torch.tensor(adr_np[idxs], dtype=torch.long),
-                        "ray_precomp": ray.precompute_ray_data(
-                            value, flg_static=True, bodyexclude=int(sid),
-                        ),
-                    })
+                    body_groups.append(
+                        {
+                            "sid": int(sid),
+                            "objid": torch.tensor(objid_np[idxs], dtype=torch.long),
+                            "cutoff": torch.tensor(cutoff_np[idxs], dtype=torch.float64),
+                            "adr": torch.tensor(adr_np[idxs], dtype=torch.long),
+                            "ray_precomp": ray.precompute_ray_data(
+                                value,
+                                flg_static=True,
+                                bodyexclude=int(sid),
+                            ),
+                        }
+                    )
                 group["body_groups"] = tuple(body_groups)
             elif st_int in (
-                SType.FRAMEPOS, SType.FRAMEXAXIS, SType.FRAMEYAXIS,
-                SType.FRAMEZAXIS, SType.FRAMEQUAT,
+                SType.FRAMEPOS,
+                SType.FRAMEXAXIS,
+                SType.FRAMEYAXIS,
+                SType.FRAMEZAXIS,
+                SType.FRAMEQUAT,
             ):
                 objtype_np = value.sensor_objtype[idx]
                 reftype_np = value.sensor_reftype[idx]
@@ -444,11 +449,13 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
                     if st_int == SType.FRAMEQUAT:
                         if int(ot_val) in _bodyid_src:
                             sub["obj_bodyid"] = torch.tensor(
-                                _bodyid_src[int(ot_val)][sub_objid], dtype=torch.long,
+                                _bodyid_src[int(ot_val)][sub_objid],
+                                dtype=torch.long,
                             )
                         if int(rt_val) in _bodyid_src:
                             sub["ref_bodyid"] = torch.tensor(
-                                _bodyid_src[int(rt_val)][sub_refid], dtype=torch.long,
+                                _bodyid_src[int(rt_val)][sub_refid],
+                                dtype=torch.long,
                             )
 
                     ot_rt_groups.append(sub)
@@ -461,11 +468,13 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
                 bodyid_np = value.site_bodyid[objid_np]
                 group["bodyid"] = torch.tensor(bodyid_np, dtype=torch.long)
                 group["rootid"] = torch.tensor(
-                    value.body_rootid[bodyid_np], dtype=torch.long,
+                    value.body_rootid[bodyid_np],
+                    dtype=torch.long,
                 )
             elif st_int == SType.JOINTVEL:
                 group["dofadr"] = torch.tensor(
-                    value.jnt_dofadr[objid_np], dtype=torch.long,
+                    value.jnt_dofadr[objid_np],
+                    dtype=torch.long,
                 )
             elif st_int == SType.BALLANGVEL:
                 group["dofadr_2d"] = torch.tensor(
@@ -478,18 +487,21 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
                 bodyid_np = value.site_bodyid[objid_np]
                 group["bodyid"] = torch.tensor(bodyid_np, dtype=torch.long)
                 group["rootid"] = torch.tensor(
-                    value.body_rootid[bodyid_np], dtype=torch.long,
+                    value.body_rootid[bodyid_np],
+                    dtype=torch.long,
                 )
             elif st_int == SType.JOINTACTFRC:
                 group["dofadr"] = torch.tensor(
-                    value.jnt_dofadr[objid_np], dtype=torch.long,
+                    value.jnt_dofadr[objid_np],
+                    dtype=torch.long,
                 )
             elif st_int == SType.TENDONACTFRC:
-                force_mask = np.stack([
-                    (value.actuator_trntype == int(types.TrnType.TENDON))
-                    & (value.actuator_trnid[:, 0] == tid)
-                    for tid in objid_np
-                ])
+                force_mask = np.stack(
+                    [
+                        (value.actuator_trntype == int(types.TrnType.TENDON)) & (value.actuator_trnid[:, 0] == tid)
+                        for tid in objid_np
+                    ]
+                )
                 group["force_mask"] = torch.tensor(force_mask, dtype=torch.float64)
 
             groups.append(group)
@@ -547,7 +559,8 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
         result["geom_convex_edge"],
     )
     candidate_set = collision_driver.collision_candidates(
-        value, geom_convex_data=geom_convex_data,
+        value,
+        geom_convex_data=geom_convex_data,
     )
     max_cp = collision_driver._max_contact_points(value)
     collision_groups = []
@@ -579,21 +592,31 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     result["geom_bodyid_t"] = torch.as_tensor(np.array(value.geom_bodyid), dtype=torch.long)
     result["site_bodyid_t"] = torch.as_tensor(np.array(value.site_bodyid), dtype=torch.long)
     result["dof_jntid_t"] = torch.as_tensor(np.array(value.dof_jntid), dtype=torch.long)
-    result["actuator_ctrllimited_bool"] = torch.as_tensor(
-        np.array(value.actuator_ctrllimited)[:, None], dtype=torch.bool
-    ) if value.nu > 0 else torch.empty((0, 1), dtype=torch.bool)
-    result["actuator_forcelimited_bool"] = torch.as_tensor(
-        np.array(value.actuator_forcelimited)[:, None], dtype=torch.bool
-    ) if value.nu > 0 else torch.empty((0, 1), dtype=torch.bool)
-    result["jnt_actfrclimited_bool"] = torch.as_tensor(
-        np.array(value.jnt_actfrclimited)[:, None], dtype=torch.bool
-    ) if value.njnt > 0 else torch.empty((0, 1), dtype=torch.bool)
-    result["actuator_actlimited_bool"] = torch.as_tensor(
-        np.array(value.actuator_actlimited)[:, None], dtype=torch.bool
-    ) if value.nu > 0 else torch.empty((0, 1), dtype=torch.bool)
-    result["actuator_actadr_neg1"] = torch.tensor(
-        np.array(value.actuator_actadr) == -1, dtype=torch.bool
-    ) if value.nu > 0 else torch.empty(0, dtype=torch.bool)
+    result["actuator_ctrllimited_bool"] = (
+        torch.as_tensor(np.array(value.actuator_ctrllimited)[:, None], dtype=torch.bool)
+        if value.nu > 0
+        else torch.empty((0, 1), dtype=torch.bool)
+    )
+    result["actuator_forcelimited_bool"] = (
+        torch.as_tensor(np.array(value.actuator_forcelimited)[:, None], dtype=torch.bool)
+        if value.nu > 0
+        else torch.empty((0, 1), dtype=torch.bool)
+    )
+    result["jnt_actfrclimited_bool"] = (
+        torch.as_tensor(np.array(value.jnt_actfrclimited)[:, None], dtype=torch.bool)
+        if value.njnt > 0
+        else torch.empty((0, 1), dtype=torch.bool)
+    )
+    result["actuator_actlimited_bool"] = (
+        torch.as_tensor(np.array(value.actuator_actlimited)[:, None], dtype=torch.bool)
+        if value.nu > 0
+        else torch.empty((0, 1), dtype=torch.bool)
+    )
+    result["actuator_actadr_neg1"] = (
+        torch.tensor(np.array(value.actuator_actadr) == -1, dtype=torch.bool)
+        if value.nu > 0
+        else torch.empty(0, dtype=torch.bool)
+    )
 
     # Pre-compute sparse mass matrix index pattern
     is_, js, madr_ijs = [], [], []
@@ -629,9 +652,7 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
             out_beg, out_end = int(value.dof_Madr[j]), int(value.dof_Madr[j + 1])
             factor_updates.setdefault(depth[j], []).append((out_beg, out_end, madr_d, madr_ij))
     result["factor_m_madr_ds_t"] = (
-        torch.tensor(factor_madr_ds, dtype=torch.long)
-        if factor_madr_ds
-        else torch.empty(0, dtype=torch.long)
+        torch.tensor(factor_madr_ds, dtype=torch.long) if factor_madr_ds else torch.empty(0, dtype=torch.long)
     )
     # Pre-compute factored update index tensors as _DeviceCachedTensor for lazy GPU transfer
     factor_m_updates_precomp = []
@@ -643,12 +664,14 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
             madr_ijs_f.extend([madr_ij_v] * width)
             pivots.extend([madr_d] * width)
             out.extend(range(b, e))
-        factor_m_updates_precomp.append((
-            scan._DeviceCachedTensor(torch.tensor(rows, dtype=torch.long)),
-            scan._DeviceCachedTensor(torch.tensor(madr_ijs_f, dtype=torch.long)),
-            scan._DeviceCachedTensor(torch.tensor(pivots, dtype=torch.long)),
-            scan._DeviceCachedTensor(torch.tensor(out, dtype=torch.long)),
-        ))
+        factor_m_updates_precomp.append(
+            (
+                scan._DeviceCachedTensor(torch.tensor(rows, dtype=torch.long)),
+                scan._DeviceCachedTensor(torch.tensor(madr_ijs_f, dtype=torch.long)),
+                scan._DeviceCachedTensor(torch.tensor(pivots, dtype=torch.long)),
+                scan._DeviceCachedTensor(torch.tensor(out, dtype=torch.long)),
+            )
+        )
     result["factor_m_updates"] = tuple(factor_m_updates_precomp)
 
     # Pre-compute solve_m indices
@@ -667,11 +690,13 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
         groups = []
         for _, vals in sorted(updates_dict.items(), reverse=reverse):
             t = torch.tensor(vals, dtype=torch.long)
-            groups.append((
-                scan._DeviceCachedTensor(t[:, 0]),
-                scan._DeviceCachedTensor(t[:, 1]),
-                scan._DeviceCachedTensor(t[:, 2]),
-            ))
+            groups.append(
+                (
+                    scan._DeviceCachedTensor(t[:, 0]),
+                    scan._DeviceCachedTensor(t[:, 1]),
+                    scan._DeviceCachedTensor(t[:, 2]),
+                )
+            )
         return tuple(groups)
 
     result["solve_m_updates_j"] = _build_solve_groups(solve_updates_j, reverse=True)

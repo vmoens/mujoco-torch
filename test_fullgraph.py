@@ -12,9 +12,7 @@ import mujoco_torch
 
 torch.set_default_dtype(torch.float64)
 
-MODEL_XML = (
-    epath.resource_path("mujoco_torch") / "test_data" / "humanoid.xml"
-).read_text()
+MODEL_XML = (epath.resource_path("mujoco_torch") / "test_data" / "humanoid.xml").read_text()
 
 m_mj = mujoco.MjModel.from_xml_string(MODEL_XML)
 d_mj = mujoco.MjData(m_mj)

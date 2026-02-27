@@ -271,9 +271,7 @@ def precompute_ray_data(m_np, flg_static, bodyexclude, geomgroup=()):
         geom_filter = geom_filter & geomgroup_arr[np.clip(m_np.geom_group, 0, mujoco.mjNGROUP)]
 
     geom_filter_dyn = (m_np.geom_matid != -1) | (m_np.geom_rgba[:, 3] != 0)
-    geom_filter_dyn = geom_filter_dyn & (
-        (m_np.geom_matid == -1) | (m_np.mat_rgba[m_np.geom_matid, 3] != 0)
-    )
+    geom_filter_dyn = geom_filter_dyn & ((m_np.geom_matid == -1) | (m_np.mat_rgba[m_np.geom_matid, 3] != 0))
 
     entries = []
     for geom_type, fn in _PRIMITIVE_RAY_FUNC.items():
@@ -281,12 +279,8 @@ def precompute_ray_data(m_np, flg_static, bodyexclude, geomgroup=()):
         if id_np.size == 0:
             continue
         id_t = _DeviceCachedTensor(torch.tensor(id_np, dtype=torch.long))
-        size_t = _DeviceCachedTensor(
-            torch.as_tensor(np.array(m_np.geom_size[id_np]), dtype=torch.float64)
-        )
-        dyn_t = _DeviceCachedTensor(
-            torch.tensor(geom_filter_dyn[id_np])
-        )
+        size_t = _DeviceCachedTensor(torch.as_tensor(np.array(m_np.geom_size[id_np]), dtype=torch.float64))
+        dyn_t = _DeviceCachedTensor(torch.tensor(geom_filter_dyn[id_np]))
         entries.append((fn, id_t, size_t, dyn_t))
 
     return tuple(entries)
@@ -312,7 +306,8 @@ def ray_precomputed(
 
         dist = torch.vmap(fn)(geom_size, geom_pnts[id_t], geom_vecs[id_t])
         dist = torch.where(
-            dyn_filter, dist,
+            dyn_filter,
+            dist,
             torch.full((), torch.inf, dtype=dist.dtype, device=device),
         )
         dists.append(dist)

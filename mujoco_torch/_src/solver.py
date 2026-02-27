@@ -389,7 +389,8 @@ def solve(m: Model, d: Data) -> Data:
         hi = torch.utils._pytree.tree_map(lesser_fn, p0, lo)
         lo = torch.utils._pytree.tree_map(lesser_fn, lo, p0)
         ls_ctx = _LSContext(
-            lo=lo, hi=hi,
+            lo=lo,
+            hi=hi,
             swap=ctx.qacc.new_ones((), dtype=torch.bool),
             ls_iter=ctx.qacc.new_zeros((), dtype=torch.long),
         )
