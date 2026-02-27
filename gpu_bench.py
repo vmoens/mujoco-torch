@@ -12,6 +12,7 @@ Usage:
 import argparse
 import gc
 import json
+import logging
 import time
 import traceback
 
@@ -23,6 +24,9 @@ from etils import epath
 import mujoco_torch
 
 torch.set_default_dtype(torch.float64)
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+log = logging.getLogger(__name__)
 
 DEVICE = "cuda"
 WARMUP_ITERS = 5
@@ -118,7 +122,7 @@ def bench_vmap(mx, m_mj, batch_sizes, nsteps):
         elapsed = time.perf_counter() - t0
         sps = B * nsteps / elapsed
         results[f"B={B}"] = {"elapsed_s": elapsed, "steps_per_s": sps}
-        print(f"    B={B:5d}: {elapsed * 1e3:8.1f} ms  ({sps:>12,.0f} steps/s)", flush=True)
+        log.info("    B=%5d: %8.1f ms  (%12,.0f steps/s)", B, elapsed * 1e3, sps)
     return results
 
 
@@ -136,12 +140,11 @@ def bench_compile(mx, m_mj, batch_sizes, nsteps):
         torch.compiler.reset()
         compiled_fn = torch.compile(vmap_step, fullgraph=True)
         d_batch = make_batch(mx, m_mj, B)
-        print(f"    B={B:5d}: compiling...", end="", flush=True)
+        log.info("    B=%5d: compiling...", B)
         try:
             for _ in range(WARMUP_ITERS):
                 d_batch = compiled_fn(d_batch)
             torch.cuda.synchronize()
-            print(" timing...", end="", flush=True)
 
             d_batch = make_batch(mx, m_mj, B)
             torch.cuda.synchronize()
@@ -152,9 +155,9 @@ def bench_compile(mx, m_mj, batch_sizes, nsteps):
             elapsed = time.perf_counter() - t0
             sps = B * nsteps / elapsed
             results[f"B={B}"] = {"elapsed_s": elapsed, "steps_per_s": sps}
-            print(f" {elapsed * 1e3:8.1f} ms  ({sps:>12,.0f} steps/s)", flush=True)
+            log.info("    B=%5d: %8.1f ms  (%12,.0f steps/s)", B, elapsed * 1e3, sps)
         except Exception:
-            print(" FAILED", flush=True)
+            log.info("    B=%5d: FAILED", B)
             traceback.print_exc()
             results[f"B={B}"] = None
     return results
@@ -166,7 +169,7 @@ def bench_mjx(m_mj, batch_sizes, nsteps):
         import jax
         from mujoco import mjx
     except ImportError:
-        print("  JAX not installed -- skipping MJX comparison.", flush=True)
+        log.info("  JAX not installed -- skipping MJX comparison.")
         return None
 
     jax.config.update("jax_enable_x64", True)
@@ -201,27 +204,27 @@ def bench_mjx(m_mj, batch_sizes, nsteps):
             elapsed = time.perf_counter() - t0
             sps = B * nsteps / elapsed
             results[f"B={B}"] = {"elapsed_s": elapsed, "steps_per_s": sps}
-            print(f"    B={B:5d}: {elapsed * 1e3:8.1f} ms  ({sps:>12,.0f} steps/s)", flush=True)
+            log.info("    B=%5d: %8.1f ms  (%12,.0f steps/s)", B, elapsed * 1e3, sps)
         except Exception:
-            print(f"    B={B:5d}: FAILED", flush=True)
+            log.info("    B=%5d: FAILED", B)
             traceback.print_exc()
             results[f"B={B}"] = None
     return results
 
 
-def print_summary(model_name, all_results, batch_sizes):
-    """Print a clean summary table."""
-    print()
-    print("=" * 100)
-    print(f"  Summary: {model_name}")
-    print("=" * 100)
+def log_summary(model_name, all_results, batch_sizes):
+    """Log a clean summary table."""
+    log.info("")
+    log.info("=" * 100)
+    log.info("  Summary: %s", model_name)
+    log.info("=" * 100)
 
     configs = list(all_results.keys())
     header = f"{'Config':40s}"
     for B in batch_sizes:
         header += f"  {'B=' + str(B):>14s}"
-    print(header)
-    print("-" * len(header))
+    log.info(header)
+    log.info("-" * len(header))
 
     for config in configs:
         data = all_results[config]
@@ -236,8 +239,8 @@ def print_summary(model_name, all_results, batch_sizes):
                 row += f"  {'(linear)':>14s}"
             else:
                 row += f"  {'--':>14s}"
-        print(row)
-    print()
+        log.info(row)
+    log.info("")
 
 
 def main():
@@ -245,10 +248,10 @@ def main():
     model_name = args.model
     output = args.output or f"bench_{model_name}.json"
 
-    print()
-    print("#" * 100)
-    print(f"#  Model: {model_name}")
-    print("#" * 100)
+    log.info("")
+    log.info("#" * 100)
+    log.info("#  Model: %s", model_name)
+    log.info("#" * 100)
 
     torch.set_default_device(DEVICE)
 
@@ -260,40 +263,40 @@ def main():
     only = args.only
 
     if only in (None, "compile"):
-        print("\n  torch compile(fullgraph=True):", flush=True)
+        log.info("\n  torch compile(fullgraph=True):")
         model_results["torch compile"] = bench_compile(mx, m_mj, args.batch_sizes, args.nsteps)
 
     if only in (None, "c"):
-        print("\n  MuJoCo C (sequential, B=1):", flush=True)
+        log.info("\n  MuJoCo C (sequential, B=1):")
         r = bench_mujoco_c(m_mj, args.nsteps)
         sps = r["B=1"]["steps_per_s"]
-        print(f"    B=    1: {r['B=1']['elapsed_s'] * 1e3:8.1f} ms  ({sps:>12,.0f} steps/s)", flush=True)
+        log.info("    B=    1: %8.1f ms  (%12,.0f steps/s)", r["B=1"]["elapsed_s"] * 1e3, sps)
         model_results["MuJoCo C (seq)"] = r
 
     if only in (None, "loop"):
-        print("\n  mujoco-torch loop (B=1):", flush=True)
+        log.info("\n  mujoco-torch loop (B=1):")
         r = bench_torch_loop(mx, m_mj, args.nsteps)
         sps = r["B=1"]["steps_per_s"]
-        print(f"    B=    1: {r['B=1']['elapsed_s'] * 1e3:8.1f} ms  ({sps:>12,.0f} steps/s)", flush=True)
+        log.info("    B=    1: %8.1f ms  (%12,.0f steps/s)", r["B=1"]["elapsed_s"] * 1e3, sps)
         model_results["torch loop (seq)"] = r
 
     if only in (None, "vmap"):
-        print("\n  mujoco-torch vmap (eager):", flush=True)
+        log.info("\n  mujoco-torch vmap (eager):")
         model_results["torch vmap (eager)"] = bench_vmap(mx, m_mj, args.batch_sizes, args.nsteps)
 
     if only in (None, "mjx"):
         gc.collect()
         torch.cuda.empty_cache()
-        print("\n  MJX jit(vmap(step)):", flush=True)
+        log.info("\n  MJX jit(vmap(step)):")
         mjx_r = bench_mjx(m_mj, args.batch_sizes, args.nsteps)
         if mjx_r is not None:
             model_results["MJX jit(vmap)"] = mjx_r
 
-    print_summary(model_name, model_results, args.batch_sizes)
+    log_summary(model_name, model_results, args.batch_sizes)
 
     with open(output, "w") as f:
         json.dump({model_name: model_results}, f, indent=2)
-    print(f"Results written to {output}", flush=True)
+    log.info("Results written to %s", output)
 
 
 if __name__ == "__main__":
