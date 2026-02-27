@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """TorchRL integration example for mujoco-torch.
 
-Demonstrates wrapping mujoco-torch in a TorchRL EnvBase so it can be used
-with TorchRL's data collectors, replay buffers, and policy trainers.
+Demonstrates wrapping mujoco-torch in a **batched** TorchRL EnvBase with
+``batch_size=[num_envs]``.  Each call to ``_step`` advances all environments.
+
+On GPU, the loop can be replaced with ``torch.compile(torch.vmap(step))``
+for true batch parallelism — see ``examples/batched_comparison.py``.
 
 Run:
     pip install torchrl
@@ -13,6 +16,7 @@ import mujoco
 import torch
 from etils import epath
 from tensordict import TensorDict
+from torchrl.data import Bounded, Composite, Unbounded
 from torchrl.envs import EnvBase
 from torchrl.envs.utils import check_env_specs
 
@@ -22,13 +26,28 @@ MODEL_XML = (epath.resource_path("mujoco_torch") / "test_data" / "ant.xml").read
 
 
 class MujocoTorchEnv(EnvBase):
-    """A TorchRL environment backed by mujoco-torch."""
+    """A batched TorchRL environment backed by mujoco-torch.
 
-    def __init__(self, xml_string: str, max_episode_steps: int = 1000, device=None, dtype=torch.float64):
-        super().__init__(device=device)
+    Args:
+        xml_string: MuJoCo XML model string.
+        num_envs: number of parallel environments (sets ``batch_size``).
+        max_episode_steps: truncation horizon per environment.
+        device: torch device.
+        dtype: floating-point dtype for observations, actions, rewards.
+    """
+
+    def __init__(
+        self,
+        xml_string: str,
+        num_envs: int = 16,
+        max_episode_steps: int = 1000,
+        device=None,
+        dtype=torch.float64,
+    ):
+        super().__init__(device=device, batch_size=torch.Size([num_envs]))
         self.dtype = dtype
+        self.num_envs = num_envs
         self.max_episode_steps = max_episode_steps
-        self._step_count = 0
 
         m_mj = mujoco.MjModel.from_xml_string(xml_string)
         self._m_mj = m_mj
@@ -36,55 +55,71 @@ class MujocoTorchEnv(EnvBase):
         if device is not None:
             self.mx = self.mx.to(device)
 
-        self.nq = m_mj.nq
-        self.nv = m_mj.nv
-        self.nu = m_mj.nu
-
-        from torchrl.data import Bounded, Composite, Unbounded
+        nq, nv, nu = m_mj.nq, m_mj.nv, m_mj.nu
 
         self.observation_spec = Composite(
-            qpos=Unbounded(shape=(self.nq,), dtype=self.dtype, device=self.device),
-            qvel=Unbounded(shape=(self.nv,), dtype=self.dtype, device=self.device),
+            qpos=Unbounded(shape=(num_envs, nq), dtype=dtype, device=self.device),
+            qvel=Unbounded(shape=(num_envs, nv), dtype=dtype, device=self.device),
+            batch_size=[num_envs],
         )
         self.action_spec = Bounded(
             low=-1.0,
             high=1.0,
-            shape=(self.nu,),
-            dtype=self.dtype,
+            shape=(num_envs, nu),
+            dtype=dtype,
             device=self.device,
         )
-        self.reward_spec = Unbounded(shape=(1,), dtype=self.dtype, device=self.device)
+        self.reward_spec = Unbounded(shape=(num_envs, 1), dtype=dtype, device=self.device)
+
+        d_mj = mujoco.MjData(m_mj)
+        mujoco.mj_forward(m_mj, d_mj)
+        self._dx0 = mujoco_torch.device_put(d_mj)
+        if device is not None:
+            self._dx0 = self._dx0.to(device)
+
+    def _make_batch(self, n):
+        return torch.stack([self._dx0.clone() for _ in range(n)])
 
     def _reset(self, tensordict=None, **kwargs):
-        d_mj = mujoco.MjData(self._m_mj)
-        mujoco.mj_forward(self._m_mj, d_mj)
-        self._dx = mujoco_torch.device_put(d_mj)
-        if self.device is not None:
-            self._dx = self._dx.to(self.device)
-        self._step_count = 0
+        reset_mask = None
+        if tensordict is not None and "_reset" in tensordict.keys():
+            reset_mask = tensordict["_reset"].squeeze(-1)
+
+        if reset_mask is None or not hasattr(self, "_dx"):
+            self._dx = self._make_batch(self.num_envs)
+            self._step_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        else:
+            n_reset = int(reset_mask.sum())
+            if n_reset > 0:
+                self._dx[reset_mask] = self._make_batch(n_reset)
+                self._step_count[reset_mask] = 0
 
         return TensorDict(
             {
                 "qpos": self._dx.qpos.to(self.dtype),
                 "qvel": self._dx.qvel.to(self.dtype),
-                "done": torch.zeros(1, dtype=torch.bool, device=self.device),
-                "terminated": torch.zeros(1, dtype=torch.bool, device=self.device),
+                "done": torch.zeros(*self.batch_size, 1, dtype=torch.bool, device=self.device),
+                "terminated": torch.zeros(*self.batch_size, 1, dtype=torch.bool, device=self.device),
             },
-            batch_size=[],
+            batch_size=self.batch_size,
             device=self.device,
         )
 
     def _step(self, tensordict):
         action = tensordict["action"].to(self.dtype)
-        self._dx = self._dx.replace(ctrl=action)
-        self._dx = mujoco_torch.step(self.mx, self._dx)
+
+        results = []
+        for i in range(self.num_envs):
+            dx_i = self._dx[i].replace(ctrl=action[i])
+            results.append(mujoco_torch.step(self.mx, dx_i))
+        self._dx = torch.stack(results)
         self._step_count += 1
 
-        ctrl_cost = 0.5 * (action**2).sum()
-        reward = (-ctrl_cost).unsqueeze(0).to(self.dtype)
+        ctrl_cost = 0.5 * (action**2).sum(dim=-1, keepdim=True)
+        reward = (-ctrl_cost).to(self.dtype)
 
-        terminated = torch.tensor(False)
-        truncated = self._step_count >= self.max_episode_steps
+        terminated = torch.zeros(*self.batch_size, 1, dtype=torch.bool, device=self.device)
+        truncated = (self._step_count >= self.max_episode_steps).unsqueeze(-1)
         done = terminated | truncated
 
         return TensorDict(
@@ -92,10 +127,10 @@ class MujocoTorchEnv(EnvBase):
                 "qpos": self._dx.qpos.to(self.dtype),
                 "qvel": self._dx.qvel.to(self.dtype),
                 "reward": reward,
-                "done": done.unsqueeze(0),
-                "terminated": terminated.unsqueeze(0),
+                "done": done,
+                "terminated": terminated,
             },
-            batch_size=[],
+            batch_size=self.batch_size,
             device=self.device,
         )
 
@@ -106,19 +141,17 @@ class MujocoTorchEnv(EnvBase):
 if __name__ == "__main__":
     torch.set_default_dtype(torch.float64)
 
-    env = MujocoTorchEnv(MODEL_XML, max_episode_steps=200)
+    num_envs = 16
+    env = MujocoTorchEnv(MODEL_XML, num_envs=num_envs, max_episode_steps=200)
+    print(f"Created batched env: {num_envs} parallel envs  (batch_size={env.batch_size})")
+
     print("Checking env specs ...")
     check_env_specs(env, seed=42)
-    print("Env specs OK!")
+    print("Env specs OK!\n")
 
-    print("\nRunning 100 random-action steps ...")
-    td = env.reset()
-    total_reward = 0.0
-    for _step in range(100):
-        action = env.action_spec.rand()
-        td["action"] = action
-        td = env.step(td)["next"]
-        total_reward += td["reward"].item()
-
-    print(f"  Total reward over 100 steps: {total_reward:.2f}")
-    print(f"  Final qpos[:3]: {td['qpos'][:3].tolist()}")
+    rollout = env.rollout(max_steps=50)
+    total_reward = rollout["next", "reward"].sum(dim=0).squeeze(-1)
+    print(f"Rollout: {rollout.shape[-1]} steps x {num_envs} envs")
+    print(f"  Mean total reward:  {total_reward.mean():.2f}")
+    print(f"  Reward std:         {total_reward.std():.2f}")
+    print(f"  Final qpos[0, :3]:  {rollout[-1]['next', 'qpos'][0, :3].tolist()}")
