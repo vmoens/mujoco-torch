@@ -554,7 +554,9 @@ def _instantiate_contact_elliptic(m: Model, d: Data, condim: int, start_idx: int
         contact.auto_batch_size_()
     contact = contact[start_idx : start_idx + count]
     res = fn(contact)
-    j, invweight, pos, pos_norm, solref, solimp = torch.utils._pytree.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), res)
+    j, invweight, pos, pos_norm, solref, solimp = torch.utils._pytree.tree_map(
+        lambda x: x.reshape(-1, *x.shape[2:]), res
+    )
     frictionloss = torch.zeros_like(pos)
 
     return _Efc(
