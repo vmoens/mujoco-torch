@@ -19,6 +19,8 @@ import numpy as np
 import torch
 from torch._C._functorch import _add_batch_dim, _remove_batch_dim, is_batchedtensor, maybe_get_level
 
+from mujoco_torch._src import math
+
 from mujoco_torch._src import math, scan
 
 # pylint: disable=g-importing-member
@@ -192,3 +194,111 @@ def xfrc_accumulate(m: Model, d: Data) -> torch.Tensor:
         torch.arange(m.nbody, device=d.xipos.device),
     )
     return torch.sum(qfrc, axis=0)
+
+
+def _muscle_sigmoid(x: torch.Tensor) -> torch.Tensor:
+    """Quintic sigmoid: f(0)=f'(0)=f''(0)=0, f(1)=1, f'(1)=f''(1)=0."""
+    sol = x * x * x * (3 * x * (2 * x - 5) + 10)
+    sol = torch.where(x <= 0, 0.0, sol)
+    sol = torch.where(x >= 1, 1.0, sol)
+    return sol
+
+
+def muscle_dynamics_timescale(
+    dctrl: torch.Tensor,
+    tau_act: torch.Tensor,
+    tau_deact: torch.Tensor,
+    smoothing_width: torch.Tensor,
+) -> torch.Tensor:
+    """Muscle time constant with optional smoothing."""
+    tau_hard = torch.where(dctrl > 0, tau_act, tau_deact)
+    tau_smooth = tau_deact + (tau_act - tau_deact) * _muscle_sigmoid(
+        math.safe_div(dctrl, smoothing_width) + 0.5
+    )
+    return torch.where(smoothing_width < mujoco.mjMINVAL, tau_hard, tau_smooth)
+
+
+def muscle_dynamics(
+    ctrl: torch.Tensor, act: torch.Tensor, prm: torch.Tensor
+) -> torch.Tensor:
+    """Muscle activation dynamics: da/dt."""
+    ctrlclamp = torch.clamp(ctrl, 0, 1)
+    actclamp = torch.clamp(act, 0, 1)
+
+    tau_act = prm[0] * (0.5 + 1.5 * actclamp)
+    tau_deact = prm[1] / (0.5 + 1.5 * actclamp)
+    smoothing_width = prm[2]
+    dctrl = ctrlclamp - act
+
+    tau = muscle_dynamics_timescale(dctrl, tau_act, tau_deact, smoothing_width)
+    return dctrl / torch.clamp_min(tau, mujoco.mjMINVAL)
+
+
+def muscle_gain_length(
+    length: torch.Tensor, lmin: torch.Tensor, lmax: torch.Tensor
+) -> torch.Tensor:
+    """Normalized muscle length-gain curve."""
+    a = 0.5 * (lmin + 1)
+    b = 0.5 * (1 + lmax)
+
+    out0 = 0.5 * torch.square((length - lmin) / torch.clamp_min(a - lmin, mujoco.mjMINVAL))
+    out1 = 1 - 0.5 * torch.square((1 - length) / torch.clamp_min(1 - a, mujoco.mjMINVAL))
+    out2 = 1 - 0.5 * torch.square((length - 1) / torch.clamp_min(b - 1, mujoco.mjMINVAL))
+    out3 = 0.5 * torch.square((lmax - length) / torch.clamp_min(lmax - b, mujoco.mjMINVAL))
+
+    out = torch.where(length <= b, out2, out3)
+    out = torch.where(length <= 1, out1, out)
+    out = torch.where(length <= a, out0, out)
+    out = torch.where((lmin <= length) & (length <= lmax), out, 0.0)
+    return out
+
+
+def muscle_gain(
+    length: torch.Tensor,
+    vel: torch.Tensor,
+    lengthrange: torch.Tensor,
+    acc0: torch.Tensor,
+    prm: torch.Tensor,
+) -> torch.Tensor:
+    """Muscle active force (gain)."""
+    lrange = prm[:2]
+    force, scale, lmin, lmax, vmax, _, fvmax = prm[2], prm[3], prm[4], prm[5], prm[6], prm[7], prm[8]
+
+    force = torch.where(force < 0, scale / torch.clamp_min(acc0, mujoco.mjMINVAL), force)
+
+    L0 = (lengthrange[1] - lengthrange[0]) / torch.clamp_min(lrange[1] - lrange[0], mujoco.mjMINVAL)
+    L = lrange[0] + (length - lengthrange[0]) / torch.clamp_min(L0, mujoco.mjMINVAL)
+    V = vel / torch.clamp_min(L0 * vmax, mujoco.mjMINVAL)
+
+    FL = muscle_gain_length(L, lmin, lmax)
+
+    y = fvmax - 1
+    FV = torch.where(V <= y, fvmax - torch.square(y - V) / torch.clamp_min(y, mujoco.mjMINVAL), fvmax)
+    FV = torch.where(V <= 0, torch.square(V + 1), FV)
+    FV = torch.where(V <= -1, 0.0, FV)
+
+    return -force * FL * FV
+
+
+def muscle_bias(
+    length: torch.Tensor,
+    lengthrange: torch.Tensor,
+    acc0: torch.Tensor,
+    prm: torch.Tensor,
+) -> torch.Tensor:
+    """Muscle passive force (bias)."""
+    lrange = prm[:2]
+    force, scale, _, lmax, _, fpmax = prm[2], prm[3], prm[4], prm[5], prm[6], prm[7]
+
+    force = torch.where(force < 0, scale / torch.clamp_min(acc0, mujoco.mjMINVAL), force)
+
+    L0 = (lengthrange[1] - lengthrange[0]) / torch.clamp_min(lrange[1] - lrange[0], mujoco.mjMINVAL)
+    L = lrange[0] + (length - lengthrange[0]) / torch.clamp_min(L0, mujoco.mjMINVAL)
+
+    b = 0.5 * (1 + lmax)
+    out1 = -force * fpmax * 0.5 * torch.square((L - 1) / torch.clamp_min(b - 1, mujoco.mjMINVAL))
+    out2 = -force * fpmax * (0.5 + (L - b) / torch.clamp_min(b - 1, mujoco.mjMINVAL))
+
+    out = torch.where(L <= b, out1, out2)
+    out = torch.where(L <= 1, 0.0, out)
+    return out

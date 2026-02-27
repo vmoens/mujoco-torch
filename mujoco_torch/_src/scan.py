@@ -51,7 +51,8 @@ def clear_scan_caches():
 _KNOWN_FLAT_CALLS = [
     ("jbbjj", "v", "j", [(0, "jnt_type")]),
     ("uuua", "a", "u", [(0, "actuator_dyntype")]),
-    ("uuuuuuu", "u", "u", [(0, "actuator_gaintype"), (2, "actuator_biastype")]),
+    ("uuuuuuuuu", "u", "u", [(0, "actuator_gaintype"), (2, "actuator_biastype")]),
+    ("uuaau", "a", "u", [(0, "actuator_dyntype")]),
     ("au", "a", "u", []),
     ("jqv", "q", "j", [(0, "jnt_type")]),
     ("jjqq", "v", "j", [(0, "jnt_type")]),
