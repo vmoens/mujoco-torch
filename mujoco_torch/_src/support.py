@@ -210,15 +210,11 @@ def muscle_dynamics_timescale(
 ) -> torch.Tensor:
     """Muscle time constant with optional smoothing."""
     tau_hard = torch.where(dctrl > 0, tau_act, tau_deact)
-    tau_smooth = tau_deact + (tau_act - tau_deact) * _muscle_sigmoid(
-        math.safe_div(dctrl, smoothing_width) + 0.5
-    )
+    tau_smooth = tau_deact + (tau_act - tau_deact) * _muscle_sigmoid(math.safe_div(dctrl, smoothing_width) + 0.5)
     return torch.where(smoothing_width < mujoco.mjMINVAL, tau_hard, tau_smooth)
 
 
-def muscle_dynamics(
-    ctrl: torch.Tensor, act: torch.Tensor, prm: torch.Tensor
-) -> torch.Tensor:
+def muscle_dynamics(ctrl: torch.Tensor, act: torch.Tensor, prm: torch.Tensor) -> torch.Tensor:
     """Muscle activation dynamics: da/dt."""
     ctrlclamp = torch.clamp(ctrl, 0, 1)
     actclamp = torch.clamp(act, 0, 1)
@@ -232,9 +228,7 @@ def muscle_dynamics(
     return dctrl / torch.clamp_min(tau, mujoco.mjMINVAL)
 
 
-def muscle_gain_length(
-    length: torch.Tensor, lmin: torch.Tensor, lmax: torch.Tensor
-) -> torch.Tensor:
+def muscle_gain_length(length: torch.Tensor, lmin: torch.Tensor, lmax: torch.Tensor) -> torch.Tensor:
     """Normalized muscle length-gain curve."""
     a = 0.5 * (lmin + 1)
     b = 0.5 * (1 + lmax)

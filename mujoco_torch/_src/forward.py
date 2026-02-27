@@ -265,8 +265,15 @@ def _advance(
             return torch.clamp(act, actrange_i[0], actrange_i[1])
 
         act = scan.flat(
-            m, _next_act, "uuaau", "a",
-            m.actuator_dyntype, m.actuator_dynprm, d.act, act_dot, actrange,
+            m,
+            _next_act,
+            "uuaau",
+            "a",
+            m.actuator_dyntype,
+            m.actuator_dynprm,
+            d.act,
+            act_dot,
+            actrange,
             group_by="u",
         )
 
