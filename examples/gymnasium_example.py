@@ -118,7 +118,7 @@ if __name__ == "__main__":
     print("Running 100 random-action steps ...")
     obs, info = env.reset(seed=42)
     total_reward = 0.0
-    for step in range(100):
+    for _step in range(100):
         action = env.action_space.sample()
         obs, reward, terminated, truncated, info = env.step(action)
         total_reward += reward

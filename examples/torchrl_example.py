@@ -118,7 +118,7 @@ if __name__ == "__main__":
     print("\nRunning 100 random-action steps ...")
     td = env.reset()
     total_reward = 0.0
-    for step in range(100):
+    for _step in range(100):
         action = env.action_spec.rand()
         td["action"] = action
         td = env.step(td)["next"]
