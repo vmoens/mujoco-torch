@@ -13,8 +13,7 @@ git remote add vmoens https://github.com/vmoens/pytorch.git 2>/dev/null || git r
 git fetch vmoens vmoens/nomerg-sum-prs
 git checkout -- .
 git checkout FETCH_HEAD
-git submodule sync && git submodule update --init --recursive
-python setup.py develop 2>&1 | tail -20
+pip install -e . --no-build-isolation 2>&1 | tail -20
 
 echo "=== Installing tensordict from main ==="
 pip install git+https://github.com/pytorch/tensordict.git@main
