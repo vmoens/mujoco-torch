@@ -18,7 +18,8 @@ import mujoco
 import numpy as np
 import pytest
 import torch
-from mujoco import mjx
+
+mjx = pytest.importorskip("mujoco.mjx", reason="MJX not installed")
 
 import mujoco_torch
 from mujoco_torch._src import test_util
