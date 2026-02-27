@@ -50,11 +50,11 @@ def plane_capsule(plane: GeomInfo, cap: GeomInfo) -> Contact:
     # align contact frames with capsule axis
     b, b_norm = math.normalize_with_norm(axis - n * torch.dot(n, axis))
     y, z = (
-        torch.tensor([0.0, 1.0, 0.0], dtype=axis.dtype, device=axis.device),
-        torch.tensor([0.0, 0.0, 1.0], dtype=axis.dtype, device=axis.device),
+        torch.eye(3, dtype=axis.dtype, device=axis.device)[1],
+        torch.eye(3, dtype=axis.dtype, device=axis.device)[2],
     )
     b = torch.where(b_norm < 0.5, torch.where((-0.5 < n[1]) & (n[1] < 0.5), y, z), b)
-    frame = torch.stack([n, b, torch.linalg.cross(n, b)]).unsqueeze(0)
+    frame = torch.stack([n, b, math.cross(n, b)]).unsqueeze(0)
     segment = axis * cap.geom_size[1]
     contacts = []
     for offset in [segment, -segment]:
@@ -109,8 +109,8 @@ def plane_cylinder(plane: GeomInfo, cylinder: GeomInfo) -> Contact:
 
     # compute sideways vector: vec1
     prjvec1 = -prjvec * 0.5
-    vec1 = math.normalize(torch.linalg.cross(vec, axis)) * cylinder.geom_size[0]
-    vec1 = vec1 * (torch.sqrt(torch.tensor(3.0, device=vec.device)) * 0.5)
+    vec1 = math.normalize(math.cross(vec, axis)) * cylinder.geom_size[0]
+    vec1 = vec1 * (torch.sqrt(torch.full((), 3.0, device=vec.device)) * 0.5)
 
     # disk parallel to plane
     d1 = dist0 + prjaxis + prjvec
@@ -147,7 +147,7 @@ def _sphere_sphere(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Returns the penetration, contact point, and normal between two spheres."""
     n, dist = math.normalize_with_norm(pos2 - pos1)
-    n = torch.where(dist == 0.0, torch.tensor([1.0, 0.0, 0.0], dtype=n.dtype, device=n.device), n)
+    n = torch.where(dist == 0.0, torch.eye(3, dtype=n.dtype, device=n.device)[0], n)
     dist = dist - (radius1 + radius2)
     pos = pos1 + n * (radius1 + dist * 0.5)
     return dist, pos, n

@@ -35,6 +35,9 @@ from mujoco_torch._src.collision_types import (
     GeomInfo,
     HFieldInfo,
 )
+from mujoco_torch._src.math import _CachedConst
+
+_MANIFOLD_TOL = _CachedConst(1e-3)
 
 
 def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -52,7 +55,7 @@ def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, to
     support = get_support(faces, normals)
     support = torch.where(
         support >= 0,
-        torch.tensor(-1e12, dtype=support.dtype, device=support.device),
+        torch.full((), -1e12, dtype=support.dtype, device=support.device),
         support,
     )
     best_idx = support.argmax()
@@ -62,7 +65,7 @@ def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, to
     pt = _project_pt_onto_plane(sphere_pos, face[0], normal)
     edge_p0 = torch.roll(face, 1, dims=0)
     edge_p1 = face
-    edge_normals = torch.vmap(torch.linalg.cross, (0, None))(edge_p1 - edge_p0, normal)
+    edge_normals = torch.vmap(math.cross, (0, None))(edge_p1 - edge_p0, normal)
     edge_dist = torch.vmap(lambda pp, pn: torch.dot(pt - pp, pn))(edge_p0, edge_normals)
     inside = torch.all(edge_dist <= 0)
 
@@ -70,7 +73,7 @@ def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, to
     behind = edge_dist < 0.0
     edge_dist = torch.where(
         degenerate | behind,
-        torch.tensor(1e12, dtype=edge_dist.dtype, device=edge_dist.device),
+        torch.full((), 1e12, dtype=edge_dist.dtype, device=edge_dist.device),
         edge_dist,
     )
     idx = edge_dist.argmin()
@@ -120,7 +123,7 @@ def _capsule_prism(cap: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torc
 
     edge_p0 = torch.roll(face, 1, dims=0)
     edge_p1 = face
-    edge_normals = torch.vmap(torch.linalg.cross, (0, None))(edge_p1 - edge_p0, normal)
+    edge_normals = torch.vmap(math.cross, (0, None))(edge_p1 - edge_p0, normal)
     cap_pts_clipped, mask = _clip_edge_to_planes(cap_pts[0], cap_pts[1], edge_p0, edge_normals)
     cap_pts_clipped = cap_pts_clipped - normal * cap.geom_size[0]
     face_pts = torch.vmap(_project_pt_onto_plane, (0, None, None))(cap_pts_clipped, face[0], normal)
@@ -334,7 +337,7 @@ def _hfield_collision(
 def _select_manifold(dist, pos, n):
     """Selects 4 manifold contact points."""
     n_mean = torch.mean(n, dim=0)
-    mask = dist < torch.minimum(torch.zeros_like(dist), dist.min() + torch.tensor(1e-3, dtype=dist.dtype))
+    mask = dist < torch.minimum(torch.zeros_like(dist), dist.min() + _MANIFOLD_TOL.get(dist.dtype, dist.device))
     idx = _manifold_points(pos, mask, n_mean)
     dist = _vmap_take_1d(dist, idx)
     pos = _vmap_take(pos, idx)

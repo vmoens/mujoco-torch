@@ -23,7 +23,7 @@ from etils import epath
 
 MODEL_XML = (epath.resource_path("mujoco_torch") / "test_data" / "humanoid.xml").read_text()
 
-BATCH_SIZES = [1, 4, 16, 64]
+BATCH_SIZES = [1, 4, 16, 64, 1024]
 NSTEPS = 20
 SEED = 42
 

@@ -19,11 +19,17 @@ import numpy as np
 import torch
 
 from mujoco_torch._src import math, scan, support
+from mujoco_torch._src.math import _CachedConst
 
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import Data, DisableBit, JointType, Model, TrnType, WrapType
 
 # pylint: enable=g-importing-member
+
+# Inertia triu extraction: diag first, then off-diag (matches inert_mul's tri_id)
+_INERT_TRIU_I = _CachedConst([0, 1, 2, 0, 0, 1], dtype=torch.long)
+_INERT_TRIU_J = _CachedConst([0, 1, 2, 1, 2, 2], dtype=torch.long)
+_MJMINVAL = _CachedConst(mujoco.mjMINVAL)
 
 
 def kinematics(m: Model, d: Data) -> Data:
@@ -45,7 +51,7 @@ def kinematics(m: Model, d: Data) -> Data:
             if jnt_typ == JointType.FREE:
                 anchor, axis = (
                     qpos[qpos_i : qpos_i + 3],
-                    torch.tensor([0.0, 0.0, 1.0], dtype=qpos.dtype, device=qpos.device),
+                    torch.eye(3, dtype=qpos.dtype, device=qpos.device)[2],
                 )
             else:
                 anchor = math.rotate(jnt_pos[i], quat) + pos
@@ -77,8 +83,8 @@ def kinematics(m: Model, d: Data) -> Data:
             else:
                 raise RuntimeError(f"unrecognized joint type: {jnt_typ}")
 
-        anchor = torch.stack(anchors) if anchors else torch.empty((0, 3))
-        axis = torch.stack(axes) if axes else torch.empty((0, 3))
+        anchor = torch.stack(anchors) if anchors else torch.empty((0, 3), dtype=qpos.dtype, device=qpos.device)
+        axis = torch.stack(axes) if axes else torch.empty((0, 3), dtype=qpos.dtype, device=qpos.device)
         mat = math.quat_to_mat(quat)
 
         return qpos, anchor, axis, pos, quat, mat
@@ -114,11 +120,11 @@ def kinematics(m: Model, d: Data) -> Data:
     d = d.replace(xquat=xquat, xmat=xmat, xipos=xipos, ximat=ximat)
 
     if m.ngeom:
-        geom_xpos, geom_xmat = v_local_to_global(xpos[m.geom_bodyid], xquat[m.geom_bodyid], m.geom_pos, m.geom_quat)
+        geom_xpos, geom_xmat = v_local_to_global(xpos[m.geom_bodyid_t], xquat[m.geom_bodyid_t], m.geom_pos, m.geom_quat)
         d = d.replace(geom_xpos=geom_xpos, geom_xmat=geom_xmat)
 
     if m.nsite:
-        site_xpos, site_xmat = v_local_to_global(xpos[m.site_bodyid], xquat[m.site_bodyid], m.site_pos, m.site_quat)
+        site_xpos, site_xmat = v_local_to_global(xpos[m.site_bodyid_t], xquat[m.site_bodyid_t], m.site_pos, m.site_quat)
         d = d.replace(site_xpos=site_xpos, site_xmat=site_xmat)
 
     return d
@@ -140,21 +146,21 @@ def com_pos(m: Model, d: Data) -> Data:
     subtree_com = torch.where(
         cond,
         d.xipos,
-        torch.vmap(torch.divide)(pos, torch.maximum(mass, torch.tensor(mujoco.mjMINVAL, dtype=mass.dtype))),
+        torch.vmap(torch.divide)(pos, torch.maximum(mass, _MJMINVAL.get(mass.dtype, mass.device))),
     )
     d = d.replace(subtree_com=subtree_com)
 
     # map inertias to frame centered at subtree_com
     @torch.vmap
     def inert_com(inert, ximat, off, mass):
-        h = torch.linalg.cross(off.unsqueeze(0).expand(3, 3), -torch.eye(3, dtype=off.dtype, device=off.device))
+        h = math.cross(off.unsqueeze(0).expand(3, 3), -torch.eye(3, dtype=off.dtype, device=off.device))
         inert = math.matmul_unroll(ximat * inert, ximat.T)
         inert = inert + math.matmul_unroll(h, h.T) * mass
         # cinert is triu(inert), mass * off, mass
-        inert = inert[(torch.tensor([0, 1, 2, 0, 0, 1]), torch.tensor([0, 1, 2, 1, 2, 2]))]
+        inert = inert[(_INERT_TRIU_I.get(torch.long, inert.device), _INERT_TRIU_J.get(torch.long, inert.device))]
         return torch.cat([inert, off * mass, mass.unsqueeze(0)])
 
-    root_com = subtree_com[torch.as_tensor(m.body_rootid)]
+    root_com = subtree_com[m.body_rootid_t]
     offset = d.xipos - root_com
     cinert = inert_com(m.body_inertia, d.ximat, offset, m.body_mass)
     d = d.replace(cinert=cinert)
@@ -163,7 +169,7 @@ def com_pos(m: Model, d: Data) -> Data:
     def cdof_fn(jnt_typs, root_com, xmat, xanchor, xaxis):
         cdofs = []
 
-        dof_com_fn = lambda a, o: torch.cat([a, torch.linalg.cross(a, o)])
+        dof_com_fn = lambda a, o: torch.cat([a, math.cross(a, o)])
 
         for i, jnt_typ in enumerate(jnt_typs):
             offset = root_com - xanchor[i]
@@ -181,7 +187,7 @@ def com_pos(m: Model, d: Data) -> Data:
             else:
                 raise RuntimeError(f"unrecognized joint type: {jnt_typ}")
 
-        cdof = torch.cat(cdofs) if cdofs else torch.empty((0, 6))
+        cdof = torch.cat(cdofs) if cdofs else torch.empty((0, 6), dtype=xaxis.dtype, device=xaxis.device)
 
         return cdof
 
@@ -214,7 +220,7 @@ def crb(m: Model, d: Data) -> Data:
     crb_body[0] = 0.0
     d = d.replace(crb=crb_body)
 
-    crb_dof = crb_body[torch.as_tensor(m.dof_bodyid)]
+    crb_dof = crb_body[m.dof_bodyid_t]
     crb_cdof = torch.vmap(math.inert_mul)(crb_dof, d.cdof)
     qm = support.make_m(m, crb_cdof, d.cdof, m.dof_armature)
     d = d.replace(qM=qm)
@@ -230,51 +236,22 @@ def factor_m(m: Model, d: Data) -> Data:
         d = d.replace(qLD=L)
         return d
 
-    # build up indices for where we will do backwards updates over qLD
-    depth = []
-    for i in range(m.nv):
-        depth.append(depth[m.dof_parentid[i]] + 1 if m.dof_parentid[i] != -1 else 0)
-    updates = {}
-    madr_ds = []
-    for i in range(m.nv):
-        madr_d = madr_ij = m.dof_Madr[i]
-        j = i
-        while True:
-            madr_ds.append(madr_d)
-            madr_ij, j = madr_ij + 1, m.dof_parentid[j]
-            if j == -1:
-                break
-            out_beg, out_end = tuple(m.dof_Madr[j : j + 2])
-            updates.setdefault(depth[j], []).append((out_beg, out_end, madr_d, madr_ij))
-
     qld = d.qM.clone()
 
-    for _, updates_list in sorted(updates.items(), reverse=True):
-        rows = []
-        madr_ijs = []
-        pivots = []
-        out = []
-
-        for b, e, madr_d, madr_ij in updates_list:
-            width = e - b
-            rows.append(torch.arange(madr_ij, madr_ij + width))
-            madr_ijs.append(torch.full((width,), madr_ij, dtype=torch.long))
-            pivots.append(torch.full((width,), madr_d, dtype=torch.long))
-            out.append(torch.arange(b, e))
-        rows = torch.cat(rows)
-        madr_ijs = torch.cat(madr_ijs)
-        pivots = torch.cat(pivots)
-        out = torch.cat(out)
-
+    _dev = qld.device
+    for rows, madr_ijs, pivots, out in m.factor_m_updates:
+        rows = rows.to(_dev)
+        madr_ijs = madr_ijs.to(_dev)
+        pivots = pivots.to(_dev)
+        out = out.to(_dev)
         qld_update = -(qld[madr_ijs] / qld[pivots]) * qld[rows]
         qld = qld.clone()
         qld[out] = qld[out] + qld_update
 
-    dof_Madr = torch.as_tensor(m.dof_Madr)
-    qld_diag = qld[dof_Madr][:]
-    qld = qld / qld[torch.stack(madr_ds)]
+    qld_diag = qld[m.dof_Madr_t][:]
+    qld = qld / qld[m.factor_m_madr_ds_t]
     qld = qld.clone()
-    qld[dof_Madr] = qld_diag
+    qld[m.dof_Madr_t] = qld_diag
 
     d = d.replace(qLD=qld, qLDiagInv=1 / qld_diag)
 
@@ -287,33 +264,26 @@ def solve_m(m: Model, d: Data, x: torch.Tensor) -> torch.Tensor:
     if not support.is_sparse(m):
         return torch.cholesky_solve(x.unsqueeze(-1), d.qLD).squeeze(-1)
 
-    depth = []
-    for i in range(m.nv):
-        depth.append(depth[m.dof_parentid[i]] + 1 if m.dof_parentid[i] != -1 else 0)
-    updates_i, updates_j = {}, {}
-    for i in range(m.nv):
-        madr_ij, j = m.dof_Madr[i], i
-        while True:
-            madr_ij, j = madr_ij + 1, m.dof_parentid[j]
-            if j == -1:
-                break
-            updates_i.setdefault(depth[i], []).append((i, madr_ij, j))
-            updates_j.setdefault(depth[j], []).append((j, madr_ij, i))
+    _dev = x.device
 
     # x <- inv(L') * x
-    for _, vals in sorted(updates_j.items(), reverse=True):
-        j, madr_ij, i = torch.tensor(vals, dtype=torch.long).T
+    for j_idx, madr_ij_idx, i_idx in m.solve_m_updates_j:
+        j_t = j_idx.to(_dev)
+        madr_t = madr_ij_idx.to(_dev)
+        i_t = i_idx.to(_dev)
         x = x.clone()
-        x[j] = x[j] + (-d.qLD[madr_ij] * x[i])
+        x[j_t] = x[j_t] + (-d.qLD[madr_t] * x[i_t])
 
     # x <- inv(D) * x
     x = x * d.qLDiagInv
 
     # x <- inv(L) * x
-    for _, vals in sorted(updates_i.items()):
-        i, madr_ij, j = torch.tensor(vals, dtype=torch.long).T
+    for i_idx, madr_ij_idx, j_idx in m.solve_m_updates_i:
+        i_t = i_idx.to(_dev)
+        madr_t = madr_ij_idx.to(_dev)
+        j_t = j_idx.to(_dev)
         x = x.clone()
-        x[i] = x[i] + (-d.qLD[madr_ij] * x[j])
+        x[i_t] = x[i_t] + (-d.qLD[madr_t] * x[j_t])
 
     return x
 
@@ -324,21 +294,9 @@ def dense_m(m: Model, d: Data) -> torch.Tensor:
     if not support.is_sparse(m):
         return d.qM
 
-    is_, js, madr_ijs = [], [], []
-    for i in range(m.nv):
-        madr_ij, j = m.dof_Madr[i], i
-
-        while True:
-            madr_ij, j = madr_ij + 1, m.dof_parentid[j]
-            if j == -1:
-                break
-            is_, js, madr_ijs = is_ + [i], js + [j], madr_ijs + [madr_ij]
-
-    i, j, madr_ij = (torch.tensor(x, dtype=torch.int32, device=d.qM.device) for x in (is_, js, madr_ijs))
-
     mat = torch.zeros((m.nv, m.nv), dtype=d.qM.dtype, device=d.qM.device)
-    mat[(i, j)] = d.qM[madr_ij]
-    mat = torch.diag(d.qM[torch.as_tensor(m.dof_Madr)]) + mat + mat.T
+    mat[(m.sparse_i_t, m.sparse_j_t)] = d.qM[m.sparse_madr_t]
+    mat = torch.diag(d.qM[m.dof_Madr_t]) + mat + mat.T
 
     return mat
 
@@ -349,23 +307,11 @@ def mul_m(m: Model, d: Data, vec: torch.Tensor) -> torch.Tensor:
     if not support.is_sparse(m):
         return d.qM @ vec
 
-    diag_mul = d.qM[torch.as_tensor(m.dof_Madr)] * vec
-
-    is_, js, madr_ijs = [], [], []
-    for i in range(m.nv):
-        madr_ij, j = m.dof_Madr[i], i
-
-        while True:
-            madr_ij, j = madr_ij + 1, m.dof_parentid[j]
-            if j == -1:
-                break
-            is_, js, madr_ijs = is_ + [i], js + [j], madr_ijs + [madr_ij]
-
-    i, j, madr_ij = (torch.tensor(x, dtype=torch.int32, device=vec.device) for x in (is_, js, madr_ijs))
+    diag_mul = d.qM[m.dof_Madr_t] * vec
 
     out = diag_mul.clone()
-    out = out.index_add(0, i, d.qM[madr_ij] * vec[j])
-    out = out.index_add(0, j, d.qM[madr_ij] * vec[i])
+    out = out.index_add(0, m.sparse_i_t, d.qM[m.sparse_madr_t] * vec[m.sparse_j_t])
+    out = out.index_add(0, m.sparse_j_t, d.qM[m.sparse_madr_t] * vec[m.sparse_i_t])
 
     return out
 
@@ -422,7 +368,7 @@ def rne(m: Model, d: Data, flg_acc: bool = False) -> Data:
             if m.opt.disableflags & DisableBit.GRAVITY:
                 cacc = torch.zeros((6,), dtype=cdof_dot.dtype, device=cdof_dot.device)
             else:
-                cacc = torch.cat((torch.zeros((3,)), -m.opt.gravity))
+                cacc = torch.cat((torch.zeros((3,), dtype=cdof_dot.dtype, device=cdof_dot.device), -m.opt.gravity))
 
         vm = cdof_dot * qvel.unsqueeze(-1)
         vm_sum = torch.sum(vm, dim=0)
@@ -450,7 +396,7 @@ def rne(m: Model, d: Data, flg_acc: bool = False) -> Data:
         return cfrc
 
     cfrc = scan.body_tree(m, cfrc_fn, "b", "b", loc_cfrc, reverse=True)
-    qfrc_bias = torch.vmap(torch.dot)(d.cdof, cfrc[torch.as_tensor(m.dof_bodyid)])
+    qfrc_bias = torch.vmap(torch.dot)(d.cdof, cfrc[m.dof_bodyid_t])
 
     d = d.replace(qfrc_bias=qfrc_bias)
 
@@ -479,11 +425,13 @@ def tendon(m: Model, d: Data) -> Data:
     tendon_num_jnt = m.tendon_num[tendon_id_jnt]
 
     # moment_jnt[i] = wrap_prm (coefficient) for each wrap element
-    moment_jnt = torch.as_tensor(m.wrap_prm[wrap_id_jnt]).to(dtype=d.qpos.dtype, device=d.qpos.device)
+    moment_jnt = torch.as_tensor(m.wrap_prm[wrap_id_jnt], device=d.qpos.device).to(dtype=d.qpos.dtype)
     qpos_vals = d.qpos[m.jnt_qposadr[wrap_objid_jnt]]
 
     # tendon length = sum of (coefficient * joint position) per tendon
-    segment_ids = torch.arange(ntendon_jnt, device=d.qpos.device).repeat_interleave(torch.as_tensor(tendon_num_jnt))
+    segment_ids = torch.arange(ntendon_jnt, device=d.qpos.device).repeat_interleave(
+        torch.as_tensor(tendon_num_jnt, device=d.qpos.device)
+    )
     ten_length = torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device)
     ten_length_jnt = torch.zeros(ntendon_jnt, dtype=d.qpos.dtype, device=d.qpos.device)
     ten_length_jnt = ten_length_jnt.index_add(0, segment_ids, moment_jnt * qpos_vals)
@@ -491,7 +439,9 @@ def tendon(m: Model, d: Data) -> Data:
 
     # tendon Jacobian: ten_J[tendon_id, dof_adr] = wrap_prm (coefficient)
     ten_J = torch.zeros((m.ntendon, m.nv), dtype=d.qpos.dtype, device=d.qpos.device)
-    adr_moment_jnt = torch.from_numpy(tendon_id_jnt).repeat_interleave(torch.as_tensor(tendon_num_jnt))
+    adr_moment_jnt = torch.as_tensor(tendon_id_jnt, device=d.qpos.device).repeat_interleave(
+        torch.as_tensor(tendon_num_jnt, device=d.qpos.device)
+    )
     dofadr_moment_jnt = m.jnt_dofadr[wrap_objid_jnt]
     ten_J[adr_moment_jnt, dofadr_moment_jnt] = moment_jnt
 
@@ -549,18 +499,15 @@ def transmission(m: Model, d: Data) -> Data:
     moments: list[torch.Tensor] = []
 
     for i in range(m.nu):
-        trntype = m.actuator_trntype[i]
+        trntype, trnid, jnt_type_i, dofadr, qposadr = m.actuator_info[i]
         gear = m.actuator_gear[i]
-        trnid = m.actuator_trnid[i, 0]
 
         if trntype == TrnType.TENDON:
             lengths.append(d.ten_length[trnid] * gear[0])
             moments.append(d.ten_J[trnid] * gear[0])
             continue
 
-        jnt_typ = JointType(m.jnt_type[trnid])
-        dofadr = m.jnt_dofadr[trnid]
-        qposadr = m.jnt_qposadr[trnid]
+        jnt_typ = JointType(jnt_type_i)
 
         if jnt_typ == JointType.FREE:
             qpos = d.qpos[qposadr : qposadr + 7]

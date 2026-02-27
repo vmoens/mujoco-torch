@@ -31,8 +31,10 @@ def _ray_quad(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> tuple[torch.
 
     x0 = math.safe_div(-b - det_2, a)
     x1 = math.safe_div(-b + det_2, a)
-    x0 = torch.where((det < mujoco.mjMINVAL) | (x0 < 0), torch.tensor(torch.inf, dtype=x0.dtype, device=x0.device), x0)
-    x1 = torch.where((det < mujoco.mjMINVAL) | (x1 < 0), torch.tensor(torch.inf, dtype=x1.dtype, device=x1.device), x1)
+    inf = x0.new_full((), torch.inf)
+    invalid = lambda x: (det < mujoco.mjMINVAL) | (x < 0)
+    x0 = torch.where(invalid(x0), inf, x0)
+    x1 = torch.where(invalid(x1), inf, x1)
 
     return x0, x1
 
@@ -51,7 +53,7 @@ def _ray_plane(
     p = pnt[0:2] + x * vec[0:2]
     valid = valid & torch.all((size[0:2] <= 0) | (torch.abs(p) <= size[0:2]))
 
-    return torch.where(valid, x, torch.tensor(torch.inf, dtype=x.dtype, device=x.device))
+    return torch.where(valid, x, torch.full((), torch.inf, dtype=x.dtype, device=x.device))
 
 
 def _ray_sphere(
@@ -84,7 +86,7 @@ def _ray_capsule(
 
     # make sure round solution is between flat sides
     x = torch.where(
-        torch.abs(pnt[2] + x * vec[2]) <= size[1], x, torch.tensor(torch.inf, dtype=x.dtype, device=x.device)
+        torch.abs(pnt[2] + x * vec[2]) <= size[1], x, torch.full((), torch.inf, dtype=x.dtype, device=x.device)
     )
 
     # top cap
@@ -155,7 +157,7 @@ def _ray_box(
     valid = valid & (torch.abs(p1) <= size[iface[:, 1]])
     valid = valid & (x >= 0)
 
-    return torch.min(torch.where(valid, x, torch.tensor(torch.inf, dtype=x.dtype, device=x.device)))
+    return torch.min(torch.where(valid, x, torch.full((), torch.inf, dtype=x.dtype, device=x.device)))
 
 
 def _ray_triangle(
@@ -179,13 +181,13 @@ def _ray_triangle(
     valid = (t0 >= 0) & (t1 >= 0) & (t0 + t1 <= 1)
 
     # intersect ray with plane of triangle
-    nrm = torch.linalg.cross(vert[0] - vert[2], vert[1] - vert[2])
+    nrm = math.cross(vert[0] - vert[2], vert[1] - vert[2])
     dist = math.safe_div(
         torch.dot(vert[2] - pnt, nrm),
         torch.dot(vec, nrm),
     )
     valid = valid & (dist >= 0)
-    dist = torch.where(valid, dist, torch.tensor(torch.inf, dtype=dist.dtype, device=dist.device))
+    dist = torch.where(valid, dist, torch.full((), torch.inf, dtype=dist.dtype, device=dist.device))
 
     return dist
 
@@ -237,6 +239,103 @@ _RAY_FUNC = {
     GeomType.BOX: _ray_box,
     GeomType.MESH: _ray_mesh,
 }
+
+_PRIMITIVE_RAY_FUNC = {
+    GeomType.PLANE: _ray_plane,
+    GeomType.SPHERE: _ray_sphere,
+    GeomType.CAPSULE: _ray_capsule,
+    GeomType.ELLIPSOID: _ray_ellipsoid,
+    GeomType.BOX: _ray_box,
+}
+
+
+def precompute_ray_data(m_np, flg_static, bodyexclude, geomgroup=()):
+    """Pre-compute geom filter indices for ray intersection (numpy model).
+
+    Called once during device_put to avoid numpy operations inside compile.
+
+    Returns a list of (fn, id_tensor, geom_size_tensor, dyn_filter_tensor)
+    tuples for each geom type that has matching geoms, plus an ``empty``
+    flag indicating no geom types matched.
+    """
+    from mujoco_torch._src.scan import _DeviceCachedTensor
+
+    if not isinstance(bodyexclude, Sequence):
+        bodyexclude = [bodyexclude]
+
+    geom_filter = flg_static | (m_np.body_weldid[m_np.geom_bodyid] != 0)
+    for bodyid in bodyexclude:
+        geom_filter = geom_filter & (m_np.geom_bodyid != bodyid)
+    if geomgroup:
+        geomgroup_arr = np.array(geomgroup, dtype=bool)
+        geom_filter = geom_filter & geomgroup_arr[np.clip(m_np.geom_group, 0, mujoco.mjNGROUP)]
+
+    geom_filter_dyn = (m_np.geom_matid != -1) | (m_np.geom_rgba[:, 3] != 0)
+    geom_filter_dyn = geom_filter_dyn & ((m_np.geom_matid == -1) | (m_np.mat_rgba[m_np.geom_matid, 3] != 0))
+
+    entries = []
+    for geom_type, fn in _PRIMITIVE_RAY_FUNC.items():
+        (id_np,) = np.nonzero(geom_filter & (m_np.geom_type == geom_type))
+        if id_np.size == 0:
+            continue
+        id_t = _DeviceCachedTensor(torch.tensor(id_np, dtype=torch.long))
+        size_t = _DeviceCachedTensor(torch.as_tensor(np.array(m_np.geom_size[id_np]), dtype=torch.float64))
+        dyn_t = _DeviceCachedTensor(torch.tensor(geom_filter_dyn[id_np]))
+        entries.append((fn, id_t, size_t, dyn_t))
+
+    return tuple(entries)
+
+
+def ray_precomputed(
+    precomp: tuple,
+    d: Data,
+    pnt: torch.Tensor,
+    vec: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compile-friendly ray intersection using pre-computed geom data."""
+    device = pnt.device
+
+    geom_pnts = torch.vmap(lambda x, y: x.T @ (pnt - y))(d.geom_xmat, d.geom_xpos)
+    geom_vecs = torch.vmap(lambda x: x.T @ vec)(d.geom_xmat)
+
+    dists, ids = [], []
+    for fn, id_cached, size_cached, dyn_cached in precomp:
+        id_t = id_cached.to(device)
+        geom_size = size_cached.to(device)
+        dyn_filter = dyn_cached.to(device)
+
+        dist = torch.vmap(fn)(geom_size, geom_pnts[id_t], geom_vecs[id_t])
+        dist = torch.where(
+            dyn_filter,
+            dist,
+            torch.full((), torch.inf, dtype=dist.dtype, device=device),
+        )
+        dists.append(dist)
+        ids.append(id_t)
+
+    if not ids:
+        return (
+            torch.full((), -1, dtype=torch.long, device=device),
+            torch.full((), -1.0, dtype=pnt.dtype, device=device),
+        )
+
+    dists = torch.cat(dists)
+    ids_cat = torch.cat(ids)
+    min_id = torch.argmin(dists)
+    min_dist = dists.gather(0, min_id.unsqueeze(0)).squeeze(0)
+    min_geom_id = ids_cat.gather(0, min_id.unsqueeze(0)).squeeze(0)
+    dist = torch.where(
+        torch.isinf(min_dist),
+        torch.full((), -1.0, dtype=dists.dtype, device=device),
+        min_dist,
+    )
+    geom_id = torch.where(
+        torch.isinf(min_dist),
+        torch.full((), -1, dtype=torch.long, device=device),
+        min_geom_id,
+    )
+
+    return dist, geom_id
 
 
 def ray(
@@ -293,21 +392,21 @@ def ray(
         else:
             dist = torch.vmap(fn)(*args)
 
-        dist = torch.where(geom_filter_dyn[id_], dist, torch.tensor(torch.inf, dtype=dist.dtype, device=dist.device))
+        dist = torch.where(geom_filter_dyn[id_], dist, torch.full((), torch.inf, dtype=dist.dtype, device=dist.device))
         dists.append(dist)
         ids.append(id_)
 
     if not ids:
         device = pnt.device if isinstance(pnt, torch.Tensor) else None
-        return torch.tensor(-1, dtype=torch.long, device=device), torch.tensor(-1.0, dtype=pnt.dtype, device=device)
+        return torch.full((), -1, dtype=torch.long, device=device), torch.full((), -1.0, dtype=pnt.dtype, device=device)
 
     dists = torch.cat(dists)
     ids_cat = torch.cat([torch.tensor(x, dtype=torch.long, device=pnt.device) for x in ids])
     min_id = torch.argmin(dists)
     min_dist = dists.gather(0, min_id.unsqueeze(0)).squeeze(0)
     min_geom_id = ids_cat.gather(0, min_id.unsqueeze(0)).squeeze(0)
-    dist = torch.where(torch.isinf(min_dist), torch.tensor(-1.0, dtype=dists.dtype, device=dists.device), min_dist)
-    id_ = torch.where(torch.isinf(min_dist), torch.tensor(-1, dtype=torch.long, device=ids_cat.device), min_geom_id)
+    dist = torch.where(torch.isinf(min_dist), torch.full((), -1.0, dtype=dists.dtype, device=dists.device), min_dist)
+    id_ = torch.where(torch.isinf(min_dist), torch.full((), -1, dtype=torch.long, device=ids_cat.device), min_geom_id)
 
     return dist, id_
 

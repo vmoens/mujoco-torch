@@ -55,14 +55,8 @@ def make_m(
 ) -> torch.Tensor:
     """Computes M = a @ b.T + diag(d)."""
 
-    ij = []
-    for i in range(m.nv):
-        j = i
-        while j > -1:
-            ij.append((i, j))
-            j = m.dof_parentid[j]
-
-    i, j = (torch.tensor(x, dtype=torch.long, device=a.device) for x in zip(*ij))
+    i = m.dof_tri_row_t
+    j = m.dof_tri_col_t
 
     if not is_sparse(m):
         qm = a @ b.T
@@ -80,8 +74,8 @@ def make_m(
 
     if d is not None:
         qm = qm.clone()
-        dof_Madr = torch.as_tensor(m.dof_Madr)
-        qm[dof_Madr] = qm[dof_Madr] + d
+    dof_Madr = m.dof_Madr_t
+    qm[dof_Madr] = qm[dof_Madr] + d
 
     return qm
 
@@ -92,14 +86,8 @@ def full_m(m: Model, d: Data) -> torch.Tensor:
     if not is_sparse(m):
         return d.qM
 
-    ij = []
-    for i in range(m.nv):
-        j = i
-        while j > -1:
-            ij.append((i, j))
-            j = m.dof_parentid[j]
-
-    i, j = (torch.tensor(x, dtype=torch.long, device=d.qM.device) for x in zip(*ij))
+    i = m.dof_tri_row_t
+    j = m.dof_tri_col_t
 
     mat = torch.zeros((m.nv, m.nv), dtype=d.qM.dtype, device=d.qM.device)
     mat[(i, j)] = d.qM
@@ -123,11 +111,15 @@ def local_to_global(
 def vmap_compatible_index_select(tensor, dim, index):
     scalar_index = not isinstance(index, torch.Tensor) and isinstance(index, (int, np.integer))
     if not isinstance(index, torch.Tensor):
-        index = torch.tensor([index]).long() if scalar_index else torch.as_tensor(index).long()
+        device = tensor.device if isinstance(tensor, torch.Tensor) else None
+        index = (
+            torch.tensor([index], device=device).long()
+            if scalar_index
+            else torch.as_tensor(index).long().to(device=device)
+        )
 
     is_batched = False
-    if is_batchedtensor(index):
-        # _remove_batch_dim(batched_output, vmap_level, batch_size, out_dim)
+    if not torch.compiler.is_compiling() and is_batchedtensor(index):
         lvl = maybe_get_level(index)
         index = _remove_batch_dim(index, lvl, 0, 0)
         is_batched = True
@@ -149,12 +141,12 @@ def jac(m: Model, d: Data, point: torch.Tensor, body_id: torch.Tensor) -> tuple[
     device = point.device if isinstance(point, torch.Tensor) else None
     mask = (torch.arange(m.nbody, device=device) == body_id) * 1
     mask = scan.body_tree(m, fn, "b", "b", mask, reverse=True)
-    mask = mask[torch.as_tensor(m.dof_bodyid)] > 0
+    mask = mask[m.dof_bodyid_t] > 0
 
-    index = vmap_compatible_index_select(torch.as_tensor(m.body_rootid), dim=0, index=body_id).long()
+    index = vmap_compatible_index_select(m.body_rootid_t, dim=0, index=body_id).long()
 
     offset = point - vmap_compatible_index_select(d.subtree_com, dim=0, index=index)
-    jacp = torch.vmap(lambda a, b=offset: a[3:] + torch.linalg.cross(a[:3], b))(d.cdof)
+    jacp = torch.vmap(lambda a, b=offset: a[3:] + math.cross(a[:3], b))(d.cdof)
     jacp = torch.vmap(torch.multiply)(jacp, mask)
     jacr = torch.vmap(torch.multiply)(d.cdof[:, :3], mask)
 
@@ -197,6 +189,6 @@ def xfrc_accumulate(m: Model, d: Data) -> torch.Tensor:
         d.xfrc_applied[:, :3],
         d.xfrc_applied[:, 3:],
         d.xipos,
-        torch.arange(m.nbody),
+        torch.arange(m.nbody, device=d.xipos.device),
     )
     return torch.sum(qfrc, axis=0)

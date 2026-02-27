@@ -27,48 +27,163 @@ from mujoco_torch._src.types import JointType, Model, TrnType
 Y = TypeVar("Y")
 
 # Module-level caches for scan grouping indices.  Keyed by
-# (model_id, in_types, out_types, group_by_or_reverse).
-# Using WeakValueDictionary is not possible here since the values are plain
-# dicts/lists, so we use a regular dict with id-based keys.  Models are
-# long-lived so this is fine.
+# (cache_id, in_types, out_types, group_by_or_reverse).
+# Models carry a ``cache_id`` int assigned at device_put time.
 _flat_cache: dict = {}
 _body_tree_cache: dict = {}
-_model_cache_id_counter = 0
-_model_cache_ids: dict = {}  # id(m) -> cache_id (monotonic)
 
 
 def _model_cache_id(m: Model) -> int:
-    """Return a unique cache ID for this model instance.
-
-    Uses object identity but avoids id() reuse issues by tracking a
-    monotonic counter and validating the object is still the same.
-    """
-    global _model_cache_id_counter
-    mid = id(m)
-    # Check if we already assigned a cache_id to this exact object
-    stored = _model_cache_ids.get(mid)
-    if stored is not None:
-        cache_id, ref = stored
-        # Validate it's still the same object (not a recycled id)
-        if ref is m:
-            return cache_id
-    # New model or recycled id - assign a new cache_id
-    _model_cache_id_counter += 1
-    cache_id = _model_cache_id_counter
-    _model_cache_ids[mid] = (cache_id, m)
-    return cache_id
+    """Return the unique cache ID for this model (set at device_put time)."""
+    return m.cache_id
 
 
 def clear_scan_caches():
     """Clear precomputed scan grouping caches (useful for testing)."""
     _flat_cache.clear()
     _body_tree_cache.clear()
-    _model_cache_ids.clear()
+
+
+# Registry of all known scan call-site signatures.
+# Each entry: (in_types, out_types, group_by_or_reverse,
+#              [(arg_position, model_field_name), ...])
+# The last element lists which arg positions are numpy model fields.
+_KNOWN_FLAT_CALLS = [
+    ("jbbjj", "v", "j", [(0, "jnt_type")]),
+    ("uuua", "a", "u", [(0, "actuator_dyntype")]),
+    ("uuuuuuu", "u", "u", [(0, "actuator_gaintype"), (2, "actuator_biastype")]),
+    ("au", "a", "u", []),
+    ("jqv", "q", "j", [(0, "jnt_type")]),
+    ("jjqq", "v", "j", [(0, "jnt_type")]),
+]
+
+_KNOWN_BODY_TREE_CALLS = [
+    ("jjjqqbb", "qjjbbb", False, [(0, "jnt_type")]),
+    ("bb", "bb", True, []),
+    ("b", "b", True, []),
+    ("jvv", "bv", False, [(0, "jnt_type")]),
+    ("vvvv", "b", False, []),
+]
+
+
+def _signature_applies(m, in_types, out_types, group_by=None):
+    """Check whether a scan signature is relevant for a given model."""
+    all_types = set(in_types + out_types)
+    if group_by is not None:
+        all_types.add(group_by)
+    if ("u" in all_types or "a" in all_types) and m.nu == 0:
+        return False
+    if ("j" in all_types or "q" in all_types or "v" in all_types) and m.njnt == 0:
+        return False
+    return True
+
+
+def precompute_scan_caches(m, cache_id: int):
+    """Pre-build all scan caches for known call-site signatures.
+
+    Called from ``device_put`` so that ``flat()`` and ``body_tree()``
+    never need to build caches at runtime (which would require
+    ``@torch.compiler.disable``).
+    """
+    for in_types, out_types, group_by, np_fields in _KNOWN_FLAT_CALLS:
+        if not _signature_applies(m, in_types, out_types, group_by):
+            continue
+        cache_key = (cache_id, in_types, out_types, group_by)
+        cache = _build_flat_cache(m, in_types, out_types, group_by)
+        # Pre-extract numpy static args for all groups
+        key_typ_ids_torch = cache["key_typ_ids_torch"]
+        group_has_output = cache["group_has_output"]
+        pre_extracted = []
+        for (_, typ_ids_t), has_output in zip(key_typ_ids_torch, group_has_output):
+            if not has_output:
+                pre_extracted.append(None)
+                continue
+            group_np = [None] * len(in_types)
+            for pos, field_name in np_fields:
+                np_array = getattr(m, field_name)
+                typ = in_types[pos]
+                subset = _take(np_array, typ_ids_t[typ])
+                group_np[pos] = _validate_and_convert_np_subset(subset)
+            pre_extracted.append(group_np)
+        cache["pre_extracted_np"] = pre_extracted
+        _flat_cache[cache_key] = cache
+
+    for in_types, out_types, reverse, np_fields in _KNOWN_BODY_TREE_CALLS:
+        if not _signature_applies(m, in_types, out_types):
+            continue
+        cache_key = (cache_id, in_types, out_types, reverse)
+        cache = _build_body_tree_cache(m, in_types, out_types, reverse)
+        # Pre-extract numpy static args for all groups
+        key_in_take_torch = cache["key_in_take_torch"]
+        keys = cache["keys"]
+        pre_extracted = {}
+        for key in keys:
+            group_np = [None]  # carry is never numpy
+            for i, ids in enumerate(key_in_take_torch[key]):
+                np_val = None
+                for pos, field_name in np_fields:
+                    if pos == i:
+                        np_array = getattr(m, field_name)
+                        subset = _take(np_array, ids)
+                        np_val = _validate_and_convert_np_subset(subset)
+                        break
+                group_np.append(np_val)
+            pre_extracted[key] = group_np
+        cache["pre_extracted_np"] = pre_extracted
+        _body_tree_cache[cache_key] = cache
 
 
 def _np_to_long(x):
     """Convert numpy array to torch.LongTensor."""
     return torch.as_tensor(np.asarray(x), dtype=torch.long)
+
+
+class _DeviceCachedTensor:
+    """A CPU index tensor that lazily caches per-device copies.
+
+    On first access for a given device, moves the tensor and caches it.
+    Subsequent accesses for the same device return the cached copy with
+    no CPU-GPU transfer.
+    """
+
+    def __init__(self, cpu_tensor: torch.Tensor):
+        self._cpu = cpu_tensor
+        self._cache: dict[torch.device, torch.Tensor] = {}
+
+    def to(self, device: torch.device) -> torch.Tensor:
+        t = self._cache.get(device)
+        if t is None:
+            t = self._cpu.to(device)
+            self._cache[device] = t
+        return t
+
+    @property
+    def device(self):
+        return self._cpu.device
+
+    def __getattr__(self, name):
+        return getattr(self._cpu, name)
+
+    def __len__(self):
+        return len(self._cpu)
+
+
+def _cached_long(x) -> _DeviceCachedTensor:
+    """Convert to a device-cached LongTensor (lazy GPU transfer)."""
+    cpu_tensor = torch.as_tensor(np.asarray(x), dtype=torch.long).cpu()
+    return _DeviceCachedTensor(cpu_tensor)
+
+
+def _cat_device_safe(tensors):
+    """Concatenates tensors, moving all to the device of the first non-CPU tensor."""
+    device = None
+    for t in tensors:
+        if t.device.type != "cpu":
+            device = t.device
+            break
+    if device is not None:
+        tensors = tuple(t.to(device) if t.device != device else t for t in tensors)
+    return torch.cat(tensors)
 
 
 def _take(obj: Y, idx) -> Y:
@@ -84,18 +199,32 @@ def _take(obj: Y, idx) -> Y:
       obj pytree with leaves taken by idxs
     """
     if isinstance(obj, np.ndarray):
+        if isinstance(idx, _DeviceCachedTensor):
+            return obj[idx._cpu.numpy()]
         if isinstance(idx, torch.Tensor):
-            return obj[idx.numpy()]
+            return obj[idx.cpu().numpy()]
         return obj[idx]
 
-    # Ensure idx is a torch tensor for torch pytree operations
+    # Resolve idx to a regular tensor once (or keep _DeviceCachedTensor for
+    # lazy device resolution — needed for CUDA graph capture).
+    if isinstance(idx, _DeviceCachedTensor):
+        cached = idx
+
+        def take(x):
+            if not x.shape[0]:
+                return x
+            return x[cached.to(x.device)]
+
+        return tree_map(take, obj)
+
     if not isinstance(idx, torch.Tensor):
         idx = _np_to_long(idx)
 
     def take(x):
         if not x.shape[0]:
             return x
-        return x[idx]
+        i = idx.to(x.device) if idx.device != x.device else idx
+        return x[i]
 
     return tree_map(take, obj)
 
@@ -129,7 +258,7 @@ def _index(haystack, needle):
         sorted_idx = torch.searchsorted(sorted_haystack, needle)
         sorted_idx = sorted_idx.clamp(max=idx.shape[0] - 1)
         result = idx[sorted_idx]
-        result = torch.where(haystack[result] == needle, result, torch.tensor(-1, dtype=result.dtype))
+        result = torch.where(haystack[result] == needle, result, torch.full_like(result, -1))
         return result
     # numpy fallback
     idx = np.argsort(haystack)
@@ -140,38 +269,83 @@ def _index(haystack, needle):
     return idx
 
 
-def _nvmap(f: Callable[..., Y], *args) -> Y:
-    """A vmap that accepts numpy arrays.
+def _np_to_safe(val):
+    """Convert a numpy representative value to a Dynamo-safe Python/tensor form."""
+    if isinstance(val, (np.integer, np.floating, np.bool_)):
+        return val.item()
+    if not isinstance(val, np.ndarray):
+        return val
+    if val.ndim == 0:
+        return val.item()
+    if val.size == 0:
+        return ()
+    if val.ndim == 1 and isinstance(val.flat[0], (np.integer, np.bool_)):
+        return tuple(int(x) for x in val)
+    return torch.as_tensor(np.ascontiguousarray(val))
 
-    Numpy arrays are statically vmapped, and the elements are passed to f as
-    static arguments.  The implication is that all the elements of numpy array
-    arguments must be the same.
+
+def _validate_and_convert_np_subset(subset):
+    """Validate that a per-group numpy subset has identical rows, then convert."""
+    if subset.shape[0] > 0 and not np.all(subset == subset[0]):
+        raise RuntimeError(f"numpy arg elements do not match: {subset}")
+    val = subset[0] if subset.shape[0] > 0 else subset
+    return _np_to_safe(val)
+
+
+def _extract_np_for_flat(args, in_types, key_typ_ids_torch, group_has_output):
+    """Extract numpy static args for all flat-scan groups at once.
+
+    This is only called as a fallback for signatures not registered in
+    ``_KNOWN_FLAT_CALLS``.  For known signatures, pre-extracted values are
+    stored in the cache at ``device_put`` time.
+    """
+    result = []
+    for (_, typ_ids_t), has_output in zip(key_typ_ids_torch, group_has_output):
+        if not has_output:
+            result.append(None)
+            continue
+        group_np = []
+        for arg, typ in zip(args, in_types):
+            if not isinstance(arg, np.ndarray):
+                group_np.append(None)
+                continue
+            subset = _take(arg, typ_ids_t[typ])
+            group_np.append(_validate_and_convert_np_subset(subset))
+        result.append(group_np)
+    return result
+
+
+def _extract_np_for_body_tree(args, key_in_take_torch, keys):
+    """Extract numpy static args for all body-tree groups at once.
+
+    This is only called as a fallback for signatures not registered in
+    ``_KNOWN_BODY_TREE_CALLS``.  For known signatures, pre-extracted values
+    are stored in the cache at ``device_put`` time.
+    """
+    result = {}
+    for key in keys:
+        group_np = [None]  # carry is never numpy
+        for arg, ids in zip(args, key_in_take_torch[key]):
+            if not isinstance(arg, np.ndarray):
+                group_np.append(None)
+                continue
+            subset = _take(arg, ids)
+            group_np.append(_validate_and_convert_np_subset(subset))
+        result[key] = group_np
+    return result
+
+
+def _nvmap(f: Callable[..., Y], np_args, *args) -> Y:
+    """A vmap that accepts pre-extracted numpy static args.
 
     Args:
       f: function to be mapped over
-      *args: args to be mapped along, passed to f
+      np_args: pre-extracted numpy static args (from _extract_np_for_groups)
+      *args: tensor args to be vmapped
 
     Returns:
       the result of vmapping f over args
-
-    Raises:
-      RuntimeError: if numpy arg elements do not match
     """
-    for arg in args:
-        if isinstance(arg, np.ndarray) and arg.shape[0] > 0 and not np.all(arg == arg[0]):
-            raise RuntimeError(f"numpy arg elements do not match: {arg}")
-
-    # split out numpy and torch args: numpy arrays become static args,
-    # everything else (torch tensors, pytrees, None) goes through vmap.
-    # Use shape[0] > 0 (not size > 0) because 2D arrays with shape (n, 0)
-    # still need their first row extracted as a representative empty element.
-    np_args = []
-    for a in args:
-        if isinstance(a, np.ndarray):
-            np_args.append(a[0] if a.shape[0] > 0 else a)
-        else:
-            np_args.append(None)
-    args = [None if isinstance(a, np.ndarray) else a for a in args]
 
     # remove empty args that we should not vmap over
     def _check_empty(a):
@@ -189,8 +363,10 @@ def _nvmap(f: Callable[..., Y], *args) -> Y:
     vmap_args = [a for a in args if a is not None]
 
     def _ensure_tensor(x):
-        """Convert numpy scalars/arrays to tensors for vmap compatibility."""
+        """Convert numpy scalars/arrays and Python scalars to tensors for vmap compatibility."""
         if isinstance(x, (np.ndarray, np.integer, np.floating)):
+            return torch.as_tensor(x)
+        if isinstance(x, (int, float, bool)):
             return torch.as_tensor(x)
         return x
 
@@ -205,17 +381,21 @@ def _nvmap(f: Callable[..., Y], *args) -> Y:
         # No tensor args to vmap over; just call f directly with static args.
         return f(*[n if n is not None else None for n in np_args])
 
+    if torch.compiler.is_compiling():
+        return torch.vmap(outer_f, in_dims=tuple([0] * len(vmap_args)))(*vmap_args)
+
     try:
         return torch.vmap(outer_f, in_dims=tuple([0] * len(vmap_args)))(*vmap_args)
     except ValueError as e:
         if "NoneType" in str(e):
-            # Function returned None for this group (e.g., no free joints).
             return None
         raise
 
 
 def _check_input(m: Model, args: Any, in_types: str) -> None:
     """Checks that scan input has the right shape."""
+    if torch.compiler.is_compiling():
+        return
     size = {
         "b": m.nbody,
         "j": m.njnt,
@@ -322,11 +502,30 @@ def _build_flat_cache(m, in_types, out_types, group_by):
 
     # ---- Precompute torch indices for runtime use ----
 
-    # Convert typ_ids to torch.LongTensor for _take operations
+    # Convert typ_ids to device-cached LongTensors for _take operations
     key_typ_ids_torch = []
     for key, typ_ids in key_typ_ids:
-        typ_ids_t = {t: _np_to_long(v) for t, v in typ_ids.items()}
+        typ_ids_t = {t: _cached_long(v) for t, v in typ_ids.items()}
         key_typ_ids_torch.append((key, typ_ids_t))
+
+    # Pre-compute reorder indices for the compile path.
+    # Assumes all has_output groups produce results (always true in production;
+    # only test callbacks that return None break this assumption).
+    active_kti_np = [(k, v) for (k, v), ho in zip(key_typ_ids, group_has_output) if ho]
+    active_keys = set(k for k, _ in active_kti_np)
+    active_order = [typ_ids for key, typ_ids in order if key in active_keys]
+    active_order_per_type = [[o[t] for o in active_order] for t in all_types]
+    active_order_per_type = [
+        (np.concatenate(o) if isinstance(o[0], np.ndarray) else np.array(o)) if o else np.array([], dtype=np.int64)
+        for o in active_order_per_type
+    ]
+    order_dict = dict(zip(all_types, active_order_per_type))
+
+    reorder_indices = {}
+    for typ in set(out_types):
+        ids = np.concatenate([np.hstack(v[typ]) for _, v in active_kti_np])
+        input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
+        reorder_indices[typ] = _cached_long(_index(ids, input_order))
 
     return {
         "key_typ_ids": key_typ_ids,
@@ -335,11 +534,17 @@ def _build_flat_cache(m, in_types, out_types, group_by):
         "order": order,
         "all_types": all_types,
         "flat_": flat_,
+        "reorder_indices": reorder_indices,
     }
 
 
 def _get_flat_cache(m, in_types, out_types, group_by):
-    """Get or build flat scan cache for the given model and type signature."""
+    """Get or build flat scan cache for the given model and type signature.
+
+    For known signatures (registered in ``_KNOWN_FLAT_CALLS``), the cache is
+    pre-built at ``device_put`` time via ``precompute_scan_caches`` so this
+    is a simple dict lookup with no graph break.
+    """
     cache_key = (_model_cache_id(m), in_types, out_types, group_by)
     cache = _flat_cache.get(cache_key)
     if cache is None:
@@ -348,7 +553,6 @@ def _get_flat_cache(m, in_types, out_types, group_by):
     return cache
 
 
-@torch.compiler.disable
 def flat(
     m: Model,
     f: Callable[..., Y],
@@ -394,52 +598,72 @@ def flat(
     cache = _get_flat_cache(m, in_types, out_types, group_by)
     key_typ_ids_torch = cache["key_typ_ids_torch"]
     group_has_output = cache["group_has_output"]
-    order = cache["order"]
-    all_types = cache["all_types"]
     flat_ = cache["flat_"]
 
-    # use cached grouping to take the right data subsets and call vmap(f)
+    # Use pre-extracted numpy if available (pre-computed at device_put time
+    # for known signatures), otherwise fall back to runtime extraction.
+    all_np_args = cache.get("pre_extracted_np")
+    if all_np_args is None:
+        all_np_args = _extract_np_for_flat(args, in_types, key_typ_ids_torch, group_has_output)
+
+    # Call vmap per group (Dynamo unrolls this constant-length loop)
     ys = []
-    for (_, typ_ids_t), has_output in zip(key_typ_ids_torch, group_has_output):
+    for i, ((_, typ_ids_t), has_output) in enumerate(zip(key_typ_ids_torch, group_has_output)):
         if has_output:
-            f_args = [_take(arg, typ_ids_t[typ]) for arg, typ in zip(args, in_types)]
-            y = _nvmap(f, *f_args)
-            ys.append(y)
+            f_args = [
+                _take(arg, typ_ids_t[typ]) if not isinstance(arg, np.ndarray) else None
+                for arg, typ in zip(args, in_types)
+            ]
+            ys.append(_nvmap(f, all_np_args[i], *f_args))
         else:
             ys.append(None)
 
-    # remove None results from the final output
-    key_typ_ids_torch = [v for y, v in zip(ys, key_typ_ids_torch) if y is not None]
+    # Filter None results and matching cache entries
+    active_kti = [v for y, v in zip(ys, key_typ_ids_torch) if y is not None]
     ys = [y for y in ys if y is not None]
-    ys_keys = set([k for k, *_ in key_typ_ids_torch])
-    active_order = [o for k, o in order if k in ys_keys]
 
-    # get the original input order
-    active_order_per_type = [[o[t] for o in active_order] for t in all_types]
-    active_order_per_type = [
-        np.concatenate(o) if isinstance(o[0], np.ndarray) else np.array(o) for o in active_order_per_type
-    ]
-    order_dict = dict(zip(all_types, active_order_per_type))
-
-    # concatenate back to a single tree and drop the grouping dimension
+    # Flatten grouped dimensions and concatenate across groups
     f_ret_is_seq = isinstance(ys[0], (list, tuple))
     ys = ys if f_ret_is_seq else [[y] for y in ys]
     ys = [[v if typ in flat_ else torch.flatten(v, 0, 1) for v, typ in zip(y, out_types)] for y in ys]
     ys = tree_map(lambda *x: concatenate(x), *ys)
 
-    # put concatenated results back in order
+    # Put concatenated results back in model order.
+    # The precomputed indices assume all has_output groups actually return
+    # values (which is always true in production physics callbacks).  When a
+    # callback returns None for a has_output group (only in tests) fall back
+    # to dynamically computing the reorder indices.
+    n_expected = sum(cache["group_has_output"])
     reordered_ys = []
-    for i, (y, typ) in enumerate(zip(ys, out_types)):
-        _check_output(y, order_dict[typ], typ, i)
-        ids = np.concatenate(
-            [np.hstack(v[typ].numpy() if isinstance(v[typ], torch.Tensor) else v[typ]) for _, v in key_typ_ids_torch]
-        )
-        input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
-        reorder_idx = _np_to_long(_index(ids, input_order))
-        reordered_ys.append(_take(y, reorder_idx))
-    y = reordered_ys if f_ret_is_seq else reordered_ys[0]
+    if len(active_kti) == n_expected:
+        reorder_indices = cache["reorder_indices"]
+        for i, typ in enumerate(out_types):
+            reordered_ys.append(_take(ys[i], reorder_indices[typ]))
+    else:
+        order = cache["order"]
+        all_types = cache["all_types"]
+        ys_keys = set(k for k, _ in active_kti)
+        active_order = [typ_ids for key, typ_ids in order if key in ys_keys]
+        active_order_per_type = [[o[t] for o in active_order] for t in all_types]
+        active_order_per_type = [
+            np.concatenate(o) if isinstance(o[0], np.ndarray) else np.array(o) for o in active_order_per_type
+        ]
+        order_dict = dict(zip(all_types, active_order_per_type))
+        for i, typ in enumerate(out_types):
 
-    return y
+            def _to_np(v):
+                if isinstance(v, _DeviceCachedTensor):
+                    return v._cpu.numpy()
+                if isinstance(v, torch.Tensor):
+                    return v.cpu().numpy()
+                return v
+
+            ids = np.concatenate([np.hstack(_to_np(v[typ])) for _, v in active_kti])
+            input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
+            reorder_idx = _np_to_long(_index(ids, input_order))
+            reordered_ys.append(_take(ys[i], reorder_idx))
+
+    return reordered_ys if f_ret_is_seq else reordered_ys[0]
 
 
 def _build_body_tree_cache(m, in_types, out_types, reverse):
@@ -507,33 +731,42 @@ def _build_body_tree_cache(m, in_types, out_types, reverse):
                 body_ids = key_body_ids[key]
                 parent_ids = m.body_parentid[key_body_ids[child_key]]
                 id_map = _index(body_ids, parent_ids)
-                child_info.append((child_key, _np_to_long(id_map), body_ids.size))
+                child_info.append((child_key, _cached_long(id_map), body_ids.size))
             carry_maps[key] = child_info
         elif key in key_parents:
             body_ids_all = [key_body_ids[p] for p in key_parents[key]]
             concat_body_ids = np.concatenate(body_ids_all)
             parent_ids = m.body_parentid[key_body_ids[key]]
             take_idx = _index(concat_body_ids, parent_ids)
-            carry_maps[key] = (key_parents[key], _np_to_long(take_idx))
+            carry_maps[key] = (key_parents[key], _cached_long(take_idx))
 
-    # Convert in_take indices to torch
+    # Convert in_take indices to device-cached tensors
     key_in_take_torch = {}
     for key, take_list in key_in_take.items():
-        key_in_take_torch[key] = [_np_to_long(ids) for ids in take_list]
+        key_in_take_torch[key] = [_cached_long(ids) for ids in take_list]
+
+    # Pre-compute reorder indices for the compile path (assumes all keys
+    # produce output, which is always true in production code).
+    y_take_torch = []
+    for i in range(len(out_types)):
+        y_take_torch.append(_cached_long(np.argsort(np.concatenate([key_y_take[key][i] for key in keys]))))
 
     return {
-        "key_body_ids": key_body_ids,
-        "key_parents": key_parents,
-        "key_in_take": key_in_take,
         "key_in_take_torch": key_in_take_torch,
         "key_y_take": key_y_take,
         "keys": keys,
         "carry_maps": carry_maps,
+        "y_take_torch": y_take_torch,
     }
 
 
 def _get_body_tree_cache(m, in_types, out_types, reverse):
-    """Get or build body_tree scan cache."""
+    """Get or build body_tree scan cache.
+
+    For known signatures (registered in ``_KNOWN_BODY_TREE_CALLS``), the
+    cache is pre-built at ``device_put`` time so this is a simple dict
+    lookup with no graph break.
+    """
     cache_key = (_model_cache_id(m), in_types, out_types, reverse)
     cache = _body_tree_cache.get(cache_key)
     if cache is None:
@@ -542,7 +775,6 @@ def _get_body_tree_cache(m, in_types, out_types, reverse):
     return cache
 
 
-@torch.compiler.disable
 def body_tree(
     m: Model,
     f: Callable[..., Y],
@@ -587,7 +819,13 @@ def body_tree(
     keys = cache["keys"]
     carry_maps = cache["carry_maps"]
 
-    # use cached grouping to take the right data subsets and call vmap(f)
+    # Use pre-extracted numpy if available (pre-computed at device_put time
+    # for known signatures), otherwise fall back to runtime extraction.
+    all_np_args = cache.get("pre_extracted_np")
+    if all_np_args is None:
+        all_np_args = _extract_np_for_body_tree(args, key_in_take_torch, keys)
+
+    # Scan over groups in tree order, carrying results up/down
     key_y = {}
     for key in keys:
         carry = None
@@ -606,30 +844,35 @@ def body_tree(
         elif key in carry_maps:
             parent_keys, take_idx = carry_maps[key]
             ys_all = [key_y[p] for p in parent_keys]
-            # Filter out None results from parent groups
             ys_filtered = [y_val for y_val in ys_all if y_val is not None]
             if ys_filtered:
                 y = tree_map(lambda *x: concatenate(x), *ys_filtered) if len(ys_filtered) > 1 else ys_filtered[0]
                 take_fn = lambda x, i=take_idx: _take(x, i)
                 carry = tree_map(take_fn, y)
 
-        f_args = [_take(arg, ids) for arg, ids in zip(args, key_in_take_torch[key])]
-        key_y[key] = _nvmap(f, carry, *f_args)
+        f_args = [
+            _take(arg, ids) if not isinstance(arg, np.ndarray) else None
+            for arg, ids in zip(args, key_in_take_torch[key])
+        ]
+        key_y[key] = _nvmap(f, all_np_args[key], carry, *f_args)
 
-    # slice None results from the final output
-    keys = [k for k in keys if key_y[k] is not None]
+    # Filter out keys whose callback returned None
+    active_keys = [k for k in keys if key_y[k] is not None]
 
-    # concatenate ys, drop grouping dimensions, put back in order
+    # Concatenate results, drop grouping dimensions, put back in model order
+    use_precomputed = len(active_keys) == len(keys)
     y = []
     for i, typ in enumerate(out_types):
-        y_typ = [key_y[key] for key in keys]
+        y_typ = [key_y[key] for key in active_keys]
         if len(out_types) > 1:
             y_typ = [y_[i] for y_ in y_typ]
         if typ != "b":
             y_typ = tree_map(lambda x: torch.flatten(x, 0, 1), y_typ)
-        y_typ = tree_map(lambda *x: torch.cat(x), *y_typ)
-        y_take = _np_to_long(np.argsort(np.concatenate([key_y_take[key][i] for key in keys])))
-        _check_output(y_typ, y_take, typ, i)
+        y_typ = tree_map(lambda *x: _cat_device_safe(x), *y_typ)
+        if use_precomputed:
+            y_take = cache["y_take_torch"][i]
+        else:
+            y_take = _np_to_long(np.argsort(np.concatenate([key_y_take[key][i] for key in active_keys])))
         y.append(_take(y_typ, y_take))
 
     y = y[0] if len(out_types) == 1 else y
@@ -654,7 +897,9 @@ def segment_sum(
     Returns:
       Tensor of shape (num_segments, *data.shape[1:]) with summed values.
     """
-    if not isinstance(segment_ids, torch.Tensor):
+    if isinstance(segment_ids, _DeviceCachedTensor):
+        segment_ids = segment_ids.to(data.device).long()
+    elif not isinstance(segment_ids, torch.Tensor):
         segment_ids = torch.tensor(segment_ids, device=data.device, dtype=torch.long)
     else:
         segment_ids = segment_ids.to(device=data.device, dtype=torch.long)

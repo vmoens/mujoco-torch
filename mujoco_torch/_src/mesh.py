@@ -322,7 +322,7 @@ def hfield_prism(vert: torch.Tensor) -> ConvexInfo:
         # use ccw winding order convention, and avoid using the last vertex
         edge0 = face[2, :] - face[1, :]
         edge1 = face[0, :] - face[1, :]
-        return math.normalize(torch.linalg.cross(edge0, edge1))
+        return math.normalize(math.cross(edge0, edge1))
 
     centroid = torch.mean(vert, dim=0)
     vert = vert - centroid

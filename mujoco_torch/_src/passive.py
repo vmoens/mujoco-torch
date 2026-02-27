@@ -16,6 +16,10 @@
 
 import torch
 
+from mujoco_torch._src.math import _CachedConst
+
+_EPS12 = _CachedConst(1e-12)
+
 from mujoco_torch._src import math, scan, support
 
 # pylint: disable=g-importing-member
@@ -37,7 +41,7 @@ def _inertia_box_fluid_model(
     box = inertia.unsqueeze(0).repeat(3, 1)
     box = box * (torch.ones((3, 3), dtype=inertia.dtype, device=inertia.device) - 2 * torch.eye(3))
     box = 6.0 * torch.clamp(torch.sum(box, dim=-1), min=1e-12)
-    box = torch.sqrt(box / torch.maximum(mass, torch.tensor(1e-12))) * (mass > 0.0)
+    box = torch.sqrt(box / torch.maximum(mass, _EPS12.get(mass.dtype, mass.device))) * (mass > 0.0)
 
     # transform to local coordinate frame
     offset = xipos - root_com
@@ -139,7 +143,7 @@ def _gravcomp(m: Model, d: Data) -> torch.Tensor:
     force = -m.opt.gravity * (m.body_mass * m.body_gravcomp).unsqueeze(-1)
 
     apply_f = lambda f, pos, body_id: support.jac(m, d, pos, body_id)[0] @ f
-    qfrc = torch.vmap(apply_f)(force, d.xipos, torch.arange(m.nbody)).sum(dim=0)
+    qfrc = torch.vmap(apply_f)(force, d.xipos, torch.arange(m.nbody, device=d.xipos.device)).sum(dim=0)
 
     return qfrc
 
@@ -150,12 +154,14 @@ def _fluid(m: Model, d: Data) -> torch.Tensor:
         m,
         m.body_inertia,
         m.body_mass,
-        d.subtree_com[torch.as_tensor(m.body_rootid)],
+        d.subtree_com[m.body_rootid_t],
         d.xipos,
         d.ximat,
         d.cvel,
     )
-    qfrc = torch.vmap(support.apply_ft, (None, None, 0, 0, 0, 0))(m, d, force, torque, d.xipos, torch.arange(m.nbody))
+    qfrc = torch.vmap(support.apply_ft, (None, None, 0, 0, 0, 0))(
+        m, d, force, torque, d.xipos, torch.arange(m.nbody, device=d.xipos.device)
+    )
 
     return torch.sum(qfrc, dim=0)
 
@@ -171,7 +177,7 @@ def passive(m: Model, d: Data) -> Data:
     qfrc_passive = _spring_damper(m, d)
     qfrc_gravcomp = torch.zeros(m.nv, dtype=d.qpos.dtype, device=d.qpos.device)
 
-    if bool((m.body_gravcomp != 0).any()) and not m.opt.disableflags & DisableBit.GRAVITY:
+    if m.has_gravcomp and not m.opt.disableflags & DisableBit.GRAVITY:
         qfrc_gravcomp = _gravcomp(m, d)
         qfrc_passive = qfrc_passive + qfrc_gravcomp * (1 - m.jnt_actgravcomp[m.dof_jntid])
 

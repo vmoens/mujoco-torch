@@ -407,7 +407,7 @@ class Statistic(MjTensorClass):
       center: center of model
     """
 
-    meaninertia: torch.Tensor
+    meaninertia: float
     meanmass: torch.Tensor
     meansize: torch.Tensor
     extent: torch.Tensor
@@ -446,8 +446,8 @@ class Option(MjTensorClass):
 
     iterations: int
     ls_iterations: int
-    tolerance: torch.Tensor
-    ls_tolerance: torch.Tensor
+    tolerance: float
+    ls_tolerance: float
     impratio: torch.Tensor
     gravity: torch.Tensor
     density: torch.Tensor
@@ -753,6 +753,46 @@ class Model(MjTensorClass):
     geom_convex_facenormal: tuple[torch.Tensor | None, ...]
     mesh_convex: tuple[ConvexMesh, ...]
     tendon_hasfrictionloss: np.ndarray
+    has_gravcomp: bool
+    dof_tri_row: np.ndarray
+    dof_tri_col: np.ndarray
+    actuator_info: tuple
+    constraint_sizes_py: tuple
+    condim_counts_py: tuple
+    condim_tensor_py: torch.Tensor
+    constraint_data_py: dict
+    collision_groups_py: tuple
+    collision_max_cp_py: int
+    collision_total_contacts_py: int
+    sensor_groups_pos_py: tuple
+    sensor_groups_vel_py: tuple
+    sensor_groups_acc_py: tuple
+    sensor_disabled_py: bool
+    cache_id: int
+    # Pre-cached tensor versions of numpy model fields (auto-moved by .to())
+    body_rootid_t: torch.Tensor
+    dof_bodyid_t: torch.Tensor
+    dof_Madr_t: torch.Tensor
+    dof_tri_row_t: torch.Tensor
+    dof_tri_col_t: torch.Tensor
+    geom_bodyid_t: torch.Tensor
+    site_bodyid_t: torch.Tensor
+    dof_jntid_t: torch.Tensor
+    actuator_ctrllimited_bool: torch.Tensor
+    actuator_forcelimited_bool: torch.Tensor
+    jnt_actfrclimited_bool: torch.Tensor
+    actuator_actlimited_bool: torch.Tensor
+    actuator_actadr_neg1: torch.Tensor
+    # Pre-computed sparse mass matrix index pattern (used by solver, smooth)
+    sparse_i_t: torch.Tensor
+    sparse_j_t: torch.Tensor
+    sparse_madr_t: torch.Tensor
+    # Pre-computed factor_m indices
+    factor_m_madr_ds_t: torch.Tensor
+    factor_m_updates: tuple
+    # Pre-computed solve_m indices
+    solve_m_updates_j: tuple
+    solve_m_updates_i: tuple
 
 
 # Model.names collides with TensorDict.names property.  A __getattribute__

@@ -18,6 +18,64 @@ import mujoco
 import torch
 
 
+class _CachedConst:
+    """A constant tensor created from a Python literal, with per-(dtype,device) caching.
+
+    Avoids CPU→CUDA copies during CUDA graph capture by caching the
+    device copy from warmup runs.  Call ``warm_all`` after ``device_put``
+    to pre-populate every instance for the target device so that the first
+    ``torch.compile`` trace never records a DeviceCopy.
+    """
+
+    _instances: list["_CachedConst"] = []
+
+    __slots__ = ("_values", "_cache")
+
+    def __init__(self, values, dtype=None):
+        self._values = torch.tensor(values, dtype=dtype)
+        self._cache: dict[tuple, torch.Tensor] = {}
+        _CachedConst._instances.append(self)
+
+    def get(self, dtype, device) -> torch.Tensor:
+        key = (dtype, str(device))
+        t = self._cache.get(key)
+        if t is None:
+            t = self._values.to(dtype=dtype, device=device)
+            self._cache[key] = t
+        return t
+
+    @classmethod
+    def warm_all(cls, device, dtypes=(torch.float64, torch.float32, torch.long, torch.int32, torch.bool)):
+        """Pre-populate the cache of every ``_CachedConst`` instance."""
+        for inst in cls._instances:
+            for dtype in dtypes:
+                try:
+                    inst.get(dtype, device)
+                except Exception:
+                    pass
+
+
+_QUAT_INV_SIGNS = _CachedConst([1, -1, -1, -1])
+_TRI_ID = _CachedConst([[0, 3, 4], [3, 1, 5], [4, 5, 2]], dtype=torch.long)
+_INF_RANGE = _CachedConst([-torch.inf, torch.inf])
+
+
+def cross(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Cross product of 3-element vectors.
+
+    Drop-in replacement for ``cross`` that avoids the
+    ``sizes()`` crash under nested vmap + compile.
+    """
+    return torch.stack(
+        [
+            a[..., 1] * b[..., 2] - a[..., 2] * b[..., 1],
+            a[..., 2] * b[..., 0] - a[..., 0] * b[..., 2],
+            a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0],
+        ],
+        dim=-1,
+    )
+
+
 def safe_div(num: float | torch.Tensor, den: float | torch.Tensor) -> float | torch.Tensor:
     """Safe division for case where denominator is zero."""
     return num / (den + mujoco.mjMINVAL * (den == 0))
@@ -112,7 +170,7 @@ def rotate(vec: torch.Tensor, quat: torch.Tensor) -> torch.Tensor:
         raise ValueError("vec must have no batch dimensions.")
     s, u = quat[0], quat[1:]
     r = 2 * (torch.dot(u, vec) * u) + (s * s - torch.dot(u, u)) * vec
-    r = r + 2 * s * torch.linalg.cross(u, vec)
+    r = r + 2 * s * cross(u, vec)
     return r
 
 
@@ -125,7 +183,7 @@ def quat_inv(q: torch.Tensor) -> torch.Tensor:
     Returns:
       The inverse of q, where qmult(q, inv_quat(q)) = [1, 0, 0, 0].
     """
-    return q * torch.tensor([1, -1, -1, -1], dtype=q.dtype, device=q.device)
+    return q * _QUAT_INV_SIGNS.get(q.dtype, q.device)
 
 
 def quat_sub(u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
@@ -249,10 +307,10 @@ def inert_mul(i: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     Returns:
       resultant force
     """
-    tri_id = torch.tensor([[0, 3, 4], [3, 1, 5], [4, 5, 2]])  # cinert inr order
+    tri_id = _TRI_ID.get(torch.long, i.device)
     inr, pos, mass = i[tri_id], i[6:9], i[9]
-    ang = torch.mv(inr, v[:3]) + torch.linalg.cross(pos, v[3:])
-    vel = mass * v[3:] - torch.linalg.cross(pos, v[:3])
+    ang = torch.mv(inr, v[:3]) + cross(pos, v[3:])
+    vel = mass * v[3:] - cross(pos, v[:3])
     return torch.cat((ang, vel))
 
 
@@ -274,7 +332,7 @@ def transform_motion(vel: torch.Tensor, offset: torch.Tensor, rotmat: torch.Tens
     """
     # TODO(robotics-simulation): are quaternions faster here
     ang, vel = vel[:3], vel[3:]
-    vel = rotmat.T @ (vel - torch.linalg.cross(offset, ang))
+    vel = rotmat.T @ (vel - cross(offset, ang))
     ang = rotmat.T @ ang
     return torch.cat([ang, vel])
 
@@ -289,8 +347,8 @@ def motion_cross(u, v):
     Returns:
       resultant spatial motion
     """
-    ang = torch.linalg.cross(u[:3], v[:3])
-    vel = torch.linalg.cross(u[3:], v[:3]) + torch.linalg.cross(u[:3], v[3:])
+    ang = cross(u[:3], v[:3])
+    vel = cross(u[3:], v[:3]) + cross(u[:3], v[3:])
     return torch.cat((ang, vel))
 
 
@@ -304,20 +362,20 @@ def motion_cross_force(v, f):
     Returns:
       resultant force
     """
-    ang = torch.linalg.cross(v[:3], f[:3]) + torch.linalg.cross(v[3:], f[3:])
-    vel = torch.linalg.cross(v[:3], f[3:])
+    ang = cross(v[:3], f[:3]) + cross(v[3:], f[3:])
+    vel = cross(v[:3], f[3:])
     return torch.cat((ang, vel))
 
 
 def orthogonals(a: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Returns orthogonal vectors `b` and `c`, given a vector `a`."""
-    y = torch.tensor([0, 1, 0], dtype=a.dtype, device=a.device)
-    z = torch.tensor([0, 0, 1], dtype=a.dtype, device=a.device)
+    y = torch.eye(3, dtype=a.dtype, device=a.device)[1]
+    z = torch.eye(3, dtype=a.dtype, device=a.device)[2]
     b = torch.where((-0.5 < a[1]) & (a[1] < 0.5), y, z)
     b = b - a * a.dot(b)
     # normalize b. however if a is a zero vector, zero b as well.
     b = normalize(b) * torch.any(a)
-    return b, torch.linalg.cross(a, b)
+    return b, cross(a, b)
 
 
 def make_frame(a: torch.Tensor) -> torch.Tensor:
@@ -400,4 +458,11 @@ def concatenate(data):
     filtered = [x for x in data if x is not None]
     if not filtered:
         return None
+    device = None
+    for t in filtered:
+        if t.device.type != "cpu":
+            device = t.device
+            break
+    if device is not None:
+        filtered = [t.to(device) if t.device != device else t for t in filtered]
     return torch.cat(filtered, dim=0)
