@@ -488,7 +488,6 @@ class ConstraintTest(parameterized.TestCase):
 
         self.assertEqual(dx_compiled.efc_J.shape[0], 0)
 
-
     _CONDIM4_XML = """
     <mujoco>
       <option solver="CG" timestep="0.005"/>
@@ -547,7 +546,6 @@ class ConstraintTest(parameterized.TestCase):
         ne, nf, nl, ncon_, nefc = constraint.constraint_sizes(mx)
         expected_nc = ncon_4 * 6
         self.assertEqual(nefc, ne + nf + nl + expected_nc)
-
 
     _ELLIPTIC_XML = """
     <mujoco>

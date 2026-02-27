@@ -184,7 +184,6 @@ class ForwardTest(parameterized.TestCase):
                     err_msg=f"vmap vs sequential mismatch: {attr} env={i} in {fname}",
                 )
 
-
     def test_filterexact(self):
         """Test FILTEREXACT actuator dynamics match MuJoCo C."""
         m = mujoco.MjModel.from_xml_string("""
@@ -222,11 +221,15 @@ class ForwardTest(parameterized.TestCase):
             dx = forward.step(mx, dx)
 
             np.testing.assert_allclose(
-                dx.act.numpy(), d.act, atol=1e-8,
+                dx.act.numpy(),
+                d.act,
+                atol=1e-8,
                 err_msg=f"act mismatch at step {i}",
             )
             np.testing.assert_allclose(
-                dx.qpos.numpy(), d.qpos, atol=1e-5,
+                dx.qpos.numpy(),
+                d.qpos,
+                atol=1e-5,
                 err_msg=f"qpos mismatch at step {i}",
             )
 
@@ -269,11 +272,15 @@ class ForwardTest(parameterized.TestCase):
             dx = forward.step(mx, dx)
 
             np.testing.assert_allclose(
-                dx.act.numpy(), d.act, atol=1e-8,
+                dx.act.numpy(),
+                d.act,
+                atol=1e-8,
                 err_msg=f"act mismatch at step {i}",
             )
             np.testing.assert_allclose(
-                dx.qpos.numpy(), d.qpos, atol=1e-4,
+                dx.qpos.numpy(),
+                d.qpos,
+                atol=1e-4,
                 err_msg=f"qpos mismatch at step {i}",
             )
 
