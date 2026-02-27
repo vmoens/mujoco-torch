@@ -14,7 +14,8 @@
 # ==============================================================================
 """Heightfield collisions."""
 
-import numpy as np
+import math as _math
+
 import torch
 import torch.nn.functional as F
 
@@ -245,8 +246,8 @@ def _build_prisms(
     ymin = float(obj_pos_local[1]) - obj_rbound
     xfrac = (xmin + xhalf) / (2 * xhalf) * (h.ncol - 1)
     yfrac = (ymin + yhalf) / (2 * yhalf) * (h.nrow - 1)
-    cmin = int(np.floor(xfrac))
-    rmin = int(np.floor(yfrac))
+    cmin = _math.floor(xfrac)
+    rmin = _math.floor(yfrac)
 
     prisms: list[ConvexInfo] = []
     for r in range(subgrid_size[1]):
