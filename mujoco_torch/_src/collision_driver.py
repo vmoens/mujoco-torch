@@ -135,7 +135,8 @@ def _add_candidate(
     geom_convex_data: tuple | None = None,
 ):
     """Adds a candidate to test for collision."""
-    t1, t2 = m.geom_type[g1], m.geom_type[g2]
+    g1, g2, ipair = int(g1), int(g2), int(ipair)
+    t1, t2 = int(m.geom_type[g1]), int(m.geom_type[g2])
     if t1 > t2:
         t1, t2, g1, g2 = t2, t1, g2, g1
 
@@ -156,12 +157,12 @@ def _add_candidate(
         return
 
     if ipair > -1:
-        candidate = Candidate(g1, g2, ipair, -1, m.pair_dim[ipair])
+        candidate = Candidate(g1, g2, ipair, -1, int(m.pair_dim[ipair]))
     elif m.geom_priority[g1] != m.geom_priority[g2]:
         gp = g1 if m.geom_priority[g1] > m.geom_priority[g2] else g2
-        candidate = Candidate(g1, g2, -1, gp, m.geom_condim[gp])
+        candidate = Candidate(g1, g2, -1, int(gp), int(m.geom_condim[gp]))
     else:
-        dim = max(m.geom_condim[g1], m.geom_condim[g2])
+        dim = int(max(m.geom_condim[g1], m.geom_condim[g2]))
         candidate = Candidate(g1, g2, -1, -1, dim)
 
     result.setdefault((t1, t2, k1, k2), []).append(candidate)

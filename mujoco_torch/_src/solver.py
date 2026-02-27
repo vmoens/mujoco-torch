@@ -37,9 +37,9 @@ def while_loop(cond_fn, body_fn, carried_inputs, max_iter=None):
     """While loop that dispatches appropriately depending on context.
 
     * ``torch.compile`` or ``torch.vmap`` → ``torch._higher_order_ops.while_loop``
-      (the higher-order op has both compile and vmap dispatch rules as of
-      torch 2.11; the vmap rule runs until all batch elements converge,
-      freezing finished elements with ``torch.where``).
+      (the higher-order op has both compile and vmap dispatch rules; the vmap
+      rule runs until all batch elements converge, freezing finished elements
+      with ``torch.where``).
     * eager → plain Python ``while``
 
     Args:
@@ -49,9 +49,6 @@ def while_loop(cond_fn, body_fn, carried_inputs, max_iter=None):
       max_iter: unused, kept for backward compatibility.
     """
     if torch.compiler.is_compiling() or _inside_functorch():
-        # Wrap body to clone all output tensors, eliminating input-to-output
-        # aliasing (required by torch._higher_order_ops.while_loop when carry
-        # fields pass through unchanged).
         orig_body_fn = body_fn
 
         def cloning_body(*args):
