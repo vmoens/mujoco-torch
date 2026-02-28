@@ -1,11 +1,14 @@
 """GPU benchmark: mujoco-torch vs MuJoCo C vs MJX (JAX).
 
-Benchmarks a single model at various batch sizes. Configs that scale linearly
-(MuJoCo C loop, mujoco-torch sequential loop) are only benchmarked at B=1.
+Benchmarks one or more models at various batch sizes. Configs that scale
+linearly (MuJoCo C loop, mujoco-torch sequential loop) are only benchmarked
+at B=1.
 
 Usage:
     CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py
     CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model ant
+    CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model all
+    CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model humanoid halfcheetah
     CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model humanoid --batch-sizes 1 128 1024 4096
 """
 
@@ -31,12 +34,18 @@ log = logging.getLogger(__name__)
 DEVICE = "cuda"
 WARMUP_ITERS = 5
 SEED = 42
+ALL_MODELS = ["humanoid", "ant", "halfcheetah", "walker2d", "hopper"]
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="mujoco-torch GPU benchmark")
-    parser.add_argument("--model", default="humanoid", help="Model to benchmark (default: humanoid)")
-    parser.add_argument("--batch-sizes", nargs="+", type=int, default=[1, 128, 1024, 4096], help="Batch sizes")
+    parser.add_argument(
+        "--model",
+        nargs="+",
+        default=["humanoid"],
+        help=f"Model(s) to benchmark, or 'all' for {ALL_MODELS} (default: humanoid)",
+    )
+    parser.add_argument("--batch-sizes", nargs="+", type=int, default=[1, 128, 1024, 4096, 32768], help="Batch sizes")
     parser.add_argument("--nsteps", type=int, default=1000, help="Steps per timing run")
     parser.add_argument("--output", type=str, default=None, help="Output JSON file (default: bench_<model>.json)")
     parser.add_argument(
@@ -122,22 +131,29 @@ def bench_vmap(mx, m_mj, batch_sizes, nsteps):
         elapsed = time.perf_counter() - t0
         sps = B * nsteps / elapsed
         results[f"B={B}"] = {"elapsed_s": elapsed, "steps_per_s": sps}
-        log.info("    B=%5d: %8.1f ms  (%12,.0f steps/s)", B, elapsed * 1e3, sps)
+        log.info("    B=%5d: %8.1f ms  (%14s steps/s)", B, elapsed * 1e3, f"{sps:,.0f}")
     return results
+
+
+def _warm_caches(mx, m_mj):
+    """Single non-vmapped step to populate _CachedConst caches on the target device."""
+    d_mj = mujoco.MjData(m_mj)
+    d_mj.qvel[:] = make_batched_qvel(m_mj.nv, 1, SEED)[0]
+    dx = mujoco_torch.device_put(d_mj).to(DEVICE)
+    mujoco_torch.step(mx, dx)
+    torch.cuda.synchronize()
 
 
 def bench_compile(mx, m_mj, batch_sizes, nsteps):
     """mujoco-torch compile(fullgraph=True) across batch sizes."""
-    vmap_step = torch.vmap(lambda d: mujoco_torch.step(mx, d))
-    # One eager call to populate _CachedConst caches for the target device,
-    # so the first torch.compile trace never records a DeviceCopy.
-    d_warm = make_batch(mx, m_mj, 1)
-    vmap_step(d_warm)
-    del d_warm
+    _warm_caches(mx, m_mj)
     results = {}
     for B in batch_sizes:
         torch._dynamo.reset()
         torch.compiler.reset()
+        gc.collect()
+        torch.cuda.empty_cache()
+        vmap_step = torch.vmap(lambda d: mujoco_torch.step(mx, d))
         compiled_fn = torch.compile(vmap_step, fullgraph=True)
         d_batch = make_batch(mx, m_mj, B)
         log.info("    B=%5d: compiling...", B)
@@ -155,7 +171,7 @@ def bench_compile(mx, m_mj, batch_sizes, nsteps):
             elapsed = time.perf_counter() - t0
             sps = B * nsteps / elapsed
             results[f"B={B}"] = {"elapsed_s": elapsed, "steps_per_s": sps}
-            log.info("    B=%5d: %8.1f ms  (%12,.0f steps/s)", B, elapsed * 1e3, sps)
+            log.info("    B=%5d: %8.1f ms  (%14s steps/s)", B, elapsed * 1e3, f"{sps:,.0f}")
         except Exception:
             log.info("    B=%5d: FAILED", B)
             traceback.print_exc()
@@ -204,7 +220,7 @@ def bench_mjx(m_mj, batch_sizes, nsteps):
             elapsed = time.perf_counter() - t0
             sps = B * nsteps / elapsed
             results[f"B={B}"] = {"elapsed_s": elapsed, "steps_per_s": sps}
-            log.info("    B=%5d: %8.1f ms  (%12,.0f steps/s)", B, elapsed * 1e3, sps)
+            log.info("    B=%5d: %8.1f ms  (%14s steps/s)", B, elapsed * 1e3, f"{sps:,.0f}")
         except Exception:
             log.info("    B=%5d: FAILED", B)
             traceback.print_exc()
@@ -243,60 +259,70 @@ def log_summary(model_name, all_results, batch_sizes):
     log.info("")
 
 
-def main():
-    args = parse_args()
-    model_name = args.model
-    output = args.output or f"bench_{model_name}.json"
-
+def bench_model(model_name, batch_sizes, nsteps, only):
+    """Run all requested benchmarks for a single model."""
     log.info("")
     log.info("#" * 100)
     log.info("#  Model: %s", model_name)
     log.info("#" * 100)
-
-    torch.set_default_device(DEVICE)
 
     xml = load_model_xml(model_name)
     m_mj = mujoco.MjModel.from_xml_string(xml)
     mx = mujoco_torch.device_put(m_mj).to(DEVICE)
 
     model_results = {}
-    only = args.only
 
     if only in (None, "compile"):
         log.info("\n  torch compile(fullgraph=True):")
-        model_results["torch compile"] = bench_compile(mx, m_mj, args.batch_sizes, args.nsteps)
+        model_results["torch compile"] = bench_compile(mx, m_mj, batch_sizes, nsteps)
 
     if only in (None, "c"):
         log.info("\n  MuJoCo C (sequential, B=1):")
-        r = bench_mujoco_c(m_mj, args.nsteps)
+        r = bench_mujoco_c(m_mj, nsteps)
         sps = r["B=1"]["steps_per_s"]
-        log.info("    B=    1: %8.1f ms  (%12,.0f steps/s)", r["B=1"]["elapsed_s"] * 1e3, sps)
+        log.info("    B=    1: %8.1f ms  (%14s steps/s)", r["B=1"]["elapsed_s"] * 1e3, f"{sps:,.0f}")
         model_results["MuJoCo C (seq)"] = r
 
     if only in (None, "loop"):
         log.info("\n  mujoco-torch loop (B=1):")
-        r = bench_torch_loop(mx, m_mj, args.nsteps)
+        r = bench_torch_loop(mx, m_mj, nsteps)
         sps = r["B=1"]["steps_per_s"]
-        log.info("    B=    1: %8.1f ms  (%12,.0f steps/s)", r["B=1"]["elapsed_s"] * 1e3, sps)
+        log.info("    B=    1: %8.1f ms  (%14s steps/s)", r["B=1"]["elapsed_s"] * 1e3, f"{sps:,.0f}")
         model_results["torch loop (seq)"] = r
 
     if only in (None, "vmap"):
         log.info("\n  mujoco-torch vmap (eager):")
-        model_results["torch vmap (eager)"] = bench_vmap(mx, m_mj, args.batch_sizes, args.nsteps)
+        model_results["torch vmap (eager)"] = bench_vmap(mx, m_mj, batch_sizes, nsteps)
 
     if only in (None, "mjx"):
         gc.collect()
         torch.cuda.empty_cache()
         log.info("\n  MJX jit(vmap(step)):")
-        mjx_r = bench_mjx(m_mj, args.batch_sizes, args.nsteps)
+        mjx_r = bench_mjx(m_mj, batch_sizes, nsteps)
         if mjx_r is not None:
             model_results["MJX jit(vmap)"] = mjx_r
 
-    log_summary(model_name, model_results, args.batch_sizes)
+    log_summary(model_name, model_results, batch_sizes)
+    return model_results
 
-    with open(output, "w") as f:
-        json.dump({model_name: model_results}, f, indent=2)
-    log.info("Results written to %s", output)
+
+def main():
+    args = parse_args()
+    models = ALL_MODELS if "all" in args.model else args.model
+    output = args.output
+
+    torch.set_default_device(DEVICE)
+
+    all_results = {}
+    for model_name in models:
+        all_results[model_name] = bench_model(
+            model_name, args.batch_sizes, args.nsteps, args.only
+        )
+
+    out_path = output or ("bench_all.json" if len(models) > 1 else f"bench_{models[0]}.json")
+    with open(out_path, "w") as f:
+        json.dump(all_results, f, indent=2)
+    log.info("Results written to %s", out_path)
 
 
 if __name__ == "__main__":
