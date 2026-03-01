@@ -20,22 +20,6 @@ import mujoco
 
 # pylint: enable=g-importing-member
 import torch
-from torch._higher_order_ops.scan import scan as _torch_scan
-
-
-def torch_scan(f, init, xs, dim=0):
-    """Scan that dispatches to torch higher-order op when compiling."""
-    if torch.compiler.is_compiling():
-        return _torch_scan(f, init, xs, dim=dim)
-    carry = init
-    ys = []
-    for i in range(xs.shape[dim]):
-        x_i = xs.select(dim, i)
-        carry, y = f(carry, x_i)
-        ys.append(y)
-    return carry, torch.stack(ys, dim=dim) if ys else torch.zeros(())
-
-
 from mujoco_torch._src import (
     collision_driver,
     constraint,
@@ -298,11 +282,15 @@ def _rungekutta4(m: Model, d: Data) -> Data:
     qvel, qacc, act_dot = torch.utils._pytree.tree_map(lambda k: B_t[0] * k, (kqvel, d.qacc, d.act_dot))
     integrate_fn = lambda *args: _integrate_pos(*args, dt=m.opt.timestep)
 
-    def f(carry, x):
-        qvel, qacc, act_dot, kqvel, d = carry
-        a, b, t = x[0], x[1], x[2]  # tableau numbers
+    # Unrolled loop (3 iterations) instead of torch_scan HOP.
+    # The body calls forward() which accesses module-level scan caches — these
+    # are "unsafe side effects" that break torch.ops.higher_order.scan under
+    # fullgraph compilation.  Unrolling lets Dynamo trace each iteration at the
+    # top level where dict access is fine.
+    a_diag = torch.diag(A_t)
+    for i in range(3):
+        a, b, t = a_diag[i], B_t[i + 1], T[i]
         dqvel, dqacc, dact_dot = torch.utils._pytree.tree_map(lambda k: a * k, (kqvel, d.qacc, d.act_dot))
-        # get intermediate RK solutions
         kqpos = scan.flat(m, integrate_fn, "jqv", "q", m.jnt_type, d_t0.qpos, dqvel)
         kact = d_t0.act + dact_dot * m.opt.timestep
         kqvel = d_t0.qvel + dqacc * m.opt.timestep
@@ -312,13 +300,6 @@ def _rungekutta4(m: Model, d: Data) -> Data:
         qvel = qvel + b * kqvel
         qacc = qacc + b * d.qacc
         act_dot = act_dot + b * d.act_dot
-
-        return (qvel, qacc, act_dot, kqvel, d), torch.zeros(())
-
-    abt = torch.stack([torch.diag(A_t), B_t[1:4], T], dim=1)
-    init = (qvel, qacc, act_dot, kqvel, d)
-    carry, _ = torch_scan(f, init, abt, dim=0)
-    qvel, qacc, act_dot, *_ = carry
 
     d = _advance(m, d_t0, act_dot, qacc, qvel)
     return d

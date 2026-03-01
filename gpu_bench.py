@@ -45,7 +45,7 @@ def parse_args():
         default=["humanoid"],
         help=f"Model(s) to benchmark, or 'all' for {ALL_MODELS} (default: humanoid)",
     )
-    parser.add_argument("--batch-sizes", nargs="+", type=int, default=[1, 128, 1024, 4096, 32768], help="Batch sizes")
+    parser.add_argument("--batch-sizes", nargs="+", type=int, default=[32768, 4096, 1024, 128, 1], help="Batch sizes")
     parser.add_argument("--nsteps", type=int, default=1000, help="Steps per timing run")
     parser.add_argument("--output", type=str, default=None, help="Output JSON file (default: bench_<model>.json)")
     parser.add_argument(

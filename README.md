@@ -92,25 +92,47 @@ d_batch = compiled_step(d_batch)
 
 Measured on a single NVIDIA H200 GPU, float64 precision, 1 000 simulation
 steps per configuration.  Sequential baselines (MuJoCo C, mujoco-torch loop)
-are measured at B=1 since they scale linearly.
+are measured at B=1 since they scale linearly.  All values are **steps/second**
+(higher is better).
 
 ### Humanoid
 
-| Configuration | B=1 | B=128 | B=1 024 | B=4 096 |
-|---|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 61,909 | *(linear)* | *(linear)* | *(linear)* |
-| mujoco-torch vmap (eager) | 10 | 1,296 | 10,372 | 40,925 |
-| **mujoco-torch compile** | **88** | **10,516** | **84,813** | **331,723** |
-| MJX (JAX jit+vmap) | 57 | 8,374 | 66,987 | 244,538 |
+| Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
+|---|--:|--:|--:|--:|--:|
+| MuJoCo C (CPU, sequential) | 62,188 | — | — | — | — |
+| mujoco-torch vmap (eager) | 10 | 1,239 | 9,935 | 39,682 | 292,238 |
+| **mujoco-torch compile** | **90** | **10,763** | **85,283** | **331,496** | **1,065,339** |
+| MJX (JAX jit+vmap) | 58 | 8,396 | 65,927 | 237,061 | 1,102,603 |
 
 ### Ant
 
-| Configuration | B=1 | B=128 | B=1 024 | B=4 096 |
-|---|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 106,873 | *(linear)* | *(linear)* | *(linear)* |
-| mujoco-torch vmap (eager) | 15 | 1,881 | 15,043 | 59,018 |
-| **mujoco-torch compile** | **116** | **12,395** | **97,145** | **288,718** |
-| MJX (JAX jit+vmap) | 98 | 12,046 | 72,646 | 232,681 |
+| Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
+|---|--:|--:|--:|--:|--:|
+| MuJoCo C (CPU, sequential) | 106,019 | — | — | — | — |
+| mujoco-torch vmap (eager) | 15 | 1,866 | 14,949 | 59,300 | 301,439 |
+| **mujoco-torch compile** | **120** | **9,820** | **78,000** | **264,081** | **460,511** |
+| MJX (JAX jit+vmap) | 99 | 11,965 | 66,796 | 235,721 | 540,229 |
+
+### Half-Cheetah
+
+| Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
+|---|--:|--:|--:|--:|--:|
+| MuJoCo C (CPU, sequential) | 181,946 | — | — | — | — |
+| mujoco-torch vmap (eager) | 14 | 1,810 | 14,384 | 58,006 | 447,686 |
+| **mujoco-torch compile** | **116** | **13,829** | **109,334** | **435,795** | **1,889,818** |
+| MJX (JAX jit+vmap) | 105 | 12,102 | 85,769 | 300,022 | 1,576,656 |
+
+### Walker2d
+
+Walker2d uses the RK4 integrator, which makes each step ~3× more expensive
+than Euler.
+
+| Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
+|---|--:|--:|--:|--:|--:|
+| MuJoCo C (CPU, sequential) | 42,245 | — | — | — | — |
+| mujoco-torch vmap (eager) | 3 | 330 | 2,389 | 8,954 | 63,274 |
+| **mujoco-torch compile** | **41** | **3,578** | **7,006** | **94,907** | **340,733** |
+| MJX (JAX jit+vmap) | 31 | 2,978 | 24,452 | 80,401 | 244,155 |
 
 **Methodology.**  Each configuration runs 1 000 steps after warmup (5 compile
 iterations for compiled variants, 1 JIT warmup for MJX).  Wall-clock time is
@@ -123,7 +145,10 @@ To reproduce, run the benchmark script (requires the PyTorch fork above):
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model humanoid
 CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model ant
-python scratch/plot_bench.py bench_humanoid.json bench_ant.json -o assets/benchmark.png
+CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model halfcheetah
+CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model walker2d
+CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model all
+python scratch/plot_bench.py bench_humanoid.json bench_ant.json bench_halfcheetah.json bench_walker2d.json -o assets/benchmark.png
 ```
 
 ## Testing
