@@ -265,7 +265,9 @@ def _advance(
     # advance velocities
     new_qvel = d.qvel + qacc * m.opt.timestep
 
-    # advance positions with qvel if given, new_qvel otherwise (semi-implicit)
+    # Semi-implicit Euler: when qvel is None the position update uses the
+    # already-updated velocity (new_qvel), matching the original replace()-
+    # based code where d.qvel was updated before the position integration.
     qvel_for_pos = new_qvel if qvel is None else qvel
     integrate_fn = lambda *args: _integrate_pos(*args, dt=m.opt.timestep)
     qpos = scan.flat(m, integrate_fn, "jqv", "q", m.jnt_type, d.qpos, qvel_for_pos)
@@ -297,6 +299,10 @@ def _euler(m: Model, d: Data) -> Data:
 
 def _rungekutta4(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     """Runge-Kutta explicit order 4 integrator."""
+    # Clone d_t0 separately from the step()-level clone: step() clones to
+    # protect the *caller's* reference, whereas this clone preserves the
+    # initial state (qpos, qvel, act) across the in-place update_() calls
+    # in the RK4 loop below.
     d_t0 = d.clone(recurse=False)
     # pylint: disable=invalid-name
     A_t = _RK4_A.get(d.qpos.dtype, d.qpos.device)
@@ -385,6 +391,9 @@ def step(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
         of iterations (no early termination), producing a static computation
         graph suitable for CUDA graph capture.
     """
+    # Shallow clone so that in-place update_() calls downstream don't
+    # mutate the caller's Data.  All functions below step() assume they
+    # have exclusive ownership of d.
     d = d.clone(recurse=False)
     d = forward(m, d, fixed_iterations=fixed_iterations)
 

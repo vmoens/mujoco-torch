@@ -855,8 +855,9 @@ def device_put(value, *, dtype: torch.dtype | None = None):
     result = clz(**init_kwargs, **derived_kwargs)  # type: ignore
 
     if clz is types.Model:
-        from mujoco_torch._src.scan import _resolve_cached_tensors
-        types._build_device_precomp(result, torch.device("cpu"), _resolve_cached_tensors)
+        types._build_device_precomp(
+            result, torch.device("cpu"), scan._resolve_cached_tensors,
+        )
 
     return result
 

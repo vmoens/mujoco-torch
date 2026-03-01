@@ -24,26 +24,6 @@ _DATATYPE_REAL = int(mujoco.mjtDataType.mjDATATYPE_REAL)
 _DATATYPE_POSITIVE = int(mujoco.mjtDataType.mjDATATYPE_POSITIVE)
 
 
-def _groups_to_device(groups: tuple, device: torch.device) -> tuple:
-    """Move all tensors buried in sensor-group dicts to *device*.
-
-    Sensor groups are tuple-typed TensorClass fields, so Model.to() can't
-    reach the tensors inside.  Call this once before iterating over groups.
-    """
-
-    def _move(obj):
-        if isinstance(obj, torch.Tensor):
-            return obj.to(device)
-        if isinstance(obj, dict):
-            return {k: _move(v) for k, v in obj.items()}
-        if isinstance(obj, (list, tuple)):
-            moved = [_move(v) for v in obj]
-            return type(obj)(moved)
-        return obj
-
-    return _move(groups)
-
-
 def _apply_cutoff(sensor: torch.Tensor, cutoff: torch.Tensor, data_type: int) -> torch.Tensor:
     """Clip sensor to cutoff value."""
 

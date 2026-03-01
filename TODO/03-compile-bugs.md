@@ -164,8 +164,9 @@ except Exception as e:
   the Vmap dispatch rule and everything works.  This is a stock PyTorch gap.
 - The `scan` HOP already has a Vmap rule in stock PyTorch 2.10.0, so this
   appears to be an oversight / incomplete implementation for `while_loop`.
-- This has been reported upstream: https://github.com/pytorch/pytorch/issues
-  (TODO: find or file the issue).
+- This is addressed in the custom fork
+  (`mujoco-torch-features` branch of `vmoens/pytorch`).  No upstream
+  issue has been filed yet; the fix lives only in the fork for now.
 
 ---
 

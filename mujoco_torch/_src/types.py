@@ -868,10 +868,17 @@ Model.to = _model_to
 
 
 def _model_clone(self, recurse=True):
-    """Clone Model, propagating the resolved _device_precomp side dict."""
+    """Clone Model, propagating the resolved _device_precomp side dict.
+
+    Both ``replace()`` and ``tree_replace()`` call ``clone()`` internally,
+    so overriding ``clone`` is sufficient to keep ``_device_precomp`` alive
+    across all copy paths.
+    """
     result = MjTensorClass.clone(self, recurse=recurse)
     if hasattr(self, "_device_precomp"):
-        object.__setattr__(result, "_device_precomp", self._device_precomp)
+        object.__setattr__(
+            result, "_device_precomp", self._device_precomp,
+        )
     return result
 
 

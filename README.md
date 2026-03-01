@@ -174,16 +174,12 @@ measured with `torch.cuda.synchronize()` / `jax.block_until_ready()` bracketing.
 Steps/s = `batch_size × nsteps / elapsed_time`.  Single GPU
 (`CUDA_VISIBLE_DEVICES=0`), dtype=float64.
 
-To reproduce, run the benchmark script (requires the PyTorch fork above):
+To reproduce, run the pytest-benchmark suite (requires the PyTorch fork above):
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model humanoid
-CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model ant
-CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model halfcheetah
-CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model walker2d
-CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model hopper
-CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model all
-python scratch/plot_bench.py scratch/bench_humanoid.json scratch/bench_ant.json scratch/bench_halfcheetah.json scratch/bench_walker2d.json scratch/bench_hopper.json -o assets/benchmark.png
+CUDA_VISIBLE_DEVICES=0 python -m pytest benchmarks/ -v \
+    --benchmark-json=bench_results.json
+python benchmarks/plot_bench.py bench_results.json -o assets/benchmark.png
 ```
 
 ## Testing
