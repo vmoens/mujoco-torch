@@ -113,21 +113,28 @@ def run_profiling(compiled_fn, mx, m_mj):
             d_batch = compiled_fn(d_batch)
         torch.cuda.synchronize()
 
-    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=50))
+    try:
+        print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=50))
+    except KeyError:
+        print(prof.key_averages().table(sort_by="self_device_time_total", row_limit=50))
     prof.export_chrome_trace("/tmp/trace_humanoid_32k.json")
     print("  Trace saved to /tmp/trace_humanoid_32k.json", flush=True)
 
-    total_kernels = len(prof.key_averages())
     events = prof.key_averages()
-    total_cuda_time = sum(e.cuda_time_total for e in events)
+    total_kernels = len(events)
+
+    def _cuda_time(e):
+        return getattr(e, "cuda_time_total", getattr(e, "device_time_total", 0))
+
+    total_cuda_time = sum(_cuda_time(e) for e in events)
     print(f"\n  Total unique kernel types: {total_kernels}", flush=True)
     print(f"  Total CUDA time (10 steps): {total_cuda_time / 1e3:.1f} ms", flush=True)
     if total_cuda_time > 0:
         print("\n  Top 10 by CUDA time:", flush=True)
-        sorted_events = sorted(events, key=lambda e: e.cuda_time_total, reverse=True)
+        sorted_events = sorted(events, key=_cuda_time, reverse=True)
         for i, e in enumerate(sorted_events[:10]):
-            pct = 100 * e.cuda_time_total / total_cuda_time
-            print(f"    {i+1}. {e.key[:60]:60s}  {e.cuda_time_total/1e3:8.2f} ms ({pct:5.1f}%)  count={e.count}", flush=True)
+            pct = 100 * _cuda_time(e) / total_cuda_time
+            print(f"    {i+1}. {e.key[:60]:60s}  {_cuda_time(e)/1e3:8.2f} ms ({pct:5.1f}%)  count={e.count}", flush=True)
 
 
 def main():
