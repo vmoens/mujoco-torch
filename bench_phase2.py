@@ -97,23 +97,38 @@ def main():
     mx = mujoco_torch.device_put(m_mj).to(DEVICE)
     mx_f32 = mujoco_torch.device_put(m_mj, dtype=torch.float32).to(DEVICE)
 
+    # (key, label, model, compile_kwargs, step_kwargs, dtype, inductor_settings)
     hypotheses = [
-        ("baseline_h3h5", "Baseline (H3+H5 active)", mx,
-         dict(fullgraph=True), {}, torch.float64),
-        ("h8_fixed_iter", "H8: fixed_iterations=True", mx,
-         dict(fullgraph=True), dict(fixed_iterations=True), torch.float64),
-        ("h8_reduce_overhead", "H8 + reduce-overhead", mx,
+        ("baseline", "Baseline (H3+H5 active)", mx,
+         dict(fullgraph=True), {}, torch.float64, {}),
+        ("h4_inductor", "H4: inductor config", mx,
+         dict(fullgraph=True), {}, torch.float64,
+         {"coordinate_descent_tuning": True, "aggressive_fusion": True}),
+        ("h8_fixed", "H8: fixed_iterations", mx,
+         dict(fullgraph=True), dict(fixed_iterations=True), torch.float64, {}),
+        ("h8_reduce", "H8 + reduce-overhead", mx,
          dict(fullgraph=True, mode="reduce-overhead"),
-         dict(fixed_iterations=True), torch.float64),
-        ("h6_float32", "H6: float32", mx_f32,
-         dict(fullgraph=True), {}, torch.float32),
-        ("h6_h8_combined", "H6+H8: float32 + fixed_iter + reduce-overhead",
-         mx_f32, dict(fullgraph=True, mode="reduce-overhead"),
-         dict(fixed_iterations=True), torch.float32),
+         dict(fixed_iterations=True), torch.float64, {}),
+        ("h4_h8_reduce", "H4+H8 + reduce-overhead", mx,
+         dict(fullgraph=True, mode="reduce-overhead"),
+         dict(fixed_iterations=True), torch.float64,
+         {"coordinate_descent_tuning": True, "aggressive_fusion": True}),
+        ("h6_f32", "H6: float32", mx_f32,
+         dict(fullgraph=True), {}, torch.float32, {}),
+        ("all_f64", "ALL f64: H4+H8+reduce-overhead", mx,
+         dict(fullgraph=True, mode="reduce-overhead"),
+         dict(fixed_iterations=True), torch.float64,
+         {"coordinate_descent_tuning": True, "aggressive_fusion": True}),
+        ("all_f32", "ALL f32: H4+H6+H8+reduce-overhead", mx_f32,
+         dict(fullgraph=True, mode="reduce-overhead"),
+         dict(fixed_iterations=True), torch.float32,
+         {"coordinate_descent_tuning": True, "aggressive_fusion": True}),
     ]
 
-    for key, label, model, compile_kwargs, step_kwargs, dtype in hypotheses:
+    for key, label, model, compile_kwargs, step_kwargs, dtype, ind_cfg in hypotheses:
         torch.set_default_dtype(dtype)
+        for k, v in ind_cfg.items():
+            setattr(inductor_config, k, v)
         try:
             sps = run_benchmark(label, model, m_mj, compile_kwargs,
                                 step_kwargs=step_kwargs, dtype=dtype)
@@ -122,12 +137,14 @@ def main():
             print(f"  {label}: FAILED — {e}", flush=True)
             results[key] = None
         torch.set_default_dtype(torch.float64)
+        for k in ind_cfg:
+            setattr(inductor_config, k, False)
 
     # Summary
     print("\n" + "=" * 70)
     print("  PHASE 2 RESULTS SUMMARY")
     print("=" * 70)
-    baseline = results.get("baseline_h3h5")
+    baseline = results.get("baseline")
     for k, v in results.items():
         if v is None:
             print(f"  {k:50s}  {'FAILED':>12s}")
