@@ -48,8 +48,8 @@ def sensor_pos(m: Model, d: Data) -> Data:
     _dev = d.qpos.device
     objtype_data = {
         ObjType.UNKNOWN: (
-            torch.zeros(1, 3, dtype=_dtype),
-            torch.eye(3, dtype=_dtype).unsqueeze(0),
+            torch.zeros(1, 3, dtype=_dtype, device=_dev),
+            torch.eye(3, dtype=_dtype, device=_dev).unsqueeze(0),
         ),
         ObjType.BODY: (d.xipos, d.ximat),
         ObjType.XBODY: (d.xpos, d.xmat),
@@ -68,7 +68,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
 
     for group in m.sensor_groups_pos_py:
         sensor_type = group["type"]
-        adr = group["adr"]
+        adr = group["adr"].to(_dev)
         cutoff = group["cutoff"]
         data_type = group["data_type"]
         objid = group["objid"]
@@ -89,7 +89,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 )(ray_precomp, d, site_xpos, site_mat)
                 sensor = dist
                 sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type))
-                adrs.append(sub["adr"])
+                adrs.append(sub["adr"].to(_dev))
             continue
         elif sensor_type == SensorType.JOINTPOS:
             sensor = d.qpos[group["qposadr"]]
@@ -117,7 +117,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 xmat_ref = xmat_ref[sub_refid]
                 sub_cutoff = sub["cutoff"]
                 sensor = torch.vmap(_framepos)(xpos, xpos_ref, xmat_ref, sub_refid)
-                adrt = sub["adr"][:, None] + torch.arange(3, device=_dev)
+                adrt = sub["adr"].to(_dev)[:, None] + torch.arange(3, device=_dev)
                 sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type).reshape(-1))
                 adrs.append(adrt.reshape(-1))
             continue
@@ -137,7 +137,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 xmat_ref = xmat_ref[sub_refid]
                 sub_cutoff = sub["cutoff"]
                 sensor = torch.vmap(_frameaxis)(xmat, xmat_ref, sub_refid)
-                adrt = sub["adr"][:, None] + torch.arange(3, device=_dev)
+                adrt = sub["adr"].to(_dev)[:, None] + torch.arange(3, device=_dev)
                 sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type).reshape(-1))
                 adrs.append(adrt.reshape(-1))
             continue
@@ -169,7 +169,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 sensor = torch.vmap(lambda q, r, rid: torch.where(rid == -1, q, math.quat_mul(math.quat_inv(r), q)))(
                     quat, refquat, sub_refid
                 )
-                adrt = sub["adr"][:, None] + torch.arange(4, device=_dev)
+                adrt = sub["adr"].to(_dev)[:, None] + torch.arange(4, device=_dev)
                 sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type).reshape(-1))
                 adrs.append(adrt.reshape(-1))
             continue
@@ -211,7 +211,7 @@ def sensor_vel(m: Model, d: Data) -> Data:
     sensors, adrs = [], []
     for group in groups:
         sensor_type = group["type"]
-        adr = group["adr"]
+        adr = group["adr"].to(_dev)
         cutoff = group["cutoff"]
         data_type = group["data_type"]
         objid = group["objid"]
@@ -286,7 +286,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
     sensors, adrs = [], []
     for group in groups:
         sensor_type = group["type"]
-        adr = group["adr"]
+        adr = group["adr"].to(_dev)
         cutoff = group["cutoff"]
         data_type = group["data_type"]
         objid = group["objid"]
