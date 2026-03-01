@@ -213,7 +213,8 @@ def sensor_pos(m: Model, d: Data) -> Data:
     sensordata = d.sensordata.clone()
     sensordata[adrs_flat.to(device=sensordata.device)] = sensors_flat.to(sensordata.dtype)
 
-    return d.replace(sensordata=sensordata)
+    d.update_(sensordata=sensordata)
+    return d
 
 
 def sensor_vel(m: Model, d: Data) -> Data:
@@ -282,7 +283,8 @@ def sensor_vel(m: Model, d: Data) -> Data:
     sensordata = d.sensordata.clone()
     sensordata[adrs_flat.to(device=sensordata.device)] = sensors_flat.to(sensordata.dtype)
 
-    return d.replace(sensordata=sensordata)
+    d.update_(sensordata=sensordata)
+    return d
 
 
 def sensor_acc(m: Model, d: Data) -> Data:
@@ -380,4 +382,5 @@ def sensor_acc(m: Model, d: Data) -> Data:
     sensordata = d.sensordata.clone()
     sensordata[adrs_flat.to(device=sensordata.device)] = sensors_flat.to(sensordata.dtype)
 
-    return d.replace(sensordata=sensordata)
+    d.update_(sensordata=sensordata)
+    return d

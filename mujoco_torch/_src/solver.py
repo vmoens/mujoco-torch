@@ -473,11 +473,10 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     else:
         ctx = while_loop(cond, body, (ctx,), max_iter=iterations)[0]
 
-    d = d.replace(
+    d.update_(
         qacc_warmstart=ctx.qacc,
         qacc=ctx.qacc,
         qfrc_constraint=ctx.qfrc_constraint,
         efc_force=ctx.efc_force,
     )
-
     return d

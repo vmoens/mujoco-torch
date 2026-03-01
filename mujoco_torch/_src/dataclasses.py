@@ -109,6 +109,16 @@ class MjTensorClass(
         clone._tensordict._tensordict.update(kwargs)
         return clone
 
+    def update_(self, **kwargs: Any) -> "MjTensorClass":
+        """Update fields **in-place** (no shallow copy).
+
+        Faster than :meth:`replace` because it skips the ``clone(recurse=False)``
+        allocation (80-field dict copy).  The caller is responsible for ensuring
+        that no other live reference to this object relies on the old field values.
+        """
+        self._tensordict._tensordict.update(kwargs)
+        return self
+
     def tree_replace(
         self,
         params: dict[str, torch.Tensor | None],

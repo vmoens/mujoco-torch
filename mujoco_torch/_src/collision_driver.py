@@ -697,7 +697,8 @@ def collision(m: Model, d: Data) -> Data:
     total = m.collision_total_contacts_py
 
     if ncon_ == 0:
-        return d.replace(contact=Contact.zero(device=d.qpos.device), ncon=torch.zeros((), dtype=torch.int32, device=d.qpos.device))
+        d.update_(contact=Contact.zero(device=d.qpos.device), ncon=torch.zeros((), dtype=torch.int32, device=d.qpos.device))
+        return d
 
     contacts = []
     for fn, geom_types, candidates, precomp in collision_groups:
@@ -727,4 +728,5 @@ def collision(m: Model, d: Data) -> Data:
         efc_address=(ns + offsets).to(torch.int64),
     )
 
-    return d.replace(contact=contact, ncon=torch.full((), ncon_, dtype=torch.int32, device=contact.dist.device))
+    d.update_(contact=contact, ncon=torch.full((), ncon_, dtype=torch.int32, device=contact.dist.device))
+    return d

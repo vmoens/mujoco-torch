@@ -69,7 +69,7 @@ def _velocity(m: Model, d: Data) -> Data:
     kwargs = {"actuator_velocity": actuator_moment @ d.qvel}
     if m.ntendon:
         kwargs["ten_velocity"] = d.ten_J @ d.qvel
-    d = d.replace(**kwargs)
+    d.update_(**kwargs)
     d = smooth.com_vel(m, d)
     d = passive.passive(m, d)
     d = smooth.rne(m, d)
@@ -79,10 +79,11 @@ def _velocity(m: Model, d: Data) -> Data:
 def _actuation(m: Model, d: Data) -> Data:
     """Actuation-dependent computations."""
     if not m.nu or m.opt.disableflags & DisableBit.ACTUATION:
-        return d.replace(
+        d.update_(
             act_dot=torch.zeros((m.na,)),
             qfrc_actuator=torch.zeros((m.nv,)),
         )
+        return d
 
     ctrl = d.ctrl
     if not m.opt.disableflags & DisableBit.CLAMPCTRL:
@@ -179,7 +180,7 @@ def _actuation(m: Model, d: Data) -> Data:
     actfrcrange = actfrcrange[m.dof_jntid_t]
     qfrc_actuator = torch.clamp(qfrc_actuator, actfrcrange[:, 0], actfrcrange[:, 1])
 
-    d = d.replace(act_dot=act_dot, qfrc_actuator=qfrc_actuator)
+    d.update_(act_dot=act_dot, qfrc_actuator=qfrc_actuator)
     return d
 
 
@@ -188,7 +189,7 @@ def _acceleration(m: Model, d: Data) -> Data:
     qfrc_applied = d.qfrc_applied + support.xfrc_accumulate(m, d)
     qfrc_smooth = d.qfrc_passive - d.qfrc_bias + d.qfrc_actuator + qfrc_applied
     qacc_smooth = smooth.solve_m(m, d, qfrc_smooth)
-    d = d.replace(qfrc_smooth=qfrc_smooth, qacc_smooth=qacc_smooth)
+    d.update_(qfrc_smooth=qfrc_smooth, qacc_smooth=qacc_smooth)
     return d
 
 
@@ -246,7 +247,8 @@ def _advance(
     # advance time
     time = d.time + m.opt.timestep
 
-    return d.replace(qvel=new_qvel, act=act, qpos=qpos, time=time)
+    d.update_(qvel=new_qvel, act=act, qpos=qpos, time=time)
+    return d
 
 
 def _euler(m: Model, d: Data) -> Data:
@@ -269,7 +271,7 @@ def _euler(m: Model, d: Data) -> Data:
 
 def _rungekutta4(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     """Runge-Kutta explicit order 4 integrator."""
-    d_t0 = d
+    d_t0 = d.clone(recurse=False)
     # pylint: disable=invalid-name
     A_t = _RK4_A.get(d.qpos.dtype, d.qpos.device)
     B_t = _RK4_B.get(d.qpos.dtype, d.qpos.device)
@@ -294,7 +296,7 @@ def _rungekutta4(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
         kqpos = scan.flat(m, integrate_fn, "jqv", "q", m.jnt_type, d_t0.qpos, dqvel)
         kact = d_t0.act + dact_dot * m.opt.timestep
         kqvel = d_t0.qvel + dqacc * m.opt.timestep
-        d = d.replace(qpos=kqpos, qvel=kqvel, act=kact, time=t)
+        d.update_(qpos=kqpos, qvel=kqvel, act=kact, time=t)
         d = forward(m, d, fixed_iterations=fixed_iterations)
 
         qvel = qvel + b * kqvel
@@ -323,7 +325,7 @@ def forward(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     d = _acceleration(m, d)
 
     if d.efc_J.numel() == 0:
-        d = d.replace(qacc=d.qacc_smooth)
+        d.update_(qacc=d.qacc_smooth)
         return d
 
     d = solver.solve(m, d, fixed_iterations=fixed_iterations)
@@ -357,6 +359,7 @@ def step(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
         of iterations (no early termination), producing a static computation
         graph suitable for CUDA graph capture.
     """
+    d = d.clone(recurse=False)
     d = forward(m, d, fixed_iterations=fixed_iterations)
 
     if m.opt.integrator == IntegratorType.EULER:
