@@ -258,9 +258,10 @@ def solve(m: Model, d: Data) -> Data:
     mul_m_fn = _make_mul_m_fn(m, d) if not use_dense else None
 
     # ---- Inner helpers as closures over pre-extracted data --------------------
+    _inertia_scale = meaninertia * max(1, nv)
 
     def _rescale(value):
-        return value / (meaninertia * max(1, nv))
+        return value / _inertia_scale
 
     def _create_context(qacc, qfrc_con, grad_flag=True):
         """Create solver context from qacc without touching Model/Data."""
@@ -328,7 +329,7 @@ def solve(m: Model, d: Data) -> Data:
 
     def _linesearch(ctx):
         """Line search to find optimal step size (no m/d access)."""
-        smag = math.norm(ctx.search) * meaninertia * max(1, nv)
+        smag = math.norm(ctx.search) * _inertia_scale
         gtol = tolerance * ls_tolerance * smag
 
         mv = dense_M @ ctx.search if use_dense else mul_m_fn(ctx.search)
