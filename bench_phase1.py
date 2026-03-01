@@ -156,8 +156,8 @@ def main():
     )
     results["baseline"] = sps
 
-    # H9: Profile the baseline
-    run_profiling(compiled_fn, mx, m_mj)
+    # H9: Profile — skipped for now (triggers recompilation under profiler context)
+    # run_profiling(compiled_fn, mx, m_mj)
 
     # H1: reduce-overhead
     sps, _, _ = run_benchmark(
