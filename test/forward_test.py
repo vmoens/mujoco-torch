@@ -184,6 +184,106 @@ class ForwardTest(parameterized.TestCase):
                     err_msg=f"vmap vs sequential mismatch: {attr} env={i} in {fname}",
                 )
 
+    def test_filterexact(self):
+        """Test FILTEREXACT actuator dynamics match MuJoCo C."""
+        m = mujoco.MjModel.from_xml_string("""
+        <mujoco>
+          <option>
+            <flag constraint="disable"/>
+          </option>
+          <worldbody>
+            <body>
+              <joint name="slide" type="slide" axis="1 0 0"/>
+              <geom type="sphere" size="0.1" mass="1"/>
+            </body>
+          </worldbody>
+          <actuator>
+            <general joint="slide" dyntype="filterexact" dynprm="0.05"
+                     gainprm="100" biastype="affine" biasprm="0 -100 0"/>
+          </actuator>
+        </mujoco>
+        """)
+        d = mujoco.MjData(m)
+        d.ctrl[0] = 1.0
+
+        mx = mujoco_torch.device_put(m)
+
+        for i in range(200):
+            qpos, qvel, act = d.qpos.copy(), d.qvel.copy(), d.act.copy()
+            d_new = mujoco.MjData(m)
+            d_new.qpos[:] = qpos
+            d_new.qvel[:] = qvel
+            d_new.act[:] = act
+            d_new.ctrl[0] = 1.0
+            dx = mujoco_torch.device_put(d_new)
+
+            mujoco.mj_step(m, d)
+            dx = forward.step(mx, dx)
+
+            np.testing.assert_allclose(
+                dx.act.numpy(),
+                d.act,
+                atol=1e-8,
+                err_msg=f"act mismatch at step {i}",
+            )
+            np.testing.assert_allclose(
+                dx.qpos.numpy(),
+                d.qpos,
+                atol=1e-5,
+                err_msg=f"qpos mismatch at step {i}",
+            )
+
+    def test_muscle(self):
+        """Test MUSCLE actuator dynamics, gain, and bias match MuJoCo C."""
+        m = mujoco.MjModel.from_xml_string("""
+        <mujoco>
+          <compiler autolimits="true"/>
+          <option>
+            <flag constraint="disable"/>
+          </option>
+          <worldbody>
+            <body>
+              <joint name="hinge" type="hinge" axis="0 0 1"
+                     range="-90 90" limited="true"/>
+              <geom type="capsule" size="0.05" fromto="0 0 0 0.3 0 0" mass="1"/>
+            </body>
+          </worldbody>
+          <actuator>
+            <muscle joint="hinge" lengthrange="0.5 1.5"
+                    timeconst="0.01 0.04"/>
+          </actuator>
+        </mujoco>
+        """)
+        d = mujoco.MjData(m)
+        d.ctrl[0] = 0.8
+
+        mx = mujoco_torch.device_put(m)
+
+        for i in range(200):
+            qpos, qvel, act = d.qpos.copy(), d.qvel.copy(), d.act.copy()
+            d_new = mujoco.MjData(m)
+            d_new.qpos[:] = qpos
+            d_new.qvel[:] = qvel
+            d_new.act[:] = act
+            d_new.ctrl[0] = 0.8
+            dx = mujoco_torch.device_put(d_new)
+
+            mujoco.mj_step(m, d)
+            dx = forward.step(mx, dx)
+
+            np.testing.assert_allclose(
+                dx.act.numpy(),
+                d.act,
+                atol=1e-8,
+                err_msg=f"act mismatch at step {i}",
+            )
+            np.testing.assert_allclose(
+                dx.qpos.numpy(),
+                d.qpos,
+                atol=1e-4,
+                err_msg=f"qpos mismatch at step {i}",
+            )
+
 
 if __name__ == "__main__":
     absltest.main()

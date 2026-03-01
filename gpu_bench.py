@@ -32,6 +32,8 @@ DEVICE = "cuda"
 WARMUP_ITERS = 5
 SEED = 42
 
+_SPS_FMT = "    B=%5d: %8.1f ms  (%14s steps/s)"
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="mujoco-torch GPU benchmark")
@@ -122,7 +124,7 @@ def bench_vmap(mx, m_mj, batch_sizes, nsteps):
         elapsed = time.perf_counter() - t0
         sps = B * nsteps / elapsed
         results[f"B={B}"] = {"elapsed_s": elapsed, "steps_per_s": sps}
-        log.info("    B=%5d: %8.1f ms  (%12,.0f steps/s)", B, elapsed * 1e3, sps)
+        log.info(_SPS_FMT, B, elapsed * 1e3, f"{sps:,.0f}")
     return results
 
 
@@ -155,7 +157,7 @@ def bench_compile(mx, m_mj, batch_sizes, nsteps):
             elapsed = time.perf_counter() - t0
             sps = B * nsteps / elapsed
             results[f"B={B}"] = {"elapsed_s": elapsed, "steps_per_s": sps}
-            log.info("    B=%5d: %8.1f ms  (%12,.0f steps/s)", B, elapsed * 1e3, sps)
+            log.info(_SPS_FMT, B, elapsed * 1e3, f"{sps:,.0f}")
         except Exception:
             log.info("    B=%5d: FAILED", B)
             traceback.print_exc()
@@ -204,7 +206,7 @@ def bench_mjx(m_mj, batch_sizes, nsteps):
             elapsed = time.perf_counter() - t0
             sps = B * nsteps / elapsed
             results[f"B={B}"] = {"elapsed_s": elapsed, "steps_per_s": sps}
-            log.info("    B=%5d: %8.1f ms  (%12,.0f steps/s)", B, elapsed * 1e3, sps)
+            log.info(_SPS_FMT, B, elapsed * 1e3, f"{sps:,.0f}")
         except Exception:
             log.info("    B=%5d: FAILED", B)
             traceback.print_exc()
@@ -270,14 +272,14 @@ def main():
         log.info("\n  MuJoCo C (sequential, B=1):")
         r = bench_mujoco_c(m_mj, args.nsteps)
         sps = r["B=1"]["steps_per_s"]
-        log.info("    B=    1: %8.1f ms  (%12,.0f steps/s)", r["B=1"]["elapsed_s"] * 1e3, sps)
+        log.info(_SPS_FMT, 1, r["B=1"]["elapsed_s"] * 1e3, f"{sps:,.0f}")
         model_results["MuJoCo C (seq)"] = r
 
     if only in (None, "loop"):
         log.info("\n  mujoco-torch loop (B=1):")
         r = bench_torch_loop(mx, m_mj, args.nsteps)
         sps = r["B=1"]["steps_per_s"]
-        log.info("    B=    1: %8.1f ms  (%12,.0f steps/s)", r["B=1"]["elapsed_s"] * 1e3, sps)
+        log.info(_SPS_FMT, 1, r["B=1"]["elapsed_s"] * 1e3, f"{sps:,.0f}")
         model_results["torch loop (seq)"] = r
 
     if only in (None, "vmap"):
