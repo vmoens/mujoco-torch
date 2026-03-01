@@ -26,6 +26,14 @@ _MJMINVAL = _CachedConst(mujoco.mjMINVAL)
 _ONE = _CachedConst(1.0)
 _ZERO_I32 = _CachedConst(0, dtype=torch.int32)
 
+# Alternating +1/-1 signs for pyramidal friction edges, one pair per
+# friction direction.  Keyed by condim so the constant is never
+# re-allocated inside torch.vmap / torch.compile.
+_PYRAMID_SIGNS = {
+    condim: _CachedConst([1.0, -1.0] * (condim - 1))
+    for condim in (3, 4, 6)
+}
+
 
 def _vmap_index(tensor: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
     """Vmap-compatible indexing: tensor[idx] for scalar idx inside vmap."""
@@ -44,7 +52,7 @@ def _vmap_index(tensor: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
 from torch.utils._pytree import tree_map
 
 from mujoco_torch._src.dataclasses import MjTensorClass
-from mujoco_torch._src.types import Contact, Data, Model
+from mujoco_torch._src.types import ConeType, Contact, Data, Model
 
 
 class _Efc(MjTensorClass):
@@ -402,7 +410,7 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc:
 
     Each condim=1 contact produces a single normal-force constraint row.
     """
-    ncon_fl, _ = m.condim_counts_py
+    ncon_fl = m.condim_counts_py[0]
 
     @torch.vmap
     def fn(c: Contact):
@@ -442,9 +450,13 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc:
     )
 
 
-def _instantiate_contact(m: Model, d: Data) -> _Efc:
-    """Calculates constraint rows for frictional (condim=3) pyramidal contacts."""
-    ncon_fl, ncon_fr = m.condim_counts_py
+def _instantiate_contact_pyramidal(m: Model, d: Data, condim: int, start_idx: int, count: int) -> _Efc:
+    """Calculates constraint rows for frictional pyramidal contacts.
+
+    Handles condim=3 (tangential only), condim=4 (+torsional), condim=6 (+rolling).
+    Each contact produces (condim-1)*2 constraint rows (pyramid edges).
+    """
+    n_edges = (condim - 1) * 2
 
     @torch.vmap
     def fn(c: Contact):
@@ -453,24 +465,31 @@ def _instantiate_contact(m: Model, d: Data) -> _Efc:
         g2 = c.geom2.long().unsqueeze(0)
         body1 = m.geom_bodyid_t.gather(0, g1).squeeze(0)
         body2 = m.geom_bodyid_t.gather(0, g2).squeeze(0)
-        diff = support.jac_dif_pair(m, d, c.pos, body1, body2)
+
+        jacp2, jacr2 = support.jac(m, d, c.pos, body2)
+        jacp1, jacr1 = support.jac(m, d, c.pos, body1)
+        diff = c.frame @ (jacp2 - jacp1).T
+        if condim > 3:
+            diff = torch.cat((diff, c.frame @ (jacr2 - jacr1).T), dim=0)
+
         invweight0 = m.body_invweight0[:, 0]
         t = invweight0.gather(0, body1.unsqueeze(0)).squeeze(0) + invweight0.gather(0, body2.unsqueeze(0)).squeeze(0)
 
-        # rotate Jacobian differences to contact frame
-        diff_con = c.frame @ diff.T
+        fri = c.friction[: condim - 1].repeat_interleave(2)
+        fri = fri * _PYRAMID_SIGNS[condim].get(fri.dtype, fri.device)
+        j = diff[0] + diff[1:condim].repeat_interleave(2, dim=0) * fri.unsqueeze(1)
 
-        # 4 pyramidal friction directions
-        js, invweights = [], []
-        for diff_tan, friction in zip(diff_con[1:], c.friction[:2]):
-            for f in (friction, -friction):
-                js.append(diff_con[0] + diff_tan * f)
-                invweights.append((t + f * f * t) * 2 * f * f)
+        # MuJoCo C uses mu = friction[0] for all pyramid-edge invweights,
+        # regardless of per-direction coefficients (mj_constraint.c).
+        mu = c.friction[0]
+        invweight = (t + mu * mu * t) * 2 * mu * mu / m.opt.impratio
 
         active = dist < 0
-        j, invweight = torch.stack(js) * active, torch.stack(invweights)
-        pos = dist.unsqueeze(0).expand(4) * active
-        solref, solimp = torch.tile(c.solref, (4, 1)), torch.tile(c.solimp, (4, 1))
+        j = j * active
+        pos = dist.unsqueeze(0).expand(n_edges) * active
+        solref = torch.tile(c.solref, (n_edges, 1))
+        solimp = torch.tile(c.solimp, (n_edges, 1))
+        invweight = invweight.expand(n_edges)
 
         return j, invweight, pos, solref, solimp
 
@@ -478,9 +497,8 @@ def _instantiate_contact(m: Model, d: Data) -> _Efc:
     if contact.batch_size != torch.Size([contact.dist.shape[0]]):
         contact = contact.clone(recurse=False)
         contact.auto_batch_size_()
-    contact = contact[ncon_fl : ncon_fl + ncon_fr]
+    contact = contact[start_idx : start_idx + count]
     res = fn(contact)
-    # remove contact grouping dimension: flatten (ncon, 4, ...) to (ncon*4, ...)
     j, invweight, pos, solref, solimp = torch.utils._pytree.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), res)
     frictionloss = torch.zeros_like(pos)
 
@@ -488,6 +506,72 @@ def _instantiate_contact(m: Model, d: Data) -> _Efc:
         J=j,
         pos=pos,
         pos_norm=pos,
+        invweight=invweight,
+        solref=solref,
+        solimp=solimp,
+        frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
+    )
+
+
+def _instantiate_contact_elliptic(m: Model, d: Data, condim: int, start_idx: int, count: int) -> _Efc:
+    """Calculates constraint rows for frictional elliptic contacts.
+
+    Each contact produces ``condim`` constraint rows (1 normal + condim-1 friction).
+    """
+
+    @torch.vmap
+    def fn(c: Contact):
+        dist = c.dist - c.includemargin
+        g1 = c.geom1.long().unsqueeze(0)
+        g2 = c.geom2.long().unsqueeze(0)
+        body1 = m.geom_bodyid_t.gather(0, g1).squeeze(0)
+        body2 = m.geom_bodyid_t.gather(0, g2).squeeze(0)
+
+        jacp2, jacr2 = support.jac(m, d, c.pos, body2)
+        jacp1, jacr1 = support.jac(m, d, c.pos, body1)
+        j = c.frame @ (jacp2 - jacp1).T
+        if condim > 3:
+            j = torch.cat((j, (c.frame @ (jacr2 - jacr1).T)[: condim - 3]), dim=0)
+
+        invweight0 = m.body_invweight0[:, 0]
+        t = invweight0.gather(0, body1.unsqueeze(0)).squeeze(0) + invweight0.gather(0, body2.unsqueeze(0)).squeeze(0)
+
+        solreffriction = c.solreffriction + c.solref * ~c.solreffriction.any()
+        solreffriction = solreffriction.unsqueeze(0).expand(condim - 1, -1)
+        solref = torch.cat((c.solref.unsqueeze(0), solreffriction), dim=0)
+
+        fri = torch.square(c.friction[0]) / torch.square(c.friction[1 : condim - 1])
+        iw_normal = t.unsqueeze(0)
+        iw_friction = (t / m.opt.impratio).unsqueeze(0)
+        invweight = torch.cat((iw_normal, iw_friction, iw_friction * fri))
+
+        pos_aref = torch.zeros(condim, dtype=dist.dtype, device=dist.device)
+        pos_aref = pos_aref.scatter(0, torch.zeros(1, dtype=torch.long, device=dist.device), dist.unsqueeze(0))
+
+        solimp = c.solimp.unsqueeze(0).expand(condim, -1)
+
+        active = dist < 0
+        j = j * active
+        pos_aref = pos_aref * active
+
+        return j, invweight, pos_aref, dist.expand(condim), solref, solimp
+
+    contact = d.contact
+    if contact.batch_size != torch.Size([contact.dist.shape[0]]):
+        contact = contact.clone(recurse=False)
+        contact.auto_batch_size_()
+    contact = contact[start_idx : start_idx + count]
+    res = fn(contact)
+    j, invweight, pos, pos_norm, solref, solimp = torch.utils._pytree.tree_map(
+        lambda x: x.reshape(-1, *x.shape[2:]), res
+    )
+    frictionloss = torch.zeros_like(pos)
+
+    return _Efc(
+        J=j,
+        pos=pos,
+        pos_norm=pos_norm,
         invweight=invweight,
         solref=solref,
         solimp=solimp,
@@ -516,9 +600,10 @@ def make_constraint(m: Model, d: Data) -> Data:
     ns = ne + nf + nl
     actual_ncon = d.contact.dist.shape[0]
     has_contacts = ncon > 0 and actual_ncon > 0
+    is_elliptic = m.opt.cone == ConeType.ELLIPTIC
     if has_contacts:
         dims = d.contact.contact_dim
-        rows_per = torch.where(dims == 1, 1, (dims - 1) * 2)
+        rows_per = torch.where(dims == 1, 1, dims if is_elliptic else (dims - 1) * 2)
         offsets = torch.cumsum(
             torch.cat([torch.zeros(1, dtype=rows_per.dtype, device=rows_per.device), rows_per[:-1]]),
             dim=0,
@@ -529,7 +614,7 @@ def make_constraint(m: Model, d: Data) -> Data:
     d = d.tree_replace({"contact.efc_address": efc_address})
 
     precomp = m.constraint_data_py
-    ncon_fl, ncon_fr = m.condim_counts_py
+    ncon_1, ncon_3, ncon_4, ncon_6 = m.condim_counts_py
 
     efcs = []
     if precomp["eq_connect"] is not None:
@@ -546,10 +631,14 @@ def make_constraint(m: Model, d: Data) -> Data:
         efcs.append(_instantiate_limit_slide_hinge(m, d, precomp["limit_slide_hinge"]))
     if precomp["limit_tendon"] is not None:
         efcs.append(_instantiate_limit_tendon(m, d, precomp["limit_tendon"]))
-    if ncon_fl > 0 and has_contacts:
+    if ncon_1 > 0 and has_contacts:
         efcs.append(_instantiate_contact_frictionless(m, d))
-    if ncon_fr > 0 and has_contacts:
-        efcs.append(_instantiate_contact(m, d))
+    con_fn = _instantiate_contact_elliptic if is_elliptic else _instantiate_contact_pyramidal
+    offset = ncon_1
+    for condim, count in ((3, ncon_3), (4, ncon_4), (6, ncon_6)):
+        if count > 0 and has_contacts:
+            efcs.append(con_fn(m, d, condim, offset, count))
+        offset += count
     efcs = tuple(efcs)
 
     if not efcs:
