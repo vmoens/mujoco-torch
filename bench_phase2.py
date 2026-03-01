@@ -94,75 +94,49 @@ def main():
 
     results = {}
 
-    # 1. Baseline (H3+H5 code already active)
     mx = mujoco_torch.device_put(m_mj).to(DEVICE)
-    sps = run_benchmark(
-        "Baseline (H3+H5 active)",
-        mx, m_mj,
-        dict(fullgraph=True),
-    )
-    results["baseline_h3h5"] = sps
-
-    # 2. H8: fixed_iterations=True
-    sps = run_benchmark(
-        "H8: fixed_iterations=True",
-        mx, m_mj,
-        dict(fullgraph=True),
-        step_kwargs=dict(fixed_iterations=True),
-    )
-    results["h8_fixed_iter"] = sps
-
-    # 3. H8 + mode=reduce-overhead (CUDA graph capture should now work)
-    sps = run_benchmark(
-        "H8 + reduce-overhead",
-        mx, m_mj,
-        dict(fullgraph=True, mode="reduce-overhead"),
-        step_kwargs=dict(fixed_iterations=True),
-    )
-    results["h8_reduce_overhead"] = sps
-
-    # 4. H6: float32 mode
     mx_f32 = mujoco_torch.device_put(m_mj, dtype=torch.float32).to(DEVICE)
-    torch.set_default_dtype(torch.float32)
-    sps = run_benchmark(
-        "H6: float32",
-        mx_f32, m_mj,
-        dict(fullgraph=True),
-        dtype=torch.float32,
-    )
-    results["h6_float32"] = sps
 
-    # 5. H6+H8: float32 + fixed_iterations + reduce-overhead
-    sps = run_benchmark(
-        "H6+H8: float32 + fixed_iter + reduce-overhead",
-        mx_f32, m_mj,
-        dict(fullgraph=True, mode="reduce-overhead"),
-        step_kwargs=dict(fixed_iterations=True),
-        dtype=torch.float32,
-    )
-    results["h6_h8_combined"] = sps
+    hypotheses = [
+        ("baseline_h3h5", "Baseline (H3+H5 active)", mx,
+         dict(fullgraph=True), {}, torch.float64),
+        ("h8_fixed_iter", "H8: fixed_iterations=True", mx,
+         dict(fullgraph=True), dict(fixed_iterations=True), torch.float64),
+        ("h8_reduce_overhead", "H8 + reduce-overhead", mx,
+         dict(fullgraph=True, mode="reduce-overhead"),
+         dict(fixed_iterations=True), torch.float64),
+        ("h6_float32", "H6: float32", mx_f32,
+         dict(fullgraph=True), {}, torch.float32),
+        ("h6_h8_combined", "H6+H8: float32 + fixed_iter + reduce-overhead",
+         mx_f32, dict(fullgraph=True, mode="reduce-overhead"),
+         dict(fixed_iterations=True), torch.float32),
+    ]
 
-    # 6. Best combined: float32 + fixed_iter + reduce-overhead + inductor tuning
-    inductor_config.coordinate_descent_tuning = True
-    inductor_config.aggressive_fusion = True
-    sps = run_benchmark(
-        "ALL: f32 + fixed + reduce-overhead + inductor",
-        mx_f32, m_mj,
-        dict(fullgraph=True, mode="reduce-overhead"),
-        step_kwargs=dict(fixed_iterations=True),
-        dtype=torch.float32,
-    )
-    results["all_combined"] = sps
-    inductor_config.coordinate_descent_tuning = False
-    inductor_config.aggressive_fusion = False
-    torch.set_default_dtype(torch.float64)
+    for key, label, model, compile_kwargs, step_kwargs, dtype in hypotheses:
+        torch.set_default_dtype(dtype)
+        try:
+            sps = run_benchmark(label, model, m_mj, compile_kwargs,
+                                step_kwargs=step_kwargs, dtype=dtype)
+            results[key] = sps
+        except Exception as e:
+            print(f"  {label}: FAILED — {e}", flush=True)
+            results[key] = None
+        torch.set_default_dtype(torch.float64)
 
     # Summary
     print("\n" + "=" * 70)
     print("  PHASE 2 RESULTS SUMMARY")
     print("=" * 70)
+    baseline = results.get("baseline_h3h5")
     for k, v in results.items():
-        print(f"  {k:50s}  {v:>12,.0f} steps/s")
+        if v is None:
+            print(f"  {k:50s}  {'FAILED':>12s}")
+        elif baseline:
+            delta = (v / baseline - 1) * 100
+            sign = "+" if delta >= 0 else ""
+            print(f"  {k:50s}  {v:>12,.0f} steps/s  ({sign}{delta:.1f}%)")
+        else:
+            print(f"  {k:50s}  {v:>12,.0f} steps/s")
     print("=" * 70, flush=True)
 
 

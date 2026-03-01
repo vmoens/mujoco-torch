@@ -148,68 +148,52 @@ def main():
 
     results = {}
 
-    # Baseline
-    sps, compiled_fn, _ = run_benchmark(
-        "Baseline (fullgraph=True)",
-        mx, m_mj,
-        dict(fullgraph=True),
-    )
-    results["baseline"] = sps
+    hypotheses = [
+        ("baseline", "Baseline (fullgraph=True)", dict(fullgraph=True), {}, {}),
+        ("h1_reduce_overhead", "H1: reduce-overhead",
+         dict(fullgraph=True, mode="reduce-overhead"), {}, {}),
+        ("h2_matmul_precision", "H2: matmul precision (high)",
+         dict(fullgraph=True), {"float32_matmul_precision": "high"}, {}),
+        ("h4_inductor_config", "H4: inductor config (cd_tuning + aggressive_fusion)",
+         dict(fullgraph=True), {},
+         {"coordinate_descent_tuning": True, "aggressive_fusion": True}),
+        ("h1_h4_combined", "H1+H4: reduce-overhead + inductor config",
+         dict(fullgraph=True, mode="reduce-overhead"), {},
+         {"coordinate_descent_tuning": True, "aggressive_fusion": True}),
+    ]
 
-    # H9: Profile — skipped for now (triggers recompilation under profiler context)
-    # run_profiling(compiled_fn, mx, m_mj)
+    for key, label, compile_kwargs, torch_settings, inductor_settings in hypotheses:
+        if torch_settings.get("float32_matmul_precision"):
+            torch.set_float32_matmul_precision(torch_settings["float32_matmul_precision"])
+        for k, v in inductor_settings.items():
+            setattr(inductor_config, k, v)
 
-    # H1: reduce-overhead
-    sps, _, _ = run_benchmark(
-        "H1: reduce-overhead",
-        mx, m_mj,
-        dict(fullgraph=True, mode="reduce-overhead"),
-    )
-    results["h1_reduce_overhead"] = sps
+        try:
+            sps, _, _ = run_benchmark(label, mx, m_mj, compile_kwargs)
+            results[key] = sps
+        except Exception as e:
+            print(f"  {label}: FAILED — {e}", flush=True)
+            results[key] = None
 
-    # H2: matmul precision
-    torch.set_float32_matmul_precision("high")
-    sps, _, _ = run_benchmark(
-        "H2: matmul precision (high)",
-        mx, m_mj,
-        dict(fullgraph=True),
-    )
-    results["h2_matmul_precision"] = sps
-    torch.set_float32_matmul_precision("highest")
-
-    # H4: inductor config
-    inductor_config.coordinate_descent_tuning = True
-    inductor_config.aggressive_fusion = True
-    sps, _, _ = run_benchmark(
-        "H4: inductor config (cd_tuning + aggressive_fusion)",
-        mx, m_mj,
-        dict(fullgraph=True),
-    )
-    results["h4_inductor_config"] = sps
-    inductor_config.coordinate_descent_tuning = False
-    inductor_config.aggressive_fusion = False
-
-    # H1+H4 combined
-    inductor_config.coordinate_descent_tuning = True
-    inductor_config.aggressive_fusion = True
-    sps, _, _ = run_benchmark(
-        "H1+H4: reduce-overhead + inductor config",
-        mx, m_mj,
-        dict(fullgraph=True, mode="reduce-overhead"),
-    )
-    results["h1_h4_combined"] = sps
-    inductor_config.coordinate_descent_tuning = False
-    inductor_config.aggressive_fusion = False
+        torch.set_float32_matmul_precision("highest")
+        for k in inductor_settings:
+            setattr(inductor_config, k, False)
 
     # Summary
     print(f"\n{'='*70}", flush=True)
     print("  SUMMARY", flush=True)
     print(f"{'='*70}", flush=True)
-    baseline = results["baseline"]
+    baseline = results.get("baseline")
     for name, sps in results.items():
-        delta = (sps / baseline - 1) * 100
-        sign = "+" if delta >= 0 else ""
-        print(f"  {name:45s}  {sps:>12,.0f} steps/s  ({sign}{delta:.1f}%)", flush=True)
+        if sps is None:
+            print(f"  {name:45s}  {'FAILED':>12s}")
+        elif baseline:
+            delta = (sps / baseline - 1) * 100
+            sign = "+" if delta >= 0 else ""
+            print(f"  {name:45s}  {sps:>12,.0f} steps/s  ({sign}{delta:.1f}%)")
+        else:
+            print(f"  {name:45s}  {sps:>12,.0f} steps/s")
+    print(flush=True)
 
 
 if __name__ == "__main__":
