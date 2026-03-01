@@ -820,32 +820,37 @@ def _resolve_device_from_result(result):
 
 
 def _model_to(self, *args, **kwargs):
-    """Move Model to a device, resolving cached index tensors to avoid DeviceCopy."""
+    """Move Model to a device, pre-warming cached index tensors."""
     result = MjTensorClass.to(self, *args, **kwargs)
     device = _resolve_device_from_result(result)
     if device is None:
         return result
     from mujoco_torch._src.scan import (  # circular dep
-        _resolve_cached_tensors,
+        _DeviceCachedTensor,
         warm_device_caches,
     )
     if hasattr(result, "cache_id"):
         warm_device_caches(result.cache_id, device)
-    _resolvable_attrs = (
+
+    def _warm(obj):
+        """Pre-populate _DeviceCachedTensor caches without replacing structures."""
+        if isinstance(obj, _DeviceCachedTensor):
+            obj.to(device)
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                _warm(v)
+        elif isinstance(obj, (list, tuple)):
+            for v in obj:
+                _warm(v)
+
+    for attr in (
         "factor_m_updates",
         "solve_m_updates_j",
         "solve_m_updates_i",
         "constraint_data_py",
         "collision_groups_py",
-        "sensor_groups_pos_py",
-        "sensor_groups_vel_py",
-        "sensor_groups_acc_py",
-    )
-    for attr in _resolvable_attrs:
-        val = getattr(result, attr, None)
-        if val is not None:
-            resolved = _resolve_cached_tensors(val, device)
-            result._tensordict._tensordict[attr] = resolved
+    ):
+        _warm(getattr(result, attr, None))
     return result
 
 
