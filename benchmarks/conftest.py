@@ -49,7 +49,6 @@ def _gpu_setup(worker_id):
 
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     torch.cuda.set_device(0)
-    torch.set_default_device("cuda")
 
 
 # ---------------------------------------------------------------------------
