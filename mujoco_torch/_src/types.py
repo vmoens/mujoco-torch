@@ -846,22 +846,22 @@ class Contact(MjTensorClass):
     efc_address: torch.Tensor
 
     @classmethod
-    def zero(cls, shape=(0,)) -> "Contact":
+    def zero(cls, shape=(0,), device=None) -> "Contact":
         """Returns a contact filled with zeros."""
         return Contact(
-            dist=torch.zeros(shape),
-            pos=torch.zeros(shape + (3,)),
-            frame=torch.zeros(shape + (3, 3)),
-            includemargin=torch.zeros(shape),
-            friction=torch.zeros(shape + (5,)),
-            solref=torch.zeros(shape + (mujoco.mjNREF,)),
-            solreffriction=torch.zeros(shape + (mujoco.mjNREF,)),
-            solimp=torch.zeros(shape + (mujoco.mjNIMP,)),
-            contact_dim=torch.zeros(shape, dtype=torch.int32),
-            geom1=torch.zeros(shape, dtype=torch.int32),
-            geom2=torch.zeros(shape, dtype=torch.int32),
-            geom=torch.zeros(shape + (2,), dtype=torch.int32),
-            efc_address=torch.zeros(shape, dtype=torch.int32),
+            dist=torch.zeros(shape, device=device),
+            pos=torch.zeros(shape + (3,), device=device),
+            frame=torch.zeros(shape + (3, 3), device=device),
+            includemargin=torch.zeros(shape, device=device),
+            friction=torch.zeros(shape + (5,), device=device),
+            solref=torch.zeros(shape + (mujoco.mjNREF,), device=device),
+            solreffriction=torch.zeros(shape + (mujoco.mjNREF,), device=device),
+            solimp=torch.zeros(shape + (mujoco.mjNIMP,), device=device),
+            contact_dim=torch.zeros(shape, dtype=torch.int32, device=device),
+            geom1=torch.zeros(shape, dtype=torch.int32, device=device),
+            geom2=torch.zeros(shape, dtype=torch.int32, device=device),
+            geom=torch.zeros(shape + (2,), dtype=torch.int32, device=device),
+            efc_address=torch.zeros(shape, dtype=torch.int32, device=device),
             batch_size=list(shape),
         )
 

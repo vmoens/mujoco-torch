@@ -431,7 +431,7 @@ def _collide_hfield_geoms(
         geom1=geom1_t,
         geom2=geom2_t,
         geom=torch.stack([geom1_t, geom2_t], dim=-1),
-        efc_address=torch.full((dist.shape[0],), -1, dtype=torch.int64),
+        efc_address=torch.full((dist.shape[0],), -1, dtype=torch.int64, device=dist.device),
         batch_size=[dist.shape[0]],
     )
 
@@ -507,13 +507,13 @@ def _collide_geoms(
     """Collides a geom pair."""
     if fn is None:
         fn = get_collision_fn(geom_types)
+    device = d.geom_xpos.device
+
     if not fn:
-        return Contact.zero()
+        return Contact.zero(device=device)
 
     if geom_types[0] == GeomType.HFIELD:
         return _collide_hfield_geoms(m, d, candidates, fn)
-
-    device = d.geom_xpos.device
 
     # Resolve pre-computed index tensors to the right device.
     geom1_t = precomp["geom1_t"].to(device)
@@ -564,7 +564,7 @@ def _collide_geoms(
         geom1=geom1_t,
         geom2=geom2_t,
         geom=torch.stack([geom1_t, geom2_t], dim=-1),
-        efc_address=torch.full((dist.shape[0],), -1, dtype=torch.int64),
+        efc_address=torch.full((dist.shape[0],), -1, dtype=torch.int64, device=dist.device),
         batch_size=[dist.shape[0]],
     )
 
@@ -697,7 +697,7 @@ def collision(m: Model, d: Data) -> Data:
     total = m.collision_total_contacts_py
 
     if ncon_ == 0:
-        return d.replace(contact=Contact.zero(), ncon=torch.zeros((), dtype=torch.int32, device=d.qpos.device))
+        return d.replace(contact=Contact.zero(device=d.qpos.device), ncon=torch.zeros((), dtype=torch.int32, device=d.qpos.device))
 
     contacts = []
     for fn, geom_types, candidates, precomp in collision_groups:
