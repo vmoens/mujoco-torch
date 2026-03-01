@@ -24,6 +24,26 @@ _DATATYPE_REAL = int(mujoco.mjtDataType.mjDATATYPE_REAL)
 _DATATYPE_POSITIVE = int(mujoco.mjtDataType.mjDATATYPE_POSITIVE)
 
 
+def _groups_to_device(groups: tuple, device: torch.device) -> tuple:
+    """Move all tensors buried in sensor-group dicts to *device*.
+
+    Sensor groups are tuple-typed TensorClass fields, so Model.to() can't
+    reach the tensors inside.  Call this once before iterating over groups.
+    """
+
+    def _move(obj):
+        if isinstance(obj, torch.Tensor):
+            return obj.to(device)
+        if isinstance(obj, dict):
+            return {k: _move(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            moved = [_move(v) for v in obj]
+            return type(obj)(moved)
+        return obj
+
+    return _move(groups)
+
+
 def _apply_cutoff(sensor: torch.Tensor, cutoff: torch.Tensor, data_type: int) -> torch.Tensor:
     """Clip sensor to cutoff value."""
 
@@ -64,11 +84,12 @@ def sensor_pos(m: Model, d: Data) -> Data:
         SensorType.FRAMEZAXIS: 2,
     }
 
+    groups = _groups_to_device(m.sensor_groups_pos_py, _dev)
     sensors, adrs = [], []
 
-    for group in m.sensor_groups_pos_py:
+    for group in groups:
         sensor_type = group["type"]
-        adr = group["adr"].to(_dev)
+        adr = group["adr"]
         cutoff = group["cutoff"]
         data_type = group["data_type"]
         objid = group["objid"]
@@ -89,7 +110,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 )(ray_precomp, d, site_xpos, site_mat)
                 sensor = dist
                 sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type))
-                adrs.append(sub["adr"].to(_dev))
+                adrs.append(sub["adr"])
             continue
         elif sensor_type == SensorType.JOINTPOS:
             sensor = d.qpos[group["qposadr"]]
@@ -117,7 +138,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 xmat_ref = xmat_ref[sub_refid]
                 sub_cutoff = sub["cutoff"]
                 sensor = torch.vmap(_framepos)(xpos, xpos_ref, xmat_ref, sub_refid)
-                adrt = sub["adr"].to(_dev)[:, None] + torch.arange(3, device=_dev)
+                adrt = sub["adr"][:, None] + torch.arange(3, device=_dev)
                 sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type).reshape(-1))
                 adrs.append(adrt.reshape(-1))
             continue
@@ -137,7 +158,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 xmat_ref = xmat_ref[sub_refid]
                 sub_cutoff = sub["cutoff"]
                 sensor = torch.vmap(_frameaxis)(xmat, xmat_ref, sub_refid)
-                adrt = sub["adr"].to(_dev)[:, None] + torch.arange(3, device=_dev)
+                adrt = sub["adr"][:, None] + torch.arange(3, device=_dev)
                 sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type).reshape(-1))
                 adrs.append(adrt.reshape(-1))
             continue
@@ -169,7 +190,7 @@ def sensor_pos(m: Model, d: Data) -> Data:
                 sensor = torch.vmap(lambda q, r, rid: torch.where(rid == -1, q, math.quat_mul(math.quat_inv(r), q)))(
                     quat, refquat, sub_refid
                 )
-                adrt = sub["adr"].to(_dev)[:, None] + torch.arange(4, device=_dev)
+                adrt = sub["adr"][:, None] + torch.arange(4, device=_dev)
                 sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type).reshape(-1))
                 adrs.append(adrt.reshape(-1))
             continue
@@ -201,7 +222,7 @@ def sensor_vel(m: Model, d: Data) -> Data:
         return d
 
     _dev = d.qpos.device
-    groups = m.sensor_groups_vel_py
+    groups = _groups_to_device(m.sensor_groups_vel_py, _dev)
     group_types = {g["type"] for g in groups}
 
     if group_types & {SensorType.SUBTREELINVEL, SensorType.SUBTREEANGMOM}:
@@ -211,7 +232,7 @@ def sensor_vel(m: Model, d: Data) -> Data:
     sensors, adrs = [], []
     for group in groups:
         sensor_type = group["type"]
-        adr = group["adr"].to(_dev)
+        adr = group["adr"]
         cutoff = group["cutoff"]
         data_type = group["data_type"]
         objid = group["objid"]
@@ -270,7 +291,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
         return d
 
     _dev = d.qpos.device
-    groups = m.sensor_groups_acc_py
+    groups = _groups_to_device(m.sensor_groups_acc_py, _dev)
     group_types = {g["type"] for g in groups}
 
     if group_types & {
@@ -286,7 +307,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
     sensors, adrs = [], []
     for group in groups:
         sensor_type = group["type"]
-        adr = group["adr"].to(_dev)
+        adr = group["adr"]
         cutoff = group["cutoff"]
         data_type = group["data_type"]
         objid = group["objid"]
