@@ -23,9 +23,12 @@ def clear_compile_caches():
     torch.compiler.reset()
     gc.collect()
     torch.cuda.empty_cache()
-    cache_dir = torch._inductor.config.cache_dir
-    if cache_dir:
-        shutil.rmtree(cache_dir, ignore_errors=True)
+    for candidate in [
+        getattr(torch._inductor.config, "cache_dir", None),
+        "/tmp/torchinductor_root",
+    ]:
+        if candidate:
+            shutil.rmtree(candidate, ignore_errors=True)
 
 DEVICE = "cuda"
 B = 32768
