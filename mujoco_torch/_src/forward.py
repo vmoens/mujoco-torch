@@ -236,17 +236,17 @@ def _advance(
         act = scan.flat(m, fn, "au", "a", act, actrange, group_by="u")
 
     # advance velocities
-    d = d.replace(qvel=d.qvel + qacc * m.opt.timestep)
+    new_qvel = d.qvel + qacc * m.opt.timestep
 
-    # advance positions with qvel if given, d.qvel otherwise (semi-implicit)
-    qvel = d.qvel if qvel is None else qvel
+    # advance positions with qvel if given, new_qvel otherwise (semi-implicit)
+    qvel_for_pos = new_qvel if qvel is None else qvel
     integrate_fn = lambda *args: _integrate_pos(*args, dt=m.opt.timestep)
-    qpos = scan.flat(m, integrate_fn, "jqv", "q", m.jnt_type, d.qpos, qvel)
+    qpos = scan.flat(m, integrate_fn, "jqv", "q", m.jnt_type, d.qpos, qvel_for_pos)
 
     # advance time
     time = d.time + m.opt.timestep
 
-    return d.replace(act=act, qpos=qpos, time=time)
+    return d.replace(qvel=new_qvel, act=act, qpos=qpos, time=time)
 
 
 def _euler(m: Model, d: Data) -> Data:
@@ -267,7 +267,7 @@ def _euler(m: Model, d: Data) -> Data:
     return _advance(m, d, d.act_dot, qacc)
 
 
-def _rungekutta4(m: Model, d: Data) -> Data:
+def _rungekutta4(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     """Runge-Kutta explicit order 4 integrator."""
     d_t0 = d
     # pylint: disable=invalid-name
@@ -295,7 +295,7 @@ def _rungekutta4(m: Model, d: Data) -> Data:
         kact = d_t0.act + dact_dot * m.opt.timestep
         kqvel = d_t0.qvel + dqacc * m.opt.timestep
         d = d.replace(qpos=kqpos, qvel=kqvel, act=kact, time=t)
-        d = forward(m, d)
+        d = forward(m, d, fixed_iterations=fixed_iterations)
 
         qvel = qvel + b * kqvel
         qacc = qacc + b * d.qacc
@@ -305,8 +305,16 @@ def _rungekutta4(m: Model, d: Data) -> Data:
     return d
 
 
-def forward(m: Model, d: Data) -> Data:
-    """Forward dynamics."""
+def forward(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
+    """Forward dynamics.
+
+    Args:
+      m: Model.
+      d: Data.
+      fixed_iterations: when True, the constraint solver runs a fixed number
+        of iterations (no early termination), producing a static computation
+        graph suitable for CUDA graph capture.
+    """
     d = _position(m, d)
     d = sensor.sensor_pos(m, d)
     d = _velocity(m, d)
@@ -318,7 +326,7 @@ def forward(m: Model, d: Data) -> Data:
         d = d.replace(qacc=d.qacc_smooth)
         return d
 
-    d = solver.solve(m, d)
+    d = solver.solve(m, d, fixed_iterations=fixed_iterations)
     d = sensor.sensor_acc(m, d)
 
     return d
@@ -339,14 +347,22 @@ def _implicit(m: Model, d: Data) -> Data:
     return _advance(m, d, d.act_dot, qacc)
 
 
-def step(m: Model, d: Data) -> Data:
-    """Advance simulation."""
-    d = forward(m, d)
+def step(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
+    """Advance simulation.
+
+    Args:
+      m: Model.
+      d: Data.
+      fixed_iterations: when True, the constraint solver runs a fixed number
+        of iterations (no early termination), producing a static computation
+        graph suitable for CUDA graph capture.
+    """
+    d = forward(m, d, fixed_iterations=fixed_iterations)
 
     if m.opt.integrator == IntegratorType.EULER:
         d = _euler(m, d)
     elif m.opt.integrator == IntegratorType.RK4:
-        d = _rungekutta4(m, d)
+        d = _rungekutta4(m, d, fixed_iterations=fixed_iterations)
     elif m.opt.integrator == IntegratorType.IMPLICITFAST:
         d = _implicit(m, d)
     else:

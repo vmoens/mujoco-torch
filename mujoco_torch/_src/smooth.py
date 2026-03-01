@@ -116,18 +116,18 @@ def kinematics(m: Model, d: Data) -> Data:
     v_local_to_global = torch.vmap(support.local_to_global)
 
     xipos, ximat = v_local_to_global(xpos, xquat, m.body_ipos, m.body_iquat)
-    d = d.replace(qpos=qpos, xanchor=xanchor, xaxis=xaxis, xpos=xpos)
-    d = d.replace(xquat=xquat, xmat=xmat, xipos=xipos, ximat=ximat)
+    kwargs = dict(qpos=qpos, xanchor=xanchor, xaxis=xaxis, xpos=xpos,
+                  xquat=xquat, xmat=xmat, xipos=xipos, ximat=ximat)
 
     if m.ngeom:
         geom_xpos, geom_xmat = v_local_to_global(xpos[m.geom_bodyid_t], xquat[m.geom_bodyid_t], m.geom_pos, m.geom_quat)
-        d = d.replace(geom_xpos=geom_xpos, geom_xmat=geom_xmat)
+        kwargs.update(geom_xpos=geom_xpos, geom_xmat=geom_xmat)
 
     if m.nsite:
         site_xpos, site_xmat = v_local_to_global(xpos[m.site_bodyid_t], xquat[m.site_bodyid_t], m.site_pos, m.site_quat)
-        d = d.replace(site_xpos=site_xpos, site_xmat=site_xmat)
+        kwargs.update(site_xpos=site_xpos, site_xmat=site_xmat)
 
-    return d
+    return d.replace(**kwargs)
 
 
 def com_pos(m: Model, d: Data) -> Data:
@@ -148,7 +148,6 @@ def com_pos(m: Model, d: Data) -> Data:
         d.xipos,
         torch.vmap(torch.divide)(pos, torch.maximum(mass, _MJMINVAL.get(mass.dtype, mass.device))),
     )
-    d = d.replace(subtree_com=subtree_com)
 
     # map inertias to frame centered at subtree_com
     @torch.vmap
@@ -163,7 +162,6 @@ def com_pos(m: Model, d: Data) -> Data:
     root_com = subtree_com[m.body_rootid_t]
     offset = d.xipos - root_com
     cinert = inert_com(m.body_inertia, d.ximat, offset, m.body_mass)
-    d = d.replace(cinert=cinert)
 
     # map motion dofs to global frame centered at subtree_com
     def cdof_fn(jnt_typs, root_com, xmat, xanchor, xaxis):
@@ -202,9 +200,8 @@ def com_pos(m: Model, d: Data) -> Data:
         d.xanchor,
         d.xaxis,
     )
-    d = d.replace(cdof=cdof)
 
-    return d
+    return d.replace(subtree_com=subtree_com, cinert=cinert, cdof=cdof)
 
 
 def crb(m: Model, d: Data) -> Data:
@@ -218,14 +215,12 @@ def crb(m: Model, d: Data) -> Data:
     crb_body = scan.body_tree(m, crb_fn, "b", "b", d.cinert, reverse=True)
     crb_body = crb_body.clone()
     crb_body[0] = 0.0
-    d = d.replace(crb=crb_body)
 
     crb_dof = crb_body[m.dof_bodyid_t]
     crb_cdof = torch.vmap(math.inert_mul)(crb_dof, d.cdof)
     qm = support.make_m(m, crb_cdof, d.cdof, m.dof_armature)
-    d = d.replace(qM=qm)
 
-    return d
+    return d.replace(crb=crb_body, qM=qm)
 
 
 def factor_m(m: Model, d: Data) -> Data:

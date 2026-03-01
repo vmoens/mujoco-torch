@@ -555,8 +555,8 @@ def make_constraint(m: Model, d: Data) -> Data:
     if not efcs:
         _dev = d.qpos.device
         z = torch.empty(0, device=_dev)
-        d = d.replace(efc_J=torch.empty((0, m.nv), device=_dev))
-        d = d.replace(efc_D=z, efc_aref=z, efc_frictionloss=z, nefc=_ZERO_I32.get(torch.int32, _dev))
+        d = d.replace(efc_J=torch.empty((0, m.nv), device=_dev),
+                      efc_D=z, efc_aref=z, efc_frictionloss=z, nefc=_ZERO_I32.get(torch.int32, _dev))
         return d
 
     efc = torch.cat(list(efcs))
@@ -573,10 +573,8 @@ def make_constraint(m: Model, d: Data) -> Data:
         return aref, r
 
     aref, r = fn(efc)
-    d = d.replace(efc_J=efc.J, efc_D=1 / r, efc_aref=aref)
-    d = d.replace(
-        efc_frictionloss=efc.frictionloss,
-        nefc=torch.full((), r.shape[0], dtype=torch.int32, device=r.device),
-    )
+    d = d.replace(efc_J=efc.J, efc_D=1 / r, efc_aref=aref,
+                  efc_frictionloss=efc.frictionloss,
+                  nefc=torch.full((), r.shape[0], dtype=torch.int32, device=r.device))
 
     return d
