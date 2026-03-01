@@ -26,6 +26,14 @@ _MJMINVAL = _CachedConst(mujoco.mjMINVAL)
 _ONE = _CachedConst(1.0)
 _ZERO_I32 = _CachedConst(0, dtype=torch.int32)
 
+# Alternating +1/-1 signs for pyramidal friction edges, one pair per
+# friction direction.  Keyed by condim so the constant is never
+# re-allocated inside torch.vmap / torch.compile.
+_PYRAMID_SIGNS = {
+    condim: _CachedConst([1.0, -1.0] * (condim - 1))
+    for condim in (3, 4, 6)
+}
+
 
 def _vmap_index(tensor: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
     """Vmap-compatible indexing: tensor[idx] for scalar idx inside vmap."""
@@ -468,10 +476,13 @@ def _instantiate_contact_pyramidal(m: Model, d: Data, condim: int, start_idx: in
         t = invweight0.gather(0, body1.unsqueeze(0)).squeeze(0) + invweight0.gather(0, body2.unsqueeze(0)).squeeze(0)
 
         fri = c.friction[: condim - 1].repeat_interleave(2)
-        fri = fri * torch.tensor([1.0, -1.0] * (condim - 1), dtype=fri.dtype, device=fri.device)
+        fri = fri * _PYRAMID_SIGNS[condim].get(fri.dtype, fri.device)
         j = diff[0] + diff[1:condim].repeat_interleave(2, dim=0) * fri.unsqueeze(1)
 
-        invweight = (t + fri[0] * fri[0] * t) * 2 * fri[0] * fri[0] / m.opt.impratio
+        # MuJoCo C uses mu = friction[0] for all pyramid-edge invweights,
+        # regardless of per-direction coefficients (mj_constraint.c).
+        mu = c.friction[0]
+        invweight = (t + mu * mu * t) * 2 * mu * mu / m.opt.impratio
 
         active = dist < 0
         j = j * active

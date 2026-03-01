@@ -2,10 +2,11 @@
 """TorchRL integration example for mujoco-torch.
 
 Demonstrates wrapping mujoco-torch in a **batched** TorchRL EnvBase with
-``batch_size=[num_envs]``.  Each call to ``_step`` advances all environments.
+``batch_size=[num_envs]``.  Each call to ``_step`` advances all environments
+in parallel via ``torch.vmap``.
 
-On GPU, the loop can be replaced with ``torch.compile(torch.vmap(step))``
-for true batch parallelism — see ``examples/batched_comparison.py``.
+On GPU, wrap the vmap step with ``torch.compile`` for further speedups --
+see ``examples/batched_comparison.py``.
 
 Run:
     pip install torchrl
@@ -108,11 +109,8 @@ class MujocoTorchEnv(EnvBase):
     def _step(self, tensordict):
         action = tensordict["action"].to(self.dtype)
 
-        results = []
-        for i in range(self.num_envs):
-            dx_i = self._dx[i].replace(ctrl=action[i])
-            results.append(mujoco_torch.step(self.mx, dx_i))
-        self._dx = torch.stack(results)
+        self._dx = self._dx.replace(ctrl=action)
+        self._dx = torch.vmap(lambda d: mujoco_torch.step(self.mx, d))(self._dx)
         self._step_count += 1
 
         ctrl_cost = 0.5 * (action**2).sum(dim=-1, keepdim=True)
