@@ -115,7 +115,7 @@ class ConstraintTest(parameterized.TestCase):
 
         mx = mujoco_torch.device_put(m)
         dx = mujoco_torch.device_put(d)
-        precomp = mx.constraint_data_py["limit_slide_hinge"]
+        precomp = mx._device_precomp["constraint_data_py"]["limit_slide_hinge"]
         self.assertIsNotNone(precomp)
         efc = constraint._instantiate_limit_slide_hinge(mx, dx, precomp)
 
@@ -255,7 +255,7 @@ class ConstraintTest(parameterized.TestCase):
         d = mujoco.MjData(m)
         mx = mujoco_torch.device_put(m)
         dx = mujoco_torch.device_put(d)
-        precomp = mx.constraint_data_py["friction"]
+        precomp = mx._device_precomp["constraint_data_py"]["friction"]
         self.assertIsNotNone(precomp)
         efc = constraint._instantiate_friction(mx, dx, precomp)
 

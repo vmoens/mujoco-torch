@@ -1,37 +1,78 @@
-"""Benchmark fixtures: device parametrization, model loading, batch creation."""
+"""Benchmark fixtures: GPU assignment, state cleanup, model/batch parametrization."""
 
+import gc
 import os
 
 import pytest
 import torch
+import torch._inductor.config as inductor_config
+
+ALL_MODELS = ["humanoid", "ant", "halfcheetah", "walker2d", "hopper"]
+BATCH_SIZES = [32768, 4096, 1024, 128, 1]
+
 
 # ---------------------------------------------------------------------------
-# Device parametrization
+# --parallel flag: activates pytest-xdist with one worker per GPU
 # ---------------------------------------------------------------------------
 
 
-def _available_devices():
-    devices = ["cpu"]
+def pytest_addoption(parser):
+    parser.addoption(
+        "--parallel",
+        action="store_true",
+        default=False,
+        help="Run benchmarks in parallel across GPUs (requires pytest-xdist)",
+    )
+
+
+def pytest_configure(config):
+    if config.getoption("--parallel", default=False):
+        n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
+        config.option.numprocesses = n_gpus
+
+
+# ---------------------------------------------------------------------------
+# GPU assignment (one dedicated GPU per xdist worker)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _gpu_setup(worker_id):
+    """Assign a dedicated GPU based on xdist worker ID."""
+    torch.set_default_dtype(torch.float64)
+
+    if not torch.cuda.is_available():
+        return
+
+    gpu_id = 0
+    if worker_id != "master":
+        gpu_id = int(worker_id.replace("gw", "")) % torch.cuda.device_count()
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    torch.cuda.set_device(0)
+
+
+# ---------------------------------------------------------------------------
+# Per-test cleanup (isolation without subprocess overhead)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clean_state():
+    """Reset compile caches, inductor config, and free GPU memory between tests."""
+    torch._dynamo.reset()
+    torch.compiler.reset()
+    inductor_config.coordinate_descent_tuning = False
+    inductor_config.aggressive_fusion = False
+    gc.collect()
     if torch.cuda.is_available():
-        devices.append("cuda")
-    if torch.backends.mps.is_available() and os.environ.get("MUJOCO_TORCH_DISABLE_MPS") != "1":
-        devices.append("mps")
-    return devices
-
-
-@pytest.fixture(params=_available_devices(), scope="session")
-def device(request):
-    """Yield each available device string, augmenting MPS errors with a hint."""
-    dev = request.param
-    if dev == "mps":
-        try:
-            yield dev
-        except Exception as exc:
-            raise type(exc)(
-                f"{exc}\n\nMPS failure — to disable MPS benchmarks, set MUJOCO_TORCH_DISABLE_MPS=1"
-            ) from exc
-    else:
-        yield dev
+        torch.cuda.empty_cache()
+    yield
+    inductor_config.coordinate_descent_tuning = False
+    inductor_config.aggressive_fusion = False
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -39,12 +80,12 @@ def device(request):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(params=["ant.xml", "humanoid.xml"], scope="session")
+@pytest.fixture(params=ALL_MODELS)
 def model_name(request):
     return request.param
 
 
-@pytest.fixture(params=[1, 64, 256, 1024], scope="session")
+@pytest.fixture(params=BATCH_SIZES)
 def batch_size(request):
     return request.param
 

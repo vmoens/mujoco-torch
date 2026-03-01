@@ -431,7 +431,7 @@ def _collide_hfield_geoms(
         geom1=geom1_t,
         geom2=geom2_t,
         geom=torch.stack([geom1_t, geom2_t], dim=-1),
-        efc_address=torch.full((dist.shape[0],), -1, dtype=torch.int64),
+        efc_address=torch.full((dist.shape[0],), -1, dtype=torch.int64, device=dist.device),
         batch_size=[dist.shape[0]],
     )
 
@@ -507,23 +507,21 @@ def _collide_geoms(
     """Collides a geom pair."""
     if fn is None:
         fn = get_collision_fn(geom_types)
+    device = d.geom_xpos.device
+
     if not fn:
-        return Contact.zero()
+        return Contact.zero(device=device)
 
     if geom_types[0] == GeomType.HFIELD:
         return _collide_hfield_geoms(m, d, candidates, fn)
 
-    device = d.geom_xpos.device
-
-    # Resolve pre-computed index tensors to the right device.
-    geom1_t = precomp["geom1_t"].to(device)
-    geom2_t = precomp["geom2_t"].to(device)
-    contact_dim = precomp["contact_dim_t"].to(device)
+    geom1_t = precomp["geom1_t"]
+    geom2_t = precomp["geom2_t"]
+    contact_dim = precomp["contact_dim_t"]
 
     params = []
     for params_fn, indices in precomp["param_groups"]:
-        device_indices = {k: v.to(device) for k, v in indices.items()}
-        params.append(params_fn(m, **device_indices))
+        params.append(params_fn(m, **indices))
 
     g1, g2, in_axes = _pair_info(
         m,
@@ -564,7 +562,7 @@ def _collide_geoms(
         geom1=geom1_t,
         geom2=geom2_t,
         geom=torch.stack([geom1_t, geom2_t], dim=-1),
-        efc_address=torch.full((dist.shape[0],), -1, dtype=torch.int64),
+        efc_address=torch.full((dist.shape[0],), -1, dtype=torch.int64, device=dist.device),
         batch_size=[dist.shape[0]],
     )
 
@@ -691,13 +689,14 @@ def constraint_sizes(m: Model) -> tuple[int, int, int, int, int]:
 
 def collision(m: Model, d: Data) -> Data:
     """Collides geometries."""
-    collision_groups = m.collision_groups_py
+    collision_groups = m._device_precomp["collision_groups_py"]
     ncon_ = m.constraint_sizes_py[3]
     max_cp = m.collision_max_cp_py
     total = m.collision_total_contacts_py
 
     if ncon_ == 0:
-        return d.replace(contact=Contact.zero(), ncon=torch.zeros((), dtype=torch.int32, device=d.qpos.device))
+        d.update_(contact=Contact.zero(device=d.qpos.device), ncon=torch.zeros((), dtype=torch.int32, device=d.qpos.device))
+        return d
 
     contacts = []
     for fn, geom_types, candidates, precomp in collision_groups:
@@ -727,4 +726,5 @@ def collision(m: Model, d: Data) -> Data:
         efc_address=(ns + offsets).to(torch.int64),
     )
 
-    return d.replace(contact=contact, ncon=torch.full((), ncon_, dtype=torch.int32, device=contact.dist.device))
+    d.update_(contact=contact, ncon=torch.full((), ncon_, dtype=torch.int32, device=contact.dist.device))
+    return d

@@ -20,22 +20,6 @@ import mujoco
 
 # pylint: enable=g-importing-member
 import torch
-from torch._higher_order_ops.scan import scan as _torch_scan
-
-
-def torch_scan(f, init, xs, dim=0):
-    """Scan that dispatches to torch higher-order op when compiling."""
-    if torch.compiler.is_compiling():
-        return _torch_scan(f, init, xs, dim=dim)
-    carry = init
-    ys = []
-    for i in range(xs.shape[dim]):
-        x_i = xs.select(dim, i)
-        carry, y = f(carry, x_i)
-        ys.append(y)
-    return carry, torch.stack(ys, dim=dim) if ys else torch.zeros(())
-
-
 from mujoco_torch._src import (
     collision_driver,
     constraint,
@@ -85,7 +69,7 @@ def _velocity(m: Model, d: Data) -> Data:
     kwargs = {"actuator_velocity": actuator_moment @ d.qvel}
     if m.ntendon:
         kwargs["ten_velocity"] = d.ten_J @ d.qvel
-    d = d.replace(**kwargs)
+    d.update_(**kwargs)
     d = smooth.com_vel(m, d)
     d = passive.passive(m, d)
     d = smooth.rne(m, d)
@@ -95,10 +79,11 @@ def _velocity(m: Model, d: Data) -> Data:
 def _actuation(m: Model, d: Data) -> Data:
     """Actuation-dependent computations."""
     if not m.nu or m.opt.disableflags & DisableBit.ACTUATION:
-        return d.replace(
+        d.update_(
             act_dot=torch.zeros((m.na,)),
             qfrc_actuator=torch.zeros((m.nv,)),
         )
+        return d
 
     ctrl = d.ctrl
     if not m.opt.disableflags & DisableBit.CLAMPCTRL:
@@ -203,7 +188,7 @@ def _actuation(m: Model, d: Data) -> Data:
     actfrcrange = actfrcrange[m.dof_jntid_t]
     qfrc_actuator = torch.clamp(qfrc_actuator, actfrcrange[:, 0], actfrcrange[:, 1])
 
-    d = d.replace(act_dot=act_dot, qfrc_actuator=qfrc_actuator)
+    d.update_(act_dot=act_dot, qfrc_actuator=qfrc_actuator)
     return d
 
 
@@ -212,7 +197,7 @@ def _acceleration(m: Model, d: Data) -> Data:
     qfrc_applied = d.qfrc_applied + support.xfrc_accumulate(m, d)
     qfrc_smooth = d.qfrc_passive - d.qfrc_bias + d.qfrc_actuator + qfrc_applied
     qacc_smooth = smooth.solve_m(m, d, qfrc_smooth)
-    d = d.replace(qfrc_smooth=qfrc_smooth, qacc_smooth=qacc_smooth)
+    d.update_(qfrc_smooth=qfrc_smooth, qacc_smooth=qacc_smooth)
     return d
 
 
@@ -278,17 +263,20 @@ def _advance(
         )
 
     # advance velocities
-    d = d.replace(qvel=d.qvel + qacc * m.opt.timestep)
+    new_qvel = d.qvel + qacc * m.opt.timestep
 
-    # advance positions with qvel if given, d.qvel otherwise (semi-implicit)
-    qvel = d.qvel if qvel is None else qvel
+    # Semi-implicit Euler: when qvel is None the position update uses the
+    # already-updated velocity (new_qvel), matching the original replace()-
+    # based code where d.qvel was updated before the position integration.
+    qvel_for_pos = new_qvel if qvel is None else qvel
     integrate_fn = lambda *args: _integrate_pos(*args, dt=m.opt.timestep)
-    qpos = scan.flat(m, integrate_fn, "jqv", "q", m.jnt_type, d.qpos, qvel)
+    qpos = scan.flat(m, integrate_fn, "jqv", "q", m.jnt_type, d.qpos, qvel_for_pos)
 
     # advance time
     time = d.time + m.opt.timestep
 
-    return d.replace(act=act, qpos=qpos, time=time)
+    d.update_(qvel=new_qvel, act=act, qpos=qpos, time=time)
+    return d
 
 
 def _euler(m: Model, d: Data) -> Data:
@@ -309,9 +297,13 @@ def _euler(m: Model, d: Data) -> Data:
     return _advance(m, d, d.act_dot, qacc)
 
 
-def _rungekutta4(m: Model, d: Data) -> Data:
+def _rungekutta4(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     """Runge-Kutta explicit order 4 integrator."""
-    d_t0 = d
+    # Clone d_t0 separately from the step()-level clone: step() clones to
+    # protect the *caller's* reference, whereas this clone preserves the
+    # initial state (qpos, qvel, act) across the in-place update_() calls
+    # in the RK4 loop below.
+    d_t0 = d.clone(recurse=False)
     # pylint: disable=invalid-name
     A_t = _RK4_A.get(d.qpos.dtype, d.qpos.device)
     B_t = _RK4_B.get(d.qpos.dtype, d.qpos.device)
@@ -324,34 +316,39 @@ def _rungekutta4(m: Model, d: Data) -> Data:
     qvel, qacc, act_dot = torch.utils._pytree.tree_map(lambda k: B_t[0] * k, (kqvel, d.qacc, d.act_dot))
     integrate_fn = lambda *args: _integrate_pos(*args, dt=m.opt.timestep)
 
-    def f(carry, x):
-        qvel, qacc, act_dot, kqvel, d = carry
-        a, b, t = x[0], x[1], x[2]  # tableau numbers
+    # Unrolled loop (3 iterations) instead of torch_scan HOP.
+    # The body calls forward() which accesses module-level scan caches — these
+    # are "unsafe side effects" that break torch.ops.higher_order.scan under
+    # fullgraph compilation.  Unrolling lets Dynamo trace each iteration at the
+    # top level where dict access is fine.
+    a_diag = torch.diag(A_t)
+    for i in range(3):
+        a, b, t = a_diag[i], B_t[i + 1], T[i]
         dqvel, dqacc, dact_dot = torch.utils._pytree.tree_map(lambda k: a * k, (kqvel, d.qacc, d.act_dot))
-        # get intermediate RK solutions
         kqpos = scan.flat(m, integrate_fn, "jqv", "q", m.jnt_type, d_t0.qpos, dqvel)
         kact = d_t0.act + dact_dot * m.opt.timestep
         kqvel = d_t0.qvel + dqacc * m.opt.timestep
-        d = d.replace(qpos=kqpos, qvel=kqvel, act=kact, time=t)
-        d = forward(m, d)
+        d.update_(qpos=kqpos, qvel=kqvel, act=kact, time=t)
+        d = forward(m, d, fixed_iterations=fixed_iterations)
 
         qvel = qvel + b * kqvel
         qacc = qacc + b * d.qacc
         act_dot = act_dot + b * d.act_dot
 
-        return (qvel, qacc, act_dot, kqvel, d), torch.zeros(())
-
-    abt = torch.stack([torch.diag(A_t), B_t[1:4], T], dim=1)
-    init = (qvel, qacc, act_dot, kqvel, d)
-    carry, _ = torch_scan(f, init, abt, dim=0)
-    qvel, qacc, act_dot, *_ = carry
-
     d = _advance(m, d_t0, act_dot, qacc, qvel)
     return d
 
 
-def forward(m: Model, d: Data) -> Data:
-    """Forward dynamics."""
+def forward(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
+    """Forward dynamics.
+
+    Args:
+      m: Model.
+      d: Data.
+      fixed_iterations: when True, the constraint solver runs a fixed number
+        of iterations (no early termination), producing a static computation
+        graph suitable for CUDA graph capture.
+    """
     d = _position(m, d)
     d = sensor.sensor_pos(m, d)
     d = _velocity(m, d)
@@ -360,10 +357,10 @@ def forward(m: Model, d: Data) -> Data:
     d = _acceleration(m, d)
 
     if d.efc_J.numel() == 0:
-        d = d.replace(qacc=d.qacc_smooth)
+        d.update_(qacc=d.qacc_smooth)
         return d
 
-    d = solver.solve(m, d)
+    d = solver.solve(m, d, fixed_iterations=fixed_iterations)
     d = sensor.sensor_acc(m, d)
 
     return d
@@ -384,14 +381,26 @@ def _implicit(m: Model, d: Data) -> Data:
     return _advance(m, d, d.act_dot, qacc)
 
 
-def step(m: Model, d: Data) -> Data:
-    """Advance simulation."""
-    d = forward(m, d)
+def step(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
+    """Advance simulation.
+
+    Args:
+      m: Model.
+      d: Data.
+      fixed_iterations: when True, the constraint solver runs a fixed number
+        of iterations (no early termination), producing a static computation
+        graph suitable for CUDA graph capture.
+    """
+    # Shallow clone so that in-place update_() calls downstream don't
+    # mutate the caller's Data.  All functions below step() assume they
+    # have exclusive ownership of d.
+    d = d.clone(recurse=False)
+    d = forward(m, d, fixed_iterations=fixed_iterations)
 
     if m.opt.integrator == IntegratorType.EULER:
         d = _euler(m, d)
     elif m.opt.integrator == IntegratorType.RK4:
-        d = _rungekutta4(m, d)
+        d = _rungekutta4(m, d, fixed_iterations=fixed_iterations)
     elif m.opt.integrator == IntegratorType.IMPLICITFAST:
         d = _implicit(m, d)
     else:

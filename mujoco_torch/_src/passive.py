@@ -169,10 +169,11 @@ def _fluid(m: Model, d: Data) -> torch.Tensor:
 def passive(m: Model, d: Data) -> Data:
     """Adds all passive forces."""
     if m.opt.disableflags & (DisableBit.SPRING | DisableBit.DAMPER):
-        return d.replace(
+        d.update_(
             qfrc_passive=torch.zeros(m.nv, dtype=d.qpos.dtype, device=d.qpos.device),
             qfrc_gravcomp=torch.zeros(m.nv, dtype=d.qpos.dtype, device=d.qpos.device),
         )
+        return d
 
     qfrc_passive = _spring_damper(m, d)
     qfrc_gravcomp = torch.zeros(m.nv, dtype=d.qpos.dtype, device=d.qpos.device)
@@ -184,5 +185,5 @@ def passive(m: Model, d: Data) -> Data:
     if m.opt.has_fluid_params:
         qfrc_passive = qfrc_passive + _fluid(m, d)
 
-    d = d.replace(qfrc_passive=qfrc_passive, qfrc_gravcomp=qfrc_gravcomp)
+    d.update_(qfrc_passive=qfrc_passive, qfrc_gravcomp=qfrc_gravcomp)
     return d

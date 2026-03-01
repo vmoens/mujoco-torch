@@ -48,8 +48,8 @@ def sensor_pos(m: Model, d: Data) -> Data:
     _dev = d.qpos.device
     objtype_data = {
         ObjType.UNKNOWN: (
-            torch.zeros(1, 3, dtype=_dtype),
-            torch.eye(3, dtype=_dtype).unsqueeze(0),
+            torch.zeros(1, 3, dtype=_dtype, device=_dev),
+            torch.eye(3, dtype=_dtype, device=_dev).unsqueeze(0),
         ),
         ObjType.BODY: (d.xipos, d.ximat),
         ObjType.XBODY: (d.xpos, d.xmat),
@@ -64,9 +64,10 @@ def sensor_pos(m: Model, d: Data) -> Data:
         SensorType.FRAMEZAXIS: 2,
     }
 
+    groups = m._device_precomp["sensor_groups_pos_py"]
     sensors, adrs = [], []
 
-    for group in m.sensor_groups_pos_py:
+    for group in groups:
         sensor_type = group["type"]
         adr = group["adr"]
         cutoff = group["cutoff"]
@@ -192,7 +193,8 @@ def sensor_pos(m: Model, d: Data) -> Data:
     sensordata = d.sensordata.clone()
     sensordata[adrs_flat.to(device=sensordata.device)] = sensors_flat.to(sensordata.dtype)
 
-    return d.replace(sensordata=sensordata)
+    d.update_(sensordata=sensordata)
+    return d
 
 
 def sensor_vel(m: Model, d: Data) -> Data:
@@ -201,7 +203,7 @@ def sensor_vel(m: Model, d: Data) -> Data:
         return d
 
     _dev = d.qpos.device
-    groups = m.sensor_groups_vel_py
+    groups = m._device_precomp["sensor_groups_vel_py"]
     group_types = {g["type"] for g in groups}
 
     if group_types & {SensorType.SUBTREELINVEL, SensorType.SUBTREEANGMOM}:
@@ -261,7 +263,8 @@ def sensor_vel(m: Model, d: Data) -> Data:
     sensordata = d.sensordata.clone()
     sensordata[adrs_flat.to(device=sensordata.device)] = sensors_flat.to(sensordata.dtype)
 
-    return d.replace(sensordata=sensordata)
+    d.update_(sensordata=sensordata)
+    return d
 
 
 def sensor_acc(m: Model, d: Data) -> Data:
@@ -270,7 +273,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
         return d
 
     _dev = d.qpos.device
-    groups = m.sensor_groups_acc_py
+    groups = m._device_precomp["sensor_groups_acc_py"]
     group_types = {g["type"] for g in groups}
 
     if group_types & {
@@ -340,10 +343,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
         elif sensor_type == SensorType.JOINTACTFRC:
             sensor = d.qfrc_actuator[group["dofadr"]]
         elif sensor_type == SensorType.TENDONACTFRC:
-            force_mask = group["force_mask"].to(
-                dtype=d.actuator_force.dtype,
-                device=d.actuator_force.device,
-            )
+            force_mask = group["force_mask"].to(dtype=d.actuator_force.dtype)
             sensor = force_mask @ d.actuator_force
         else:
             continue
@@ -359,4 +359,5 @@ def sensor_acc(m: Model, d: Data) -> Data:
     sensordata = d.sensordata.clone()
     sensordata[adrs_flat.to(device=sensordata.device)] = sensors_flat.to(sensordata.dtype)
 
-    return d.replace(sensordata=sensordata)
+    d.update_(sensordata=sensordata)
+    return d
