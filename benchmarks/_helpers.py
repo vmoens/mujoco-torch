@@ -7,10 +7,10 @@ import torch
 import mujoco_torch
 from mujoco_torch._src import test_util
 
-NSTEPS = 1000
+NSTEPS = 100
 SEED = 42
-ROUNDS = 5
-WARMUP_ROUNDS = 2
+ROUNDS = 2
+WARMUP_ROUNDS = 1
 COMPILE_WARMUP_ITERS = 5
 DEVICE = "cuda"
 
