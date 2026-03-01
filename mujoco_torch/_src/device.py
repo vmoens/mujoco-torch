@@ -181,15 +181,18 @@ torch.device_put = _device_put_torch
 _model_cache_id_counter = 0
 
 
-def _compute_condim_counts(value: mujoco.MjModel) -> tuple[int, int]:
-    """Pre-compute per-condim contact counts (ncon_condim1, ncon_condim3)."""
+def _compute_condim_counts(value: mujoco.MjModel) -> tuple[int, int, int, int]:
+    """Pre-compute per-condim contact counts (ncon_1, ncon_3, ncon_4, ncon_6)."""
     disableflags = int(value.opt.disableflags)
     if disableflags & (types.DisableBit.CONSTRAINT | types.DisableBit.CONTACT):
-        return (0, 0)
+        return (0, 0, 0, 0)
     dims = collision_driver.make_condim(value)
-    ncon_fl = int((dims == 1).sum())
-    ncon_fr = int((dims == 3).sum())
-    return (ncon_fl, ncon_fr)
+    return (
+        int((dims == 1).sum()),
+        int((dims == 3).sum()),
+        int((dims == 4).sum()),
+        int((dims == 6).sum()),
+    )
 
 
 def _compute_constraint_sizes(value: mujoco.MjModel) -> tuple[int, int, int, int, int]:
@@ -222,7 +225,12 @@ def _compute_constraint_sizes(value: mujoco.MjModel) -> tuple[int, int, int, int
     else:
         dims = collision_driver.make_condim(value)
         ncon_ = dims.numel()
-        nc = int((dims == 1).sum()) + int((dims == 3).sum()) * 4
+        is_elliptic = int(value.opt.cone) == types.ConeType.ELLIPTIC
+        nc = 0
+        for condim in (1, 3, 4, 6):
+            n = int((dims == condim).sum())
+            rows_per = condim if is_elliptic else (condim - 1) * 2
+            nc += n * (1 if condim == 1 else rows_per)
 
     nefc = ne + nf + nl + nc
     return (ne, nf, nl, ncon_, nefc)
@@ -745,8 +753,8 @@ def _validate(m: mujoco.MjModel):
             raise NotImplementedError(f"{unsupported} not implemented.")
 
     # check condim
-    if any(dim not in (1, 3) for dim in m.geom_condim) or any(dim not in (1, 3) for dim in m.pair_dim):
-        raise NotImplementedError("Only condim=1 and condim=3 are supported.")
+    if any(dim not in (1, 3, 4, 6) for dim in m.geom_condim) or any(dim not in (1, 3, 4, 6) for dim in m.pair_dim):
+        raise NotImplementedError("Only condim=1, 3, 4 and 6 are supported.")
 
     # check collision geom types
     candidate_set = collision_driver.collision_candidates(m)

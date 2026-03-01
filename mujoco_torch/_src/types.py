@@ -171,6 +171,7 @@ class ConeType(enum.IntEnum):
     """
 
     PYRAMIDAL = mujoco.mjtCone.mjCONE_PYRAMIDAL
+    ELLIPTIC = mujoco.mjtCone.mjCONE_ELLIPTIC
 
 
 class JacobianType(enum.IntEnum):
@@ -265,7 +266,8 @@ class DynType(enum.IntEnum):
     INTEGRATOR = mujoco.mjtDyn.mjDYN_INTEGRATOR
     FILTER = mujoco.mjtDyn.mjDYN_FILTER
     FILTEREXACT = mujoco.mjtDyn.mjDYN_FILTEREXACT
-    # unsupported: MUSCLE, USER
+    MUSCLE = mujoco.mjtDyn.mjDYN_MUSCLE
+    # unsupported: USER
 
 
 class GainType(enum.IntEnum):
@@ -278,7 +280,7 @@ class GainType(enum.IntEnum):
 
     FIXED = mujoco.mjtGain.mjGAIN_FIXED
     AFFINE = mujoco.mjtGain.mjGAIN_AFFINE
-    # unsupported: MUSCLE
+    MUSCLE = mujoco.mjtGain.mjGAIN_MUSCLE
     # unsupported: USER
 
 
@@ -292,7 +294,8 @@ class BiasType(enum.IntEnum):
 
     NONE = mujoco.mjtBias.mjBIAS_NONE
     AFFINE = mujoco.mjtBias.mjBIAS_AFFINE
-    # unsupported: MUSCLE, USER
+    MUSCLE = mujoco.mjtBias.mjBIAS_MUSCLE
+    # unsupported: USER
 
 
 class ConstraintType(enum.IntEnum):
@@ -710,7 +713,7 @@ class Model(MjTensorClass):
     actuator_gear: torch.Tensor
     actuator_cranklength: np.ndarray
     actuator_acc0: torch.Tensor
-    actuator_lengthrange: np.ndarray
+    actuator_lengthrange: torch.Tensor
     sensor_type: np.ndarray
     sensor_datatype: np.ndarray
     sensor_needstage: np.ndarray

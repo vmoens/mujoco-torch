@@ -101,8 +101,10 @@ def _actuation(m: Model, d: Data) -> Data:
             act_dot = torch.zeros_like(ctrl)
         elif dyn_typ == DynType.INTEGRATOR:
             act_dot = ctrl
-        elif dyn_typ == DynType.FILTER:
+        elif dyn_typ in (DynType.FILTER, DynType.FILTEREXACT):
             act_dot = (ctrl - act) / torch.clamp_min(dyn_prm[0], mujoco.mjMINVAL)
+        elif dyn_typ == DynType.MUSCLE:
+            act_dot = support.muscle_dynamics(ctrl, act, dyn_prm)
         else:
             raise NotImplementedError(f"dyntype {dyn_typ.name} not implemented.")
         return act_dot
@@ -127,13 +129,15 @@ def _actuation(m: Model, d: Data) -> Data:
         ctrl_act = torch.where(m.actuator_actadr_neg1, ctrl, act_last_dim)
 
     def get_force(*args):
-        gain_t, gain_p, bias_t, bias_p, len_, vel, ctrl_act = args
+        gain_t, gain_p, bias_t, bias_p, len_, vel, ctrl_act, len_range, acc0 = args
 
         typ, prm = GainType(gain_t), gain_p
         if typ == GainType.FIXED:
             gain = prm[0]
         elif typ == GainType.AFFINE:
             gain = prm[0] + prm[1] * len_ + prm[2] * vel
+        elif typ == GainType.MUSCLE:
+            gain = support.muscle_gain(len_, vel, len_range, acc0, prm)
         else:
             raise RuntimeError(f"unrecognized gaintype {typ.name}.")
 
@@ -141,13 +145,15 @@ def _actuation(m: Model, d: Data) -> Data:
         bias = torch.zeros_like(len_)
         if typ == BiasType.AFFINE:
             bias = prm[0] + prm[1] * len_ + prm[2] * vel
+        elif typ == BiasType.MUSCLE:
+            bias = support.muscle_bias(len_, len_range, acc0, prm)
 
         return gain * ctrl_act + bias
 
     force = scan.flat(
         m,
         get_force,
-        "uuuuuuu",
+        "uuuuuuuuu",
         "u",
         m.actuator_gaintype,
         m.actuator_gainprm,
@@ -156,6 +162,8 @@ def _actuation(m: Model, d: Data) -> Data:
         d.actuator_length,
         d.actuator_velocity,
         ctrl_act,
+        m.actuator_lengthrange,
+        m.actuator_acc0,
         group_by="u",
     )
     forcerange = torch.where(
@@ -227,14 +235,32 @@ def _advance(
     """Advance state and time given activation derivatives and acceleration."""
     act = d.act
     if m.na:
-        act = d.act + act_dot * m.opt.timestep
         actrange = torch.where(
             m.actuator_actlimited_bool,
             m.actuator_actrange,
             math._INF_RANGE.get(act.dtype, act.device),
         )
-        fn = lambda act, actrange: torch.clamp(act, actrange[0], actrange[1])
-        act = scan.flat(m, fn, "au", "a", act, actrange, group_by="u")
+
+        def _next_act(dyntype, dynprm, act, act_dot_i, actrange_i):
+            if dyntype == DynType.FILTEREXACT:
+                tau = torch.clamp_min(dynprm[0], mujoco.mjMINVAL)
+                act = act + act_dot_i * tau * (1 - torch.exp(-m.opt.timestep / tau))
+            else:
+                act = act + act_dot_i * m.opt.timestep
+            return torch.clamp(act, actrange_i[0], actrange_i[1])
+
+        act = scan.flat(
+            m,
+            _next_act,
+            "uuaau",
+            "a",
+            m.actuator_dyntype,
+            m.actuator_dynprm,
+            d.act,
+            act_dot,
+            actrange,
+            group_by="u",
+        )
 
     # advance velocities
     new_qvel = d.qvel + qacc * m.opt.timestep

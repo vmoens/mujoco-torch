@@ -86,6 +86,29 @@ compiled_step = torch.compile(vmap_step, fullgraph=True)
 d_batch = compiled_step(d_batch)
 ```
 
+## Feature matrix
+
+| Category | Supported | Not yet supported |
+|----------|-----------|-------------------|
+| **Integrators** | Euler, RK4, ImplicitFast | Implicit |
+| **Solvers** | CG, Newton | PGS |
+| **Geom types** | Plane, HField, Sphere, Capsule, Box, Mesh | Ellipsoid, Cylinder |
+| **Contact dim** | 1 (frictionless), 3 (frictional), 4 (torsional), 6 (rolling) | — |
+| **Friction cone** | Pyramidal, Elliptic | — |
+| **Joint types** | Free, Ball, Slide, Hinge | *(all supported)* |
+| **Equality constraints** | Connect, Weld, Joint | Tendon, Distance |
+| **Actuator dynamics** | None, Integrator, Filter, FilterExact, Muscle | User |
+| **Actuator gain** | Fixed, Affine, Muscle | User |
+| **Actuator bias** | None, Affine, Muscle | User |
+| **Sensors** | 30+ types (position, velocity, acceleration) | CamProjection, Touch, Contact, FrameLinVel/AngVel/LinAcc/AngAcc |
+| **Collision pairs** | 12 functions covering all supported geom combinations | — |
+
+## Known limitations
+
+- **Ellipsoid / Cylinder geoms** — no collision functions for these geom types.
+- **Tendon / Distance equality constraints** — not yet ported from MJX.
+- **PGS solver** — only CG and Newton solvers are available.
+
 ## Benchmarks
 
 ![Benchmark results](assets/benchmark.png)
@@ -174,3 +197,10 @@ pytest test/ -x -v
 ## License
 
 Apache 2.0 -- see [LICENSE](LICENSE).
+
+## Acknowledgments
+
+mujoco-torch is a derivative work of
+[MuJoCo MJX](https://github.com/google-deepmind/mujoco/tree/main/mjx),
+originally developed by Google DeepMind.  See the [NOTICE](NOTICE) file for
+attribution details.

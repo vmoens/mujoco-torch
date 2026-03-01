@@ -23,10 +23,13 @@ from etils import epath
 
 TEST_FILES: list[str] = [
     "ant.xml",
+    "cartpole.xml",
     "convex.xml",
     "equality.xml",
+    "hopper.xml",
     "humanoid.xml",
     "pendula.xml",
+    "swimmer.xml",
 ]
 
 _ACTUATOR_TYPES = ["motor", "velocity", "position", "general", "intvelocity"]

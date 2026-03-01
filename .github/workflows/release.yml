@@ -1,0 +1,350 @@
+# mujoco-torch Release Workflow
+#
+# This workflow automates the release process for mujoco-torch:
+# 1. Sanity checks (version matching, branch/tag validation)
+# 2. Builds sdist and wheel (pure Python - no platform-specific builds needed)
+# 3. Runs tests against the built wheel
+# 4. Creates draft GitHub release with artifacts attached
+# 5. Publishes to PyPI using OIDC trusted publishing
+#
+# Triggers:
+# - Manual workflow_dispatch only (no automatic triggers)
+#
+# NOTE: This workflow is NOT automatically triggered on tag push to avoid
+# race conditions with builds. Use workflow_dispatch to trigger releases.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.1.0)'
+        required: true
+        type: string
+      skip_sanity_checks:
+        description: 'Skip sanity checks'
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Dry run (skip GitHub release, PyPI publish)'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  RELEASE_TAG: ${{ inputs.tag }}
+  DRY_RUN: ${{ inputs.dry_run }}
+
+jobs:
+  # =============================================================================
+  # SANITY CHECKS
+  # =============================================================================
+  sanity-checks:
+    name: Sanity Checks
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_sanity_checks }}
+    outputs:
+      version: ${{ steps.parse-version.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse version from tag
+        id: parse-version
+        run: |
+          TAG="${{ env.RELEASE_TAG }}"
+          echo "Processing tag: $TAG"
+
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid tag format: $TAG. Expected format: v0.1.0"
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Parsed version: $VERSION"
+
+      - name: Check branch name matches tag
+        run: |
+          TAG="${{ env.RELEASE_TAG }}"
+          VERSION="${{ steps.parse-version.outputs.version }}"
+
+          BRANCHES=$(git branch -r --contains "$TAG" 2>/dev/null || echo "")
+
+          if [[ -z "$BRANCHES" ]]; then
+            echo "::warning::Tag $TAG is not on any remote branch yet (may be a new tag)"
+          else
+            echo "Tag $TAG is on branches: $BRANCHES"
+
+            EXPECTED_BRANCH="release/${VERSION%.*}"
+            if echo "$BRANCHES" | grep -q "origin/$EXPECTED_BRANCH"; then
+              echo "Tag is on expected release branch: $EXPECTED_BRANCH"
+            else
+              echo "::warning::Tag $TAG is not on expected branch $EXPECTED_BRANCH"
+            fi
+          fi
+
+      - name: Check pyproject.toml version matches tag
+        run: |
+          VERSION="${{ steps.parse-version.outputs.version }}"
+
+          PYPROJECT_VERSION=$(python3 -c "
+          import re
+          with open('pyproject.toml') as f:
+              content = f.read()
+          m = re.search(r'^version\s*=\s*\"([^\"]+)\"', content, re.MULTILINE)
+          print(m.group(1))
+          ")
+
+          echo "Tag version:         $VERSION"
+          echo "pyproject.toml version: $PYPROJECT_VERSION"
+
+          if [[ "$PYPROJECT_VERSION" != "$VERSION" ]]; then
+            echo "::error::pyproject.toml version ($PYPROJECT_VERSION) does not match tag version ($VERSION)"
+            exit 1
+          fi
+
+          echo "Version check passed!"
+
+  # =============================================================================
+  # BUILD
+  # =============================================================================
+  build:
+    name: Build sdist and wheel
+    needs: [sanity-checks]
+    if: always() && (needs.sanity-checks.result == 'success' || needs.sanity-checks.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Verify distributions
+        run: |
+          echo "Built distributions:"
+          ls -la dist/
+
+          # Verify wheel is a valid zip
+          for wheel in dist/*.whl; do
+            if python3 -c "import zipfile; zipfile.ZipFile('$wheel')"; then
+              echo "  OK: $(basename $wheel)"
+            else
+              echo "  CORRUPTED: $(basename $wheel)"
+              exit 1
+            fi
+          done
+
+          # Verify sdist is a valid tar.gz
+          for sdist in dist/*.tar.gz; do
+            if python3 -c "import tarfile; tarfile.open('$sdist')"; then
+              echo "  OK: $(basename $sdist)"
+            else
+              echo "  CORRUPTED: $(basename $sdist)"
+              exit 1
+            fi
+          done
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+          if-no-files-found: error
+
+  # =============================================================================
+  # TEST AGAINST BUILT WHEEL
+  # =============================================================================
+  test:
+    name: Test built wheel
+    needs: [build]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - name: Checkout repository (for tests)
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist
+
+      - name: Install CPU-only PyTorch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install wheel and test deps
+        run: |
+          pip install dist/*.whl
+          pip install pytest
+
+      - name: Run tests
+        run: pytest test/ -x -v
+
+  # =============================================================================
+  # CREATE GITHUB RELEASE
+  # =============================================================================
+  create-release:
+    name: Create GitHub Release
+    needs: [sanity-checks, build, test]
+    if: always() && needs.build.result == 'success' && needs.test.result == 'success' && needs.sanity-checks.result != 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist
+
+      - name: List artifacts to attach
+        run: |
+          echo "Artifacts to attach to release:"
+          ls -la dist/
+
+      - name: Create draft release
+        if: ${{ env.DRY_RUN != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ env.RELEASE_TAG }}"
+
+          if gh release view "$TAG" &>/dev/null; then
+            echo "Release $TAG already exists. Updating..."
+            find dist -type f -exec gh release upload "$TAG" {} --clobber \;
+          else
+            echo "Creating draft release for $TAG"
+            gh release create "$TAG" \
+              --draft \
+              --title "mujoco-torch $TAG" \
+              --notes "Release notes for mujoco-torch $TAG
+
+          ## Highlights
+
+          <!-- Add release highlights here -->
+
+          ## What's Changed
+
+          <!-- Release notes will be written manually -->
+
+          ## Installation
+
+          \`\`\`bash
+          pip install mujoco-torch==${TAG#v}
+          \`\`\`
+          " \
+              dist/*
+          fi
+
+          echo "Draft release created/updated: $TAG"
+          echo "Please review and publish the release manually."
+
+      - name: Dry run - show release info
+        if: ${{ env.DRY_RUN == 'true' }}
+        run: |
+          TAG="${{ env.RELEASE_TAG }}"
+          DIST_COUNT=$(find dist -type f | wc -l)
+          echo "DRY RUN: Would create draft release for $TAG"
+          echo "Would attach $DIST_COUNT distribution files"
+
+  # =============================================================================
+  # PUBLISH TO PYPI
+  # =============================================================================
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [sanity-checks, build, test, create-release]
+    if: always() && needs.build.result == 'success' && needs.test.result == 'success' && needs.sanity-checks.result != 'failure'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/mujoco-torch/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist
+
+      - name: List distributions
+        run: |
+          echo "Distributions to publish:"
+          ls -la dist/
+
+      - name: Publish to PyPI (OIDC)
+        if: ${{ env.DRY_RUN != 'true' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          verbose: true
+          print-hash: true
+
+      - name: Dry run - show what would be published
+        if: ${{ env.DRY_RUN == 'true' }}
+        run: |
+          echo "DRY RUN: Would publish the following distributions to PyPI:"
+          ls -la dist/
+
+  # =============================================================================
+  # SUMMARY
+  # =============================================================================
+  release-summary:
+    name: Release Summary
+    needs: [sanity-checks, build, test, create-release, publish-pypi]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print summary
+        run: |
+          echo "## Release Summary for ${{ env.RELEASE_TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Sanity Checks | ${{ needs.sanity-checks.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Create Release | ${{ needs.create-release.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Publish PyPI | ${{ needs.publish-pypi.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ env.DRY_RUN }}" == "true" ]]; then
+            echo "**Note: This was a dry run. No changes were pushed.**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ needs.publish-pypi.result }}" == "success" ]]; then
+            echo "### Release completed successfully!" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.build.result }}" == "success" ]]; then
+            echo "### Build succeeded. Check individual steps for issues." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Release encountered issues. Please review the logs." >> $GITHUB_STEP_SUMMARY
+          fi

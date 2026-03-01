@@ -1,0 +1,12 @@
+mujoco-torch
+Copyright 2025 Vincent Moens
+
+This project is a derivative work of MuJoCo MJX, originally developed by
+Google DeepMind under the Apache License, Version 2.0.
+
+Original work:
+  Copyright 2023 DeepMind Technologies Limited
+  https://github.com/google-deepmind/mujoco/tree/main/mjx
+
+The original MuJoCo MJX source code is licensed under the Apache License,
+Version 2.0. A copy of the license is included in the LICENSE file.

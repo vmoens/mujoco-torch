@@ -21,6 +21,7 @@ import numpy as np
 import torch
 
 from mujoco_torch._src import math
+from mujoco_torch._src.scan import _DeviceCachedTensor
 from mujoco_torch._src.types import Data, GeomType, Model
 
 
@@ -258,8 +259,6 @@ def precompute_ray_data(m_np, flg_static, bodyexclude, geomgroup=()):
     tuples for each geom type that has matching geoms, plus an ``empty``
     flag indicating no geom types matched.
     """
-    from mujoco_torch._src.scan import _DeviceCachedTensor
-
     if not isinstance(bodyexclude, Sequence):
         bodyexclude = [bodyexclude]
 
