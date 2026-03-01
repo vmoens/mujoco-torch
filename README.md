@@ -99,28 +99,28 @@ are measured at B=1 since they scale linearly.  All values are **steps/second**
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 62,188 | — | — | — | — |
-| mujoco-torch vmap (eager) | 10 | 1,239 | 9,935 | 39,682 | 292,238 |
-| **mujoco-torch compile** | **90** | **10,763** | **85,283** | **331,496** | **1,065,339** |
-| MJX (JAX jit+vmap) | 58 | 8,396 | 65,927 | 237,061 | 1,102,603 |
+| MuJoCo C (CPU, sequential) | 59,536 | — | — | — | — |
+| mujoco-torch vmap (eager) | 14 | 1,632 | 13,069 | 52,337 | 351,371 |
+| **mujoco-torch compile** | **154** | **18,478** | **147,060** | **536,692** | **1,180,109** |
+| MJX (JAX jit+vmap) | 870 | 108,905 | 874,432 | 2,237,444 | 2,382,388 |
 
 ### Ant
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 106,019 | — | — | — | — |
-| mujoco-torch vmap (eager) | 15 | 1,866 | 14,949 | 59,300 | 301,439 |
-| **mujoco-torch compile** | **120** | **9,820** | **78,000** | **264,081** | **460,511** |
-| MJX (JAX jit+vmap) | 99 | 11,965 | 66,796 | 235,721 | 540,229 |
+| MuJoCo C (CPU, sequential) | 101,157 | — | — | — | — |
+| mujoco-torch vmap (eager) | 18 | 2,191 | 17,705 | 70,273 | 244,474 |
+| **mujoco-torch compile** | **173** | **20,816** | **145,563** | **340,190** | **463,296** |
+| MJX (JAX jit+vmap) | 772 | 92,726 | 483,129 | 674,019 | 687,813 |
 
 ### Half-Cheetah
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 181,946 | — | — | — | — |
-| mujoco-torch vmap (eager) | 14 | 1,810 | 14,384 | 58,006 | 447,686 |
-| **mujoco-torch compile** | **116** | **13,829** | **109,334** | **435,795** | **1,889,818** |
-| MJX (JAX jit+vmap) | 105 | 12,102 | 85,769 | 300,022 | 1,576,656 |
+| MuJoCo C (CPU, sequential) | 166,742 | — | — | — | — |
+| mujoco-torch vmap (eager) | 18 | 2,273 | 18,115 | 72,413 | 550,095 |
+| **mujoco-torch compile** | **196** | **23,632** | **178,823** | **736,681** | **2,243,328** |
+| MJX (JAX jit+vmap) | 569 | 58,191 | 444,864 | 1,408,451 | 2,888,935 |
 
 ### Walker2d
 
@@ -129,10 +129,21 @@ than Euler.
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 42,245 | — | — | — | — |
-| mujoco-torch vmap (eager) | 3 | 330 | 2,389 | 8,954 | 63,274 |
-| **mujoco-torch compile** | **41** | **3,578** | **7,006** | **94,907** | **340,733** |
-| MJX (JAX jit+vmap) | 31 | 2,978 | 24,452 | 80,401 | 244,155 |
+| MuJoCo C (CPU, sequential) | 41,289 | — | — | — | — |
+| mujoco-torch vmap (eager) | 5 | 502 | 3,684 | 14,429 | 101,337 |
+| **mujoco-torch compile** | **70** | **8,114** | **40,210** | **203,028** | **465,286** |
+| MJX (JAX jit+vmap) | 170 | 10,176 | 69,757 | 203,816 | 324,060 |
+
+### Hopper
+
+Hopper uses the RK4 integrator (like Walker2d).
+
+| Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
+|---|--:|--:|--:|--:|--:|
+| MuJoCo C (CPU, sequential) | 63,644 | — | — | — | — |
+| mujoco-torch vmap (eager) | 4 | 519 | 4,104 | 16,363 | 126,000 |
+| **mujoco-torch compile** | **64** | **7,038** | **49,812** | **176,730** | **571,875** |
+| MJX (JAX jit+vmap) | 222 | 21,879 | 180,342 | 525,552 | 1,293,001 |
 
 **Methodology.**  Each configuration runs 1 000 steps after warmup (5 compile
 iterations for compiled variants, 1 JIT warmup for MJX).  Wall-clock time is
@@ -147,8 +158,9 @@ CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model humanoid
 CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model ant
 CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model halfcheetah
 CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model walker2d
+CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model hopper
 CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model all
-python scratch/plot_bench.py bench_humanoid.json bench_ant.json bench_halfcheetah.json bench_walker2d.json -o assets/benchmark.png
+python scratch/plot_bench.py scratch/bench_humanoid.json scratch/bench_ant.json scratch/bench_halfcheetah.json scratch/bench_walker2d.json scratch/bench_hopper.json -o assets/benchmark.png
 ```
 
 ## Testing
