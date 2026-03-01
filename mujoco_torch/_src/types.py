@@ -811,6 +811,47 @@ def _model_names_set(self, value):
 Model.names = property(_model_names_get, _model_names_set)
 
 
+def _resolve_device_from_result(result):
+    """Find the non-CPU device of the first tensor in a Model."""
+    for v in result._tensordict._tensordict.values():
+        if isinstance(v, torch.Tensor) and v.device.type != "cpu":
+            return v.device
+    return None
+
+
+def _model_to(self, *args, **kwargs):
+    """Move Model to a device, resolving cached index tensors to avoid DeviceCopy."""
+    result = MjTensorClass.to(self, *args, **kwargs)
+    device = _resolve_device_from_result(result)
+    if device is None:
+        return result
+    from mujoco_torch._src.scan import (  # circular dep
+        _resolve_cached_tensors,
+        warm_device_caches,
+    )
+    if hasattr(result, "cache_id"):
+        warm_device_caches(result.cache_id, device)
+    _resolvable_attrs = (
+        "factor_m_updates",
+        "solve_m_updates_j",
+        "solve_m_updates_i",
+        "constraint_data_py",
+        "collision_groups_py",
+        "sensor_groups_pos_py",
+        "sensor_groups_vel_py",
+        "sensor_groups_acc_py",
+    )
+    for attr in _resolvable_attrs:
+        val = getattr(result, attr, None)
+        if val is not None:
+            resolved = _resolve_cached_tensors(val, device)
+            result._tensordict._tensordict[attr] = resolved
+    return result
+
+
+Model.to = _model_to
+
+
 class Contact(MjTensorClass):
     """Result of collision detection functions.
 
