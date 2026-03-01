@@ -5,6 +5,7 @@ Run on cluster:
 """
 
 import gc
+import shutil
 import time
 
 import mujoco
@@ -14,6 +15,17 @@ import torch._inductor.config as inductor_config
 
 import mujoco_torch
 from mujoco_torch._src.test_util import load_test_file
+
+
+def clear_compile_caches():
+    """Wipe dynamo + inductor caches so the next compile starts fresh."""
+    torch._dynamo.reset()
+    torch.compiler.reset()
+    gc.collect()
+    torch.cuda.empty_cache()
+    cache_dir = torch._inductor.config.cache_dir
+    if cache_dir:
+        shutil.rmtree(cache_dir, ignore_errors=True)
 
 DEVICE = "cuda"
 B = 32768
@@ -37,6 +49,8 @@ def make_batch(mx, m_mj, batch_size, seed, dtype=torch.float64):
 
 def run_benchmark(label, mx, m_mj, compile_kwargs, step_kwargs=None,
                   dtype=torch.float64):
+    clear_compile_caches()
+
     step_kwargs = step_kwargs or {}
     vmap_step = torch.vmap(lambda d: mujoco_torch.step(mx, d, **step_kwargs))
 
@@ -64,10 +78,6 @@ def run_benchmark(label, mx, m_mj, compile_kwargs, step_kwargs=None,
 
     sps = B * NSTEPS / wall
     print(f"  {label}: {wall * 1e3:.1f} ms  ({sps:>12,.0f} steps/s)", flush=True)
-
-    gc.collect()
-    torch.cuda.empty_cache()
-    torch._dynamo.reset()
 
     return sps
 

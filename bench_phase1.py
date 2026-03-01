@@ -6,6 +6,7 @@ Also collects a profiler trace.
 """
 
 import gc
+import shutil
 import time
 
 import mujoco
@@ -14,6 +15,17 @@ import torch
 import torch._inductor.config as inductor_config
 
 import mujoco_torch
+
+
+def clear_compile_caches():
+    """Wipe dynamo + inductor caches so the next compile starts fresh."""
+    torch._dynamo.reset()
+    torch.compiler.reset()
+    gc.collect()
+    torch.cuda.empty_cache()
+    cache_dir = torch._inductor.config.cache_dir
+    if cache_dir:
+        shutil.rmtree(cache_dir, ignore_errors=True)
 
 torch.set_default_dtype(torch.float64)
 
@@ -51,10 +63,7 @@ def warm_caches(mx, m_mj):
 
 
 def run_benchmark(label, mx, m_mj, compile_kwargs):
-    torch._dynamo.reset()
-    torch.compiler.reset()
-    gc.collect()
-    torch.cuda.empty_cache()
+    clear_compile_caches()
 
     vmap_step = torch.vmap(lambda d: mujoco_torch.step(mx, d))
     compiled_fn = torch.compile(vmap_step, **compile_kwargs)
