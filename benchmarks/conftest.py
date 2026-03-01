@@ -5,6 +5,7 @@ import os
 
 import pytest
 import torch
+import torch._inductor.config as inductor_config
 
 ALL_MODELS = ["humanoid", "ant", "halfcheetah", "walker2d", "hopper"]
 BATCH_SIZES = [32768, 4096, 1024, 128, 1]
@@ -58,13 +59,17 @@ def _gpu_setup(worker_id):
 
 @pytest.fixture(autouse=True)
 def _clean_state():
-    """Reset compile caches and free GPU memory between tests."""
+    """Reset compile caches, inductor config, and free GPU memory between tests."""
     torch._dynamo.reset()
     torch.compiler.reset()
+    inductor_config.coordinate_descent_tuning = False
+    inductor_config.aggressive_fusion = False
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     yield
+    inductor_config.coordinate_descent_tuning = False
+    inductor_config.aggressive_fusion = False
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
