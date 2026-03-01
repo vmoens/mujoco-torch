@@ -236,12 +236,7 @@ def factor_m(m: Model, d: Data) -> Data:
 
     qld = d.qM.clone()
 
-    _dev = qld.device
-    for rows, madr_ijs, pivots, out in m.factor_m_updates:
-        rows = rows.to(_dev)
-        madr_ijs = madr_ijs.to(_dev)
-        pivots = pivots.to(_dev)
-        out = out.to(_dev)
+    for rows, madr_ijs, pivots, out in m._device_precomp["factor_m_updates"]:
         qld_update = -(qld[madr_ijs] / qld[pivots]) * qld[rows]
         qld = qld.clone()
         qld[out] = qld[out] + qld_update
@@ -261,13 +256,8 @@ def solve_m(m: Model, d: Data, x: torch.Tensor) -> torch.Tensor:
     if not support.is_sparse(m):
         return torch.cholesky_solve(x.unsqueeze(-1), d.qLD).squeeze(-1)
 
-    _dev = x.device
-
     # x <- inv(L') * x
-    for j_idx, madr_ij_idx, i_idx in m.solve_m_updates_j:
-        j_t = j_idx.to(_dev)
-        madr_t = madr_ij_idx.to(_dev)
-        i_t = i_idx.to(_dev)
+    for j_t, madr_t, i_t in m._device_precomp["solve_m_updates_j"]:
         x = x.clone()
         x[j_t] = x[j_t] + (-d.qLD[madr_t] * x[i_t])
 
@@ -275,10 +265,7 @@ def solve_m(m: Model, d: Data, x: torch.Tensor) -> torch.Tensor:
     x = x * d.qLDiagInv
 
     # x <- inv(L) * x
-    for i_idx, madr_ij_idx, j_idx in m.solve_m_updates_i:
-        i_t = i_idx.to(_dev)
-        madr_t = madr_ij_idx.to(_dev)
-        j_t = j_idx.to(_dev)
+    for i_t, madr_t, j_t in m._device_precomp["solve_m_updates_i"]:
         x = x.clone()
         x[i_t] = x[i_t] + (-d.qLD[madr_t] * x[j_t])
 

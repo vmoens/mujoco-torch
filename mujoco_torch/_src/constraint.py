@@ -100,10 +100,9 @@ def _kbi(
 
 def _instantiate_equality_connect(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for connect equality constraints."""
-    _dev = d.qpos.device
-    ids = precomp["ids"].to(_dev)
-    id1_t = precomp["id1"].to(_dev)
-    id2_t = precomp["id2"].to(_dev)
+    ids = precomp["ids"]
+    id1_t = precomp["id1"]
+    id2_t = precomp["id2"]
 
     data = m.eq_data[ids]
     active = d.eq_active[ids]
@@ -144,10 +143,9 @@ def _instantiate_equality_connect(m: Model, d: Data, precomp: dict) -> _Efc:
 
 def _instantiate_equality_weld(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for weld equality constraints."""
-    _dev = d.qpos.device
-    ids = precomp["ids"].to(_dev)
-    id1_t = precomp["id1"].to(_dev)
-    id2_t = precomp["id2"].to(_dev)
+    ids = precomp["ids"]
+    id1_t = precomp["id1"]
+    id2_t = precomp["id2"]
 
     data = m.eq_data[ids]
     active = d.eq_active[ids]
@@ -201,9 +199,8 @@ def _instantiate_equality_weld(m: Model, d: Data, precomp: dict) -> _Efc:
 
 def _instantiate_friction(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for DOF and tendon frictionloss."""
-    _dev = d.qpos.device
-    dof_ids = precomp["dof_ids"].to(_dev)
-    tendon_ids = precomp["tendon_ids"].to(_dev)
+    dof_ids = precomp["dof_ids"]
+    tendon_ids = precomp["tendon_ids"]
     size = precomp["size"]
 
     eye = torch.eye(m.nv, dtype=m.dof_frictionloss.dtype, device=m.dof_frictionloss.device)
@@ -241,14 +238,13 @@ def _instantiate_friction(m: Model, d: Data, precomp: dict) -> _Efc:
 
 def _instantiate_equality_joint(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for joint equality constraints."""
-    _dev = d.qpos.device
-    ids = precomp["ids"].to(_dev)
-    _id1_t = precomp["id1"].to(_dev)
-    id2_t = precomp["id2"].to(_dev)
-    dofadr1_t = precomp["dofadr1"].to(_dev)
-    dofadr2_t = precomp["dofadr2"].to(_dev)
-    qposadr1_t = precomp["qposadr1"].to(_dev)
-    qposadr2_t = precomp["qposadr2"].to(_dev)
+    ids = precomp["ids"]
+    _id1_t = precomp["id1"]
+    id2_t = precomp["id2"]
+    dofadr1_t = precomp["dofadr1"]
+    dofadr2_t = precomp["dofadr2"]
+    qposadr1_t = precomp["qposadr1"]
+    qposadr2_t = precomp["qposadr2"]
 
     data = m.eq_data[ids]
     active = d.eq_active[ids]
@@ -290,11 +286,10 @@ def _instantiate_equality_joint(m: Model, d: Data, precomp: dict) -> _Efc:
 
 def _instantiate_limit_ball(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for ball joint limits."""
-    _dev = d.qpos.device
-    ids = precomp["ids"].to(_dev)
-    qposadr = precomp["qposadr"].to(_dev)
-    dofadr = precomp["dofadr"].to(_dev)
-    dofadr_first = precomp["dofadr_first"].to(_dev)
+    ids = precomp["ids"]
+    qposadr = precomp["qposadr"]
+    dofadr = precomp["dofadr"]
+    dofadr_first = precomp["dofadr_first"]
 
     jnt_range = m.jnt_range[ids]
     jnt_margin = m.jnt_margin[ids]
@@ -327,10 +322,9 @@ def _instantiate_limit_ball(m: Model, d: Data, precomp: dict) -> _Efc:
 
 def _instantiate_limit_slide_hinge(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for slide and hinge joint limits."""
-    _dev = d.qpos.device
-    ids = precomp["ids"].to(_dev)
-    qposadr = precomp["qposadr"].to(_dev)
-    dofadr = precomp["dofadr"].to(_dev)
+    ids = precomp["ids"]
+    qposadr = precomp["qposadr"]
+    dofadr = precomp["dofadr"]
 
     jnt_range = m.jnt_range[ids]
     jnt_margin = m.jnt_margin[ids]
@@ -365,8 +359,7 @@ def _instantiate_limit_slide_hinge(m: Model, d: Data, precomp: dict) -> _Efc:
 
 def _instantiate_limit_tendon(m: Model, d: Data, precomp: dict) -> _Efc:
     """Calculates constraint rows for tendon limits."""
-    _dev = d.qpos.device
-    tendon_id = precomp["tendon_id"].to(_dev)
+    tendon_id = precomp["tendon_id"]
 
     length = d.ten_length[tendon_id]
     j = d.ten_J[tendon_id]
@@ -528,7 +521,7 @@ def make_constraint(m: Model, d: Data) -> Data:
         efc_address = torch.empty(0, dtype=torch.int64)
     d = d.tree_replace({"contact.efc_address": efc_address})
 
-    precomp = m.constraint_data_py
+    precomp = m._device_precomp["constraint_data_py"]
     ncon_fl, ncon_fr = m.condim_counts_py
 
     efcs = []

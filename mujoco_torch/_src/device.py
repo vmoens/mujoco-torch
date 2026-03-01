@@ -844,7 +844,13 @@ def device_put(value, *, dtype: torch.dtype | None = None):
 
     if issubclass(clz, MjTensorClass):
         init_kwargs["batch_size"] = []
-    return clz(**init_kwargs, **derived_kwargs)  # type: ignore
+    result = clz(**init_kwargs, **derived_kwargs)  # type: ignore
+
+    if clz is types.Model:
+        from mujoco_torch._src.scan import _resolve_cached_tensors
+        types._build_device_precomp(result, torch.device("cpu"), _resolve_cached_tensors)
+
+    return result
 
 
 @overload

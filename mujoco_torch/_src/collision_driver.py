@@ -515,15 +515,13 @@ def _collide_geoms(
     if geom_types[0] == GeomType.HFIELD:
         return _collide_hfield_geoms(m, d, candidates, fn)
 
-    # Resolve pre-computed index tensors to the right device.
-    geom1_t = precomp["geom1_t"].to(device)
-    geom2_t = precomp["geom2_t"].to(device)
-    contact_dim = precomp["contact_dim_t"].to(device)
+    geom1_t = precomp["geom1_t"]
+    geom2_t = precomp["geom2_t"]
+    contact_dim = precomp["contact_dim_t"]
 
     params = []
     for params_fn, indices in precomp["param_groups"]:
-        device_indices = {k: v.to(device) for k, v in indices.items()}
-        params.append(params_fn(m, **device_indices))
+        params.append(params_fn(m, **indices))
 
     g1, g2, in_axes = _pair_info(
         m,
@@ -691,7 +689,7 @@ def constraint_sizes(m: Model) -> tuple[int, int, int, int, int]:
 
 def collision(m: Model, d: Data) -> Data:
     """Collides geometries."""
-    collision_groups = m.collision_groups_py
+    collision_groups = m._device_precomp["collision_groups_py"]
     ncon_ = m.constraint_sizes_py[3]
     max_cp = m.collision_max_cp_py
     total = m.collision_total_contacts_py

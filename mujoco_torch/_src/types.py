@@ -819,42 +819,60 @@ def _resolve_device_from_result(result):
     return None
 
 
+_DEVICE_PRECOMP_ATTRS = (
+    "factor_m_updates",
+    "solve_m_updates_j",
+    "solve_m_updates_i",
+    "constraint_data_py",
+    "collision_groups_py",
+    "sensor_groups_pos_py",
+    "sensor_groups_vel_py",
+    "sensor_groups_acc_py",
+)
+
+
+def _build_device_precomp(model, device, _resolve_cached_tensors):
+    """Resolve all precomputed structures to *device* and store on the model.
+
+    The result is stored as ``model._device_precomp`` (a plain Python dict,
+    NOT a TensorDict field) so that ``torch.compile`` never sees CPU-to-GPU
+    transfers inside the traced graph.
+    """
+    precomp = {}
+    for attr in _DEVICE_PRECOMP_ATTRS:
+        val = getattr(model, attr, None)
+        if val is not None:
+            precomp[attr] = _resolve_cached_tensors(val, device)
+    object.__setattr__(model, "_device_precomp", precomp)
+
+
 def _model_to(self, *args, **kwargs):
-    """Move Model to a device, pre-warming cached index tensors."""
+    """Move Model to a device, resolving all precomputed index tensors."""
     result = MjTensorClass.to(self, *args, **kwargs)
-    device = _resolve_device_from_result(result)
-    if device is None:
-        return result
+    device = _resolve_device_from_result(result) or torch.device("cpu")
     from mujoco_torch._src.scan import (  # circular dep
-        _DeviceCachedTensor,
+        _resolve_cached_tensors,
         warm_device_caches,
     )
     if hasattr(result, "cache_id"):
         warm_device_caches(result.cache_id, device)
 
-    def _warm(obj):
-        """Pre-populate _DeviceCachedTensor caches without replacing structures."""
-        if isinstance(obj, _DeviceCachedTensor):
-            obj.to(device)
-        elif isinstance(obj, dict):
-            for v in obj.values():
-                _warm(v)
-        elif isinstance(obj, (list, tuple)):
-            for v in obj:
-                _warm(v)
-
-    for attr in (
-        "factor_m_updates",
-        "solve_m_updates_j",
-        "solve_m_updates_i",
-        "constraint_data_py",
-        "collision_groups_py",
-    ):
-        _warm(getattr(result, attr, None))
+    _build_device_precomp(result, device, _resolve_cached_tensors)
     return result
 
 
 Model.to = _model_to
+
+
+def _model_clone(self, recurse=True):
+    """Clone Model, propagating the resolved _device_precomp side dict."""
+    result = MjTensorClass.clone(self, recurse=recurse)
+    if hasattr(self, "_device_precomp"):
+        object.__setattr__(result, "_device_precomp", self._device_precomp)
+    return result
+
+
+Model.clone = _model_clone
 
 
 class Contact(MjTensorClass):
