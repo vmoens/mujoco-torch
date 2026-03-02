@@ -254,7 +254,7 @@ def _take(obj: Y, idx) -> Y:
         def take(x):
             if not x.shape[0]:
                 return x
-            return x[cached.to(x.device)]
+            return x[cached.to(x.device)].clone()
 
         return tree_map(take, obj)
 
@@ -265,7 +265,7 @@ def _take(obj: Y, idx) -> Y:
         if not x.shape[0]:
             return x
         i = idx.to(x.device) if idx.device != x.device else idx
-        return x[i]
+        return x[i].clone()
 
     return tree_map(take, obj)
 
