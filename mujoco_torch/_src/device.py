@@ -786,18 +786,28 @@ def _validate(m: mujoco.MjModel):
 
 
 @overload
-def device_put(value: mujoco.MjData) -> types.Data: ...
+def device_put(value: mujoco.MjData, *, dtype: torch.dtype | None = None) -> types.Data: ...
 
 
 @overload
-def device_put(value: mujoco.MjModel) -> types.Model: ...
+def device_put(value: mujoco.MjModel, *, dtype: torch.dtype | None = None) -> types.Model: ...
 
 
-def device_put(value):
+def _cast_float(v, dtype):
+    """Cast a tensor to *dtype* if it is floating-point; leave others unchanged."""
+    if isinstance(v, torch.Tensor) and v.is_floating_point():
+        return v.to(dtype)
+    return v
+
+
+def device_put(value, *, dtype: torch.dtype | None = None):
     """Places mujoco data onto a device.
 
     Args:
       value: a mujoco struct to transfer
+      dtype: optional floating-point dtype override.  When set, every
+        floating-point tensor in the output is cast to *dtype* (e.g.
+        ``torch.float32``).  Integer and boolean tensors are unaffected.
 
     Returns:
       on-device MJX struct reflecting the input value
@@ -822,7 +832,7 @@ def device_put(value):
         if f.type is torch.Tensor:
             field_value = torch.device_put(field_value)
         elif type(field_value) in _TYPE_MAP.keys():
-            field_value = device_put(field_value)
+            field_value = device_put(field_value, dtype=dtype)
 
         init_kwargs[f.name] = copy.copy(field_value)
 
@@ -834,9 +844,22 @@ def device_put(value):
     elif isinstance(value, mujoco.MjOption):
         derived_kwargs = _option_derived(value)
 
+    if dtype is not None:
+        for k, v in init_kwargs.items():
+            init_kwargs[k] = _cast_float(v, dtype)
+        for k, v in derived_kwargs.items():
+            derived_kwargs[k] = _cast_float(v, dtype)
+
     if issubclass(clz, MjTensorClass):
         init_kwargs["batch_size"] = []
-    return clz(**init_kwargs, **derived_kwargs)  # type: ignore
+    result = clz(**init_kwargs, **derived_kwargs)  # type: ignore
+
+    if clz is types.Model:
+        types._build_device_precomp(
+            result, torch.device("cpu"), scan._resolve_cached_tensors,
+        )
+
+    return result
 
 
 @overload

@@ -115,25 +115,58 @@ d_batch = compiled_step(d_batch)
 
 Measured on a single NVIDIA H200 GPU, float64 precision, 1 000 simulation
 steps per configuration.  Sequential baselines (MuJoCo C, mujoco-torch loop)
-are measured at B=1 since they scale linearly.
+are measured at B=1 since they scale linearly.  All values are **steps/second**
+(higher is better).
 
 ### Humanoid
 
-| Configuration | B=1 | B=128 | B=1 024 | B=4 096 |
-|---|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 61,644 | *(linear)* | *(linear)* | *(linear)* |
-| mujoco-torch vmap (eager) | 11 | 1,249 | 10,139 | 40,001 |
-| **mujoco-torch compile** | **92** | **11,059** | **85,868** | **336,391** |
-| MJX (JAX jit+vmap) | 59 | 8,584 | 66,937 | 239,678 |
+| Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
+|---|--:|--:|--:|--:|--:|
+| MuJoCo C (CPU, sequential) | 59,536 | — | — | — | — |
+| mujoco-torch vmap (eager) | 14 | 1,632 | 13,069 | 52,337 | 351,371 |
+| **mujoco-torch compile** | **154** | **18,478** | **147,060** | **536,692** | **1,180,109** |
+| MJX (JAX jit+vmap) | 870 | 108,905 | 874,432 | 2,237,444 | 2,382,388 |
 
 ### Ant
 
-| Configuration | B=1 | B=128 | B=1 024 | B=4 096 |
-|---|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 106,163 | *(linear)* | *(linear)* | *(linear)* |
-| mujoco-torch vmap (eager) | 15 | 1,894 | 15,107 | 60,566 |
-| **mujoco-torch compile** | **119** | **11,245** | **89,627** | **280,053** |
-| MJX (JAX jit+vmap) | 100 | 12,069 | 69,308 | 238,268 |
+| Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
+|---|--:|--:|--:|--:|--:|
+| MuJoCo C (CPU, sequential) | 101,157 | — | — | — | — |
+| mujoco-torch vmap (eager) | 18 | 2,191 | 17,705 | 70,273 | 244,474 |
+| **mujoco-torch compile** | **173** | **20,816** | **145,563** | **340,190** | **463,296** |
+| MJX (JAX jit+vmap) | 772 | 92,726 | 483,129 | 674,019 | 687,813 |
+
+### Half-Cheetah
+
+| Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
+|---|--:|--:|--:|--:|--:|
+| MuJoCo C (CPU, sequential) | 166,742 | — | — | — | — |
+| mujoco-torch vmap (eager) | 18 | 2,273 | 18,115 | 72,413 | 550,095 |
+| **mujoco-torch compile** | **196** | **23,632** | **178,823** | **736,681** | **2,243,328** |
+| MJX (JAX jit+vmap) | 569 | 58,191 | 444,864 | 1,408,451 | 2,888,935 |
+
+### Walker2d
+
+Walker2d uses the RK4 integrator, which makes each step ~3× more expensive
+than Euler.
+
+| Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
+|---|--:|--:|--:|--:|--:|
+| MuJoCo C (CPU, sequential) | 41,289 | — | — | — | — |
+| mujoco-torch vmap (eager) | 5 | 502 | 3,684 | 14,429 | 101,337 |
+| **mujoco-torch compile** | **70** | **8,114** | **40,210** | **203,028** | **465,286** |
+| MJX (JAX jit+vmap) | 170 | 10,176 | 69,757 | 203,816 | 324,060 |
+
+### Hopper
+
+Hopper uses the RK4 integrator (like Walker2d).
+
+| Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
+|---|--:|--:|--:|--:|--:|
+| MuJoCo C (CPU, sequential) | 63,644 | — | — | — | — |
+| mujoco-torch vmap (eager) | 4 | 519 | 4,104 | 16,363 | 126,000 |
+| **mujoco-torch compile** | **64** | **7,038** | **49,812** | **176,730** | **571,875** |
+| MJX (JAX jit+vmap) | 222 | 21,879 | 180,342 | 525,552 | 1,293,001 |
 
 **Methodology.**  Each configuration runs 1 000 steps after warmup (5 compile
 iterations for compiled variants, 1 JIT warmup for MJX).  Wall-clock time is
@@ -141,12 +174,12 @@ measured with `torch.cuda.synchronize()` / `jax.block_until_ready()` bracketing.
 Steps/s = `batch_size × nsteps / elapsed_time`.  Single GPU
 (`CUDA_VISIBLE_DEVICES=0`), dtype=float64.
 
-To reproduce, run the benchmark script (requires the PyTorch fork above):
+To reproduce, run the pytest-benchmark suite (requires the PyTorch fork above):
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model humanoid
-CUDA_VISIBLE_DEVICES=0 python -u gpu_bench.py --model ant
-python scratch/plot_bench.py bench_humanoid.json bench_ant.json -o assets/benchmark.png
+CUDA_VISIBLE_DEVICES=0 python -m pytest benchmarks/ -v \
+    --benchmark-json=bench_results.json
+python benchmarks/plot_bench.py bench_results.json -o assets/benchmark.png
 ```
 
 ## Testing

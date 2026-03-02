@@ -298,11 +298,7 @@ def ray_precomputed(
     geom_vecs = torch.vmap(lambda x: x.T @ vec)(d.geom_xmat)
 
     dists, ids = [], []
-    for fn, id_cached, size_cached, dyn_cached in precomp:
-        id_t = id_cached.to(device)
-        geom_size = size_cached.to(device)
-        dyn_filter = dyn_cached.to(device)
-
+    for fn, id_t, geom_size, dyn_filter in precomp:
         dist = torch.vmap(fn)(geom_size, geom_pnts[id_t], geom_vecs[id_t])
         dist = torch.where(
             dyn_filter,

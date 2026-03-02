@@ -44,6 +44,46 @@ def clear_scan_caches():
     _body_tree_cache.clear()
 
 
+def _resolve_cached_tensors(obj, device: torch.device):
+    """Recursively replace _DeviceCachedTensor and CPU tensors with device tensors.
+
+    Returns a new structure where every _DeviceCachedTensor has been
+    resolved to a regular torch.Tensor on *device* and every plain CPU
+    tensor has been moved, so that ``torch.compile`` never sees a
+    CPU→GPU copy inside the traced graph.
+    """
+    if isinstance(obj, _DeviceCachedTensor):
+        return obj.to(device)
+    if isinstance(obj, torch.Tensor) and obj.device != device:
+        return obj.to(device)
+    if isinstance(obj, dict):
+        return {k: _resolve_cached_tensors(v, device) for k, v in obj.items()}
+    if isinstance(obj, tuple):
+        return tuple(_resolve_cached_tensors(v, device) for v in obj)
+    if isinstance(obj, list):
+        return [_resolve_cached_tensors(v, device) for v in obj]
+    return obj
+
+
+def warm_device_caches(cache_id: int, device: torch.device):
+    """Resolve all _DeviceCachedTensor entries for *cache_id* to *device*.
+
+    Call this after ``Model.to(device)`` so that ``torch.compile`` never
+    sees a CPU→GPU copy inside the traced graph.  Replaces
+    _DeviceCachedTensor instances with plain device tensors in-place.
+    """
+    device = torch.device(device)
+
+    for key in list(_flat_cache):
+        if key[0] == cache_id:
+            _flat_cache[key] = _resolve_cached_tensors(_flat_cache[key], device)
+    for key in list(_body_tree_cache):
+        if key[0] == cache_id:
+            _body_tree_cache[key] = _resolve_cached_tensors(
+                _body_tree_cache[key], device,
+            )
+
+
 # Registry of all known scan call-site signatures.
 # Each entry: (in_types, out_types, group_by_or_reverse,
 #              [(arg_position, model_field_name), ...])

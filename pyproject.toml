@@ -22,6 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-benchmark"]
+benchmark = ["pytest", "pytest-benchmark", "pytest-xdist"]
 
 [project.urls]
 Homepage = "https://github.com/vmoens/mujoco-torch"

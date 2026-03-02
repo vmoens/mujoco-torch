@@ -61,6 +61,21 @@ def while_loop(cond_fn, body_fn, carried_inputs, max_iter=None):
     return val
 
 
+def fixed_loop(body_fn, carried_inputs, n_iter):
+    """Fixed-iteration loop: runs body_fn exactly n_iter times.
+
+    Under ``torch.compile`` this produces a static graph (no data-dependent
+    control flow), which enables CUDA graph capture and more aggressive
+    kernel fusion.
+    """
+    val = carried_inputs
+    for _ in range(n_iter):
+        val = body_fn(*val)
+        if not isinstance(val, tuple):
+            val = (val,)
+    return val
+
+
 from mujoco_torch._src import math, support
 from mujoco_torch._src.collision_driver import constraint_sizes
 
@@ -224,8 +239,17 @@ def _make_dense_m(m: Model, d: Data) -> torch.Tensor:
 # ============================================================================
 
 
-def solve(m: Model, d: Data) -> Data:
-    """Finds forces that satisfy constraints using conjugate gradient descent."""
+def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
+    """Finds forces that satisfy constraints using conjugate gradient descent.
+
+    Args:
+      m: Model.
+      d: Data.
+      fixed_iterations: when True, runs exactly ``m.opt.iterations`` solver
+        iterations and ``m.opt.ls_iterations`` line-search iterations without
+        early termination.  This produces a fully static computation graph
+        under ``torch.compile``, enabling CUDA graph capture.
+    """
 
     # ---- Pre-extract all model constants (become Dynamo compile-time consts) ---
     nv = int(m.nv)
@@ -258,9 +282,10 @@ def solve(m: Model, d: Data) -> Data:
     mul_m_fn = _make_mul_m_fn(m, d) if not use_dense else None
 
     # ---- Inner helpers as closures over pre-extracted data --------------------
+    _inertia_scale = meaninertia * max(1, nv)
 
     def _rescale(value):
-        return value / (meaninertia * max(1, nv))
+        return value / _inertia_scale
 
     def _create_context(qacc, qfrc_con, grad_flag=True):
         """Create solver context from qacc without touching Model/Data."""
@@ -328,7 +353,7 @@ def solve(m: Model, d: Data) -> Data:
 
     def _linesearch(ctx):
         """Line search to find optimal step size (no m/d access)."""
-        smag = math.norm(ctx.search) * meaninertia * max(1, nv)
+        smag = math.norm(ctx.search) * _inertia_scale
         gtol = tolerance * ls_tolerance * smag
 
         mv = dense_M @ ctx.search if use_dense else mul_m_fn(ctx.search)
@@ -394,7 +419,10 @@ def solve(m: Model, d: Data) -> Data:
             swap=ctx.qacc.new_ones((), dtype=torch.bool),
             ls_iter=ctx.qacc.new_zeros((), dtype=torch.long),
         )
-        ls_ctx = while_loop(ls_cond, ls_body, (ls_ctx,), max_iter=ls_iterations)[0]
+        if fixed_iterations:
+            ls_ctx = fixed_loop(ls_body, (ls_ctx,), ls_iterations)[0]
+        else:
+            ls_ctx = while_loop(ls_cond, ls_body, (ls_ctx,), max_iter=ls_iterations)[0]
 
         # move to new solution if improved
         lo, hi = ls_ctx.lo, ls_ctx.hi
@@ -440,14 +468,15 @@ def solve(m: Model, d: Data) -> Data:
     ctx = _create_context(qacc, qfrc_constraint)
     if iterations == 1:
         ctx = body(ctx)[0]
+    elif fixed_iterations:
+        ctx = fixed_loop(body, (ctx,), iterations)[0]
     else:
         ctx = while_loop(cond, body, (ctx,), max_iter=iterations)[0]
 
-    d = d.replace(
+    d.update_(
         qacc_warmstart=ctx.qacc,
         qacc=ctx.qacc,
         qfrc_constraint=ctx.qfrc_constraint,
         efc_force=ctx.efc_force,
     )
-
     return d

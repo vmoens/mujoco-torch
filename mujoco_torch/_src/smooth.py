@@ -116,17 +116,18 @@ def kinematics(m: Model, d: Data) -> Data:
     v_local_to_global = torch.vmap(support.local_to_global)
 
     xipos, ximat = v_local_to_global(xpos, xquat, m.body_ipos, m.body_iquat)
-    d = d.replace(qpos=qpos, xanchor=xanchor, xaxis=xaxis, xpos=xpos)
-    d = d.replace(xquat=xquat, xmat=xmat, xipos=xipos, ximat=ximat)
+    kwargs = dict(qpos=qpos, xanchor=xanchor, xaxis=xaxis, xpos=xpos,
+                  xquat=xquat, xmat=xmat, xipos=xipos, ximat=ximat)
 
     if m.ngeom:
         geom_xpos, geom_xmat = v_local_to_global(xpos[m.geom_bodyid_t], xquat[m.geom_bodyid_t], m.geom_pos, m.geom_quat)
-        d = d.replace(geom_xpos=geom_xpos, geom_xmat=geom_xmat)
+        kwargs.update(geom_xpos=geom_xpos, geom_xmat=geom_xmat)
 
     if m.nsite:
         site_xpos, site_xmat = v_local_to_global(xpos[m.site_bodyid_t], xquat[m.site_bodyid_t], m.site_pos, m.site_quat)
-        d = d.replace(site_xpos=site_xpos, site_xmat=site_xmat)
+        kwargs.update(site_xpos=site_xpos, site_xmat=site_xmat)
 
+    d.update_(**kwargs)
     return d
 
 
@@ -148,7 +149,6 @@ def com_pos(m: Model, d: Data) -> Data:
         d.xipos,
         torch.vmap(torch.divide)(pos, torch.maximum(mass, _MJMINVAL.get(mass.dtype, mass.device))),
     )
-    d = d.replace(subtree_com=subtree_com)
 
     # map inertias to frame centered at subtree_com
     @torch.vmap
@@ -163,7 +163,6 @@ def com_pos(m: Model, d: Data) -> Data:
     root_com = subtree_com[m.body_rootid_t]
     offset = d.xipos - root_com
     cinert = inert_com(m.body_inertia, d.ximat, offset, m.body_mass)
-    d = d.replace(cinert=cinert)
 
     # map motion dofs to global frame centered at subtree_com
     def cdof_fn(jnt_typs, root_com, xmat, xanchor, xaxis):
@@ -202,8 +201,8 @@ def com_pos(m: Model, d: Data) -> Data:
         d.xanchor,
         d.xaxis,
     )
-    d = d.replace(cdof=cdof)
 
+    d.update_(subtree_com=subtree_com, cinert=cinert, cdof=cdof)
     return d
 
 
@@ -218,13 +217,12 @@ def crb(m: Model, d: Data) -> Data:
     crb_body = scan.body_tree(m, crb_fn, "b", "b", d.cinert, reverse=True)
     crb_body = crb_body.clone()
     crb_body[0] = 0.0
-    d = d.replace(crb=crb_body)
 
     crb_dof = crb_body[m.dof_bodyid_t]
     crb_cdof = torch.vmap(math.inert_mul)(crb_dof, d.cdof)
     qm = support.make_m(m, crb_cdof, d.cdof, m.dof_armature)
-    d = d.replace(qM=qm)
 
+    d.update_(crb=crb_body, qM=qm)
     return d
 
 
@@ -233,17 +231,12 @@ def factor_m(m: Model, d: Data) -> Data:
 
     if not support.is_sparse(m):
         L = torch.linalg.cholesky(d.qM)
-        d = d.replace(qLD=L)
+        d.update_(qLD=L)
         return d
 
     qld = d.qM.clone()
 
-    _dev = qld.device
-    for rows, madr_ijs, pivots, out in m.factor_m_updates:
-        rows = rows.to(_dev)
-        madr_ijs = madr_ijs.to(_dev)
-        pivots = pivots.to(_dev)
-        out = out.to(_dev)
+    for rows, madr_ijs, pivots, out in m._device_precomp["factor_m_updates"]:
         qld_update = -(qld[madr_ijs] / qld[pivots]) * qld[rows]
         qld = qld.clone()
         qld[out] = qld[out] + qld_update
@@ -253,8 +246,7 @@ def factor_m(m: Model, d: Data) -> Data:
     qld = qld.clone()
     qld[m.dof_Madr_t] = qld_diag
 
-    d = d.replace(qLD=qld, qLDiagInv=1 / qld_diag)
-
+    d.update_(qLD=qld, qLDiagInv=1 / qld_diag)
     return d
 
 
@@ -264,13 +256,8 @@ def solve_m(m: Model, d: Data, x: torch.Tensor) -> torch.Tensor:
     if not support.is_sparse(m):
         return torch.cholesky_solve(x.unsqueeze(-1), d.qLD).squeeze(-1)
 
-    _dev = x.device
-
     # x <- inv(L') * x
-    for j_idx, madr_ij_idx, i_idx in m.solve_m_updates_j:
-        j_t = j_idx.to(_dev)
-        madr_t = madr_ij_idx.to(_dev)
-        i_t = i_idx.to(_dev)
+    for j_t, madr_t, i_t in m._device_precomp["solve_m_updates_j"]:
         x = x.clone()
         x[j_t] = x[j_t] + (-d.qLD[madr_t] * x[i_t])
 
@@ -278,10 +265,7 @@ def solve_m(m: Model, d: Data, x: torch.Tensor) -> torch.Tensor:
     x = x * d.qLDiagInv
 
     # x <- inv(L) * x
-    for i_idx, madr_ij_idx, j_idx in m.solve_m_updates_i:
-        i_t = i_idx.to(_dev)
-        madr_t = madr_ij_idx.to(_dev)
-        j_t = j_idx.to(_dev)
+    for i_t, madr_t, j_t in m._device_precomp["solve_m_updates_i"]:
         x = x.clone()
         x[i_t] = x[i_t] + (-d.qLD[madr_t] * x[j_t])
 
@@ -354,8 +338,7 @@ def com_vel(m: Model, d: Data) -> Data:
         d.qvel,
     )
 
-    d = d.replace(cvel=cvel, cdof_dot=cdof_dot)
-
+    d.update_(cvel=cvel, cdof_dot=cdof_dot)
     return d
 
 
@@ -398,8 +381,7 @@ def rne(m: Model, d: Data, flg_acc: bool = False) -> Data:
     cfrc = scan.body_tree(m, cfrc_fn, "b", "b", loc_cfrc, reverse=True)
     qfrc_bias = torch.vmap(torch.dot)(d.cdof, cfrc[m.dof_bodyid_t])
 
-    d = d.replace(qfrc_bias=qfrc_bias)
-
+    d.update_(qfrc_bias=qfrc_bias)
     return d
 
 
@@ -412,7 +394,7 @@ def tendon(m: Model, d: Data) -> Data:
     (wrap_id_jnt,) = np.nonzero(m.wrap_type == WrapType.JOINT)
 
     if wrap_id_jnt.size == 0:
-        d = d.replace(
+        d.update_(
             ten_length=torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device),
             ten_J=torch.zeros((m.ntendon, m.nv), dtype=d.qpos.dtype, device=d.qpos.device),
         )
@@ -445,7 +427,7 @@ def tendon(m: Model, d: Data) -> Data:
     dofadr_moment_jnt = m.jnt_dofadr[wrap_objid_jnt]
     ten_J[adr_moment_jnt, dofadr_moment_jnt] = moment_jnt
 
-    d = d.replace(ten_length=ten_length, ten_J=ten_J)
+    d.update_(ten_length=ten_length, ten_J=ten_J)
     return d
 
 
@@ -469,7 +451,8 @@ def tendon_armature(m: Model, d: Data) -> Data:
         j_idx = torch.tensor(j_idx, dtype=torch.long, device=d.qM.device)
         JTAJ = JTAJ[(i_idx, j_idx)]
 
-    return d.replace(qM=d.qM + JTAJ)
+    d.update_(qM=d.qM + JTAJ)
+    return d
 
 
 def _moment_row(values: torch.Tensor, dofadr: torch.Tensor, nv: int) -> torch.Tensor:
@@ -536,5 +519,5 @@ def transmission(m: Model, d: Data) -> Data:
 
     length = torch.stack(lengths)
     moment = torch.stack(moments)
-    d = d.replace(actuator_length=length, actuator_moment=moment)
+    d.update_(actuator_length=length, actuator_moment=moment)
     return d
