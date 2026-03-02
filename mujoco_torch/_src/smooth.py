@@ -237,7 +237,8 @@ def factor_m(m: Model, d: Data) -> Data:
 
     for rows, madr_ijs, pivots, out in m._device_precomp["factor_m_updates"]:
         qld_update = -(qld[madr_ijs] / qld[pivots]) * qld[rows]
-        qld = qld.scatter(0, out, qld[out] + qld_update)
+        qld = qld.clone()
+        qld[out] = qld[out] + qld_update
 
     qld_diag = qld[m.dof_Madr_t][:]
     qld = qld / qld[m.factor_m_madr_ds_t]
@@ -255,16 +256,16 @@ def solve_m(m: Model, d: Data, x: torch.Tensor) -> torch.Tensor:
 
     # x <- inv(L') * x
     for j_t, madr_t, i_t in m._device_precomp["solve_m_updates_j"]:
-        update = x[j_t] + (-d.qLD[madr_t] * x[i_t])
-        x = x.scatter(0, j_t, update)
+        x = x.clone()
+        x[j_t] = x[j_t] + (-d.qLD[madr_t] * x[i_t])
 
     # x <- inv(D) * x
     x = x * d.qLDiagInv
 
     # x <- inv(L) * x
     for i_t, madr_t, j_t in m._device_precomp["solve_m_updates_i"]:
-        update = x[i_t] + (-d.qLD[madr_t] * x[j_t])
-        x = x.scatter(0, i_t, update)
+        x = x.clone()
+        x[i_t] = x[i_t] + (-d.qLD[madr_t] * x[j_t])
 
     return x
 
