@@ -42,9 +42,9 @@ LABELS = {
     "MuJoCo C (seq)": "MuJoCo C (CPU, sequential)",
     "torch loop (seq)": "mujoco-torch (GPU, sequential)",
     "torch vmap (eager)": "mujoco-torch vmap (eager)",
-    "torch compile": "mujoco-torch compile (baseline)",
-    "torch compile (H4)": "mujoco-torch compile (optimized)",
-    "torch compile (H4+H8)": "mujoco-torch compile (opt + fixed iter)",
+    "torch compile": "mujoco-torch compile",
+    "torch compile (H4)": "mujoco-torch compile (tuned)",
+    "torch compile (H4+H8)": "mujoco-torch compile (tuned + fixed iter)",
     "MJX jit(vmap)": "MJX (JAX jit+vmap)",
 }
 
