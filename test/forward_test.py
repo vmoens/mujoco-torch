@@ -37,7 +37,7 @@ def _assert_attr_eq(a, b, attr, step, fname, atol=1e-3, rtol=1e-3):
 
 
 class ForwardTest(parameterized.TestCase):
-    @parameterized.parameters(filter(lambda s: s not in ("equality.xml",), test_util.TEST_FILES))
+    @parameterized.parameters(filter(lambda s: s not in ("equality.xml", "walker2d.xml"), test_util.TEST_FILES))
     def test_forward(self, fname):
         """Test mujoco mj forward function matches mujoco_mjx forward function."""
         np.random.seed(test_util.TEST_FILES.index(fname))

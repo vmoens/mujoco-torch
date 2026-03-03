@@ -40,8 +40,8 @@ class ConstraintTest(parameterized.TestCase):
         np.random.seed(seed)
 
         # exclude convex.xml since convex contacts are not exactly equivalent
-        # exclude hopper.xml due to constraint row ordering differences (dynamics match)
-        if fname in ("convex.xml", "hopper.xml"):
+        # exclude hopper/halfcheetah/walker2d due to constraint row ordering differences (dynamics match)
+        if fname in ("convex.xml", "hopper.xml", "halfcheetah.xml", "walker2d.xml"):
             return
 
         m = test_util.load_test_file(fname)

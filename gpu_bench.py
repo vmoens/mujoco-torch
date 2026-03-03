@@ -317,9 +317,7 @@ def main():
 
     all_results = {}
     for model_name in models:
-        all_results[model_name] = bench_model(
-            model_name, args.batch_sizes, args.nsteps, args.only
-        )
+        all_results[model_name] = bench_model(model_name, args.batch_sizes, args.nsteps, args.only)
 
     out_path = output or ("bench_all.json" if len(models) > 1 else f"bench_{models[0]}.json")
     with open(out_path, "w") as f:

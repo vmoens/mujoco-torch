@@ -26,10 +26,12 @@ TEST_FILES: list[str] = [
     "cartpole.xml",
     "convex.xml",
     "equality.xml",
+    "halfcheetah.xml",
     "hopper.xml",
     "humanoid.xml",
     "pendula.xml",
     "swimmer.xml",
+    "walker2d.xml",
 ]
 
 _ACTUATOR_TYPES = ["motor", "velocity", "position", "general", "intvelocity"]

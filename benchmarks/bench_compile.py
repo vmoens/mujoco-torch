@@ -16,8 +16,7 @@ from benchmarks._helpers import (
 )
 
 
-def _bench_compile(benchmark, model_name, batch_size, *, backend_label,
-                   inductor_tuning=False, step_kwargs=None):
+def _bench_compile(benchmark, model_name, batch_size, *, backend_label, inductor_tuning=False, step_kwargs=None):
     inductor_config.coordinate_descent_tuning = inductor_tuning
     inductor_config.aggressive_fusion = inductor_tuning
 
@@ -55,14 +54,18 @@ def _bench_compile(benchmark, model_name, batch_size, *, backend_label,
 
 def test_compile(benchmark, model_name, batch_size):
     _bench_compile(
-        benchmark, model_name, batch_size,
+        benchmark,
+        model_name,
+        batch_size,
         backend_label="torch compile",
     )
 
 
 def test_compile_h4(benchmark, model_name, batch_size):
     _bench_compile(
-        benchmark, model_name, batch_size,
+        benchmark,
+        model_name,
+        batch_size,
         backend_label="torch compile (H4)",
         inductor_tuning=True,
     )
@@ -70,7 +73,9 @@ def test_compile_h4(benchmark, model_name, batch_size):
 
 def test_compile_h4_h8(benchmark, model_name, batch_size):
     _bench_compile(
-        benchmark, model_name, batch_size,
+        benchmark,
+        model_name,
+        batch_size,
         backend_label="torch compile (H4+H8)",
         inductor_tuning=True,
         step_kwargs={"fixed_iterations": True},

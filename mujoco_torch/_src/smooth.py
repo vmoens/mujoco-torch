@@ -115,8 +115,7 @@ def kinematics(m: Model, d: Data) -> Data:
     v_local_to_global = torch.vmap(support.local_to_global)
 
     xipos, ximat = v_local_to_global(xpos, xquat, m.body_ipos, m.body_iquat)
-    kwargs = dict(qpos=qpos, xanchor=xanchor, xaxis=xaxis, xpos=xpos,
-                  xquat=xquat, xmat=xmat, xipos=xipos, ximat=ximat)
+    kwargs = dict(qpos=qpos, xanchor=xanchor, xaxis=xaxis, xpos=xpos, xquat=xquat, xmat=xmat, xipos=xipos, ximat=ximat)
 
     if m.ngeom:
         geom_xpos, geom_xmat = v_local_to_global(xpos[m.geom_bodyid_t], xquat[m.geom_bodyid_t], m.geom_pos, m.geom_quat)
@@ -394,19 +393,19 @@ def tendon(m: Model, d: Data) -> Data:
         )
         return d
 
-    moment_jnt = m.tendon_moment_jnt.to(dtype=d.qpos.dtype)
-    qpos_vals = d.qpos[m.tendon_qposadr_jnt]
+    moment_jnt = m.tendon_moment_jnt.data.to(dtype=d.qpos.dtype)
+    qpos_vals = d.qpos[m.tendon_qposadr_jnt.data]
 
     # tendon length = sum of (coefficient * joint position) per tendon
     ntendon_jnt = m.tendon_ntendon_jnt
     ten_length = torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device)
     ten_length_jnt = torch.zeros(ntendon_jnt, dtype=d.qpos.dtype, device=d.qpos.device)
-    ten_length_jnt = ten_length_jnt.index_add(0, m.tendon_segment_ids, moment_jnt * qpos_vals)
-    ten_length[m.tendon_tendon_id_jnt] = ten_length_jnt
+    ten_length_jnt = ten_length_jnt.index_add(0, m.tendon_segment_ids.data, moment_jnt * qpos_vals)
+    ten_length[m.tendon_tendon_id_jnt.data] = ten_length_jnt
 
     # tendon Jacobian: ten_J[tendon_id, dof_adr] = wrap_prm (coefficient)
     ten_J = torch.zeros((m.ntendon, m.nv), dtype=d.qpos.dtype, device=d.qpos.device)
-    ten_J[m.tendon_adr_moment_jnt, m.tendon_dofadr_moment_jnt] = moment_jnt
+    ten_J[m.tendon_adr_moment_jnt.data, m.tendon_dofadr_moment_jnt.data] = moment_jnt
 
     d.update_(ten_length=ten_length, ten_J=ten_J)
     return d
