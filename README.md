@@ -11,7 +11,8 @@ bringing GPU-accelerated physics simulation to the PyTorch ecosystem with full
 - **`torch.vmap`** -- batch thousands of environments in a single call with
   automatic vectorisation.
 - **`torch.compile`** -- fuse the entire step into optimised GPU kernels; no
-  Python overhead at runtime.
+  Python overhead at runtime.  Supports `mode="reduce-overhead"` (CUDA graphs)
+  for further launch-overhead elimination.
 - **Numerically equivalent to MJX** -- verified at float64 precision for every
   step (see `test/mjx_correctness_test.py`).
 
@@ -51,7 +52,10 @@ pip install git+https://github.com/pytorch/tensordict.git
 ```
 
 Without this custom PyTorch build, eager mode and `torch.vmap` work fine; only
-`torch.compile(fullgraph=True)` requires the fork.
+`torch.compile(fullgraph=True)` requires the fork.  For
+`mode="reduce-overhead"` (CUDA graphs), use the
+[`vmoens/nomerg-sum-prs`](https://github.com/vmoens/pytorch/tree/vmoens/nomerg-sum-prs)
+branch which includes additional CUDA graph partitioning fixes.
 
 ## Quick start
 
@@ -125,6 +129,7 @@ are measured at B=1 since they scale linearly.  All values are **steps/second**
 | MuJoCo C (CPU, sequential) | 59,536 | — | — | — | — |
 | mujoco-torch vmap (eager) | 14 | 1,632 | 13,069 | 52,335 | 351,379 |
 | mujoco-torch compile | 153 | 17,860 | 140,268 | 525,786 | 1,184,616 |
+| mujoco-torch compile (reduce-overhead) | 285 | 32,784 | 215,823 | 633,389 | 1,187,356 |
 | **mujoco-torch compile (tuned)** | **179** | **21,597** | **168,131** | **646,097** | **2,304,722** |
 | MJX (JAX jit+vmap) | 870 | 108,905 | 874,432 | 2,237,444 | 2,382,388 |
 
@@ -135,6 +140,7 @@ are measured at B=1 since they scale linearly.  All values are **steps/second**
 | MuJoCo C (CPU, sequential) | 101,157 | — | — | — | — |
 | mujoco-torch vmap (eager) | 18 | 2,191 | 17,709 | 70,287 | 244,466 |
 | mujoco-torch compile | 198 | 22,889 | 181,512 | 463,238 | 501,108 |
+| mujoco-torch compile (reduce-overhead) | 344 | 42,799 | 248,339 | 467,707 | 507,384 |
 | **mujoco-torch compile (tuned)** | **228** | **28,142** | **220,462** | **771,708** | **2,009,884** |
 | MJX (JAX jit+vmap) | 772 | 92,726 | 483,129 | 674,019 | 687,813 |
 
@@ -145,6 +151,7 @@ are measured at B=1 since they scale linearly.  All values are **steps/second**
 | MuJoCo C (CPU, sequential) | 166,742 | — | — | — | — |
 | mujoco-torch vmap (eager) | 18 | 2,273 | 18,114 | 72,423 | 550,086 |
 | mujoco-torch compile | 179 | 23,317 | 178,960 | 727,947 | 2,233,241 |
+| mujoco-torch compile (reduce-overhead) | 331 | 728 | 137,366 | 496,806 | 1,804,789 |
 | **mujoco-torch compile (tuned)** | **225** | **27,006** | **215,496** | **794,317** | **3,366,696** |
 | MJX (JAX jit+vmap) | 569 | 58,191 | 444,864 | 1,408,451 | 2,888,935 |
 
@@ -158,6 +165,7 @@ than Euler.
 | MuJoCo C (CPU, sequential) | 41,289 | — | — | — | — |
 | mujoco-torch vmap (eager) | 5 | 502 | 3,684 | 14,432 | 101,332 |
 | mujoco-torch compile | 65 | 6,583 | 49,408 | 191,909 | 504,352 |
+| mujoco-torch compile (reduce-overhead) | 121 | 9,860 | 64,172 | 204,926 | 448,015 |
 | **mujoco-torch compile (tuned)** | **79** | **8,324** | **60,664** | **223,730** | **757,820** |
 | MJX (JAX jit+vmap) | 170 | 10,176 | 69,757 | 203,816 | 324,060 |
 
@@ -170,8 +178,14 @@ Hopper uses the RK4 integrator (like Walker2d).
 | MuJoCo C (CPU, sequential) | 63,644 | — | — | — | — |
 | mujoco-torch vmap (eager) | 4 | 519 | 4,104 | 16,365 | 125,955 |
 | mujoco-torch compile | 181 | 21,590 | 170,770 | 658,242 | 2,717,048 |
+| mujoco-torch compile (reduce-overhead) | 228 | 28,642 | 319,472 | 1,029,042 | 3,059,814 |
 | **mujoco-torch compile (tuned)** | **215** | **25,153** | **171,744** | **763,681** | **3,876,643** |
 | MJX (JAX jit+vmap) | 222 | 21,879 | 180,342 | 525,552 | 1,293,001 |
+
+**"reduce-overhead"** = `torch.compile(mode="reduce-overhead")`, which captures
+the compiled graph into CUDA graphs to eliminate kernel launch overhead.
+Requires upstream fixes not yet in a released PyTorch version (see
+[PyTorch build](#pytorch-build)).
 
 **"tuned"** = Inductor coordinate-descent tile-size tuning + aggressive fusion
 enabled (`torch._inductor.config.coordinate_descent_tuning`,
