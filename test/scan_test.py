@@ -77,7 +77,7 @@ class ScanTest(absltest.TestCase):
 
         # we will test two functions:
         #   1) j_fn receives jnt_types as a torch array
-        #   2) s_fn receives jnt_types as a static np array and can switch on it
+        #   2) s_fn receives jnt_types as a static array and can switch on it
         j_fn = lambda jnt_pos, val: val + torch.sum(jnt_pos)
         s_fn = lambda jnt_types, val: val + sum(jnt_types)
 
@@ -115,7 +115,7 @@ class ScanTest(absltest.TestCase):
 
         # we will test two functions:
         #   1) j_fn receives jnt_pos which is a torch array
-        #   2) s_fn receives jnt_types which is a static np array
+        #   2) s_fn receives jnt_types which is a static array
         def j_fn(carry, jnt_pos, val):
             carry = torch.zeros_like(val) if carry is None else carry
             return carry + val + torch.sum(jnt_pos)
@@ -216,7 +216,7 @@ class ScanTest(absltest.TestCase):
         gear, jnt_typ, qadr, vadr, act = scan.flat(m, fn, "ujqva", "ujqva", *args, group_by="u")
 
         np.testing.assert_array_equal(gear, m.actuator_gear)
-        np.testing.assert_array_equal(jnt_typ, m.jnt_type[m.actuator_trnid[:, 0]])
+        np.testing.assert_array_equal(jnt_typ, m.jnt_type.data[m.actuator_trnid[:, 0]])
         np.testing.assert_array_equal(act, torch.tensor([1.4, 1.1]))
         expected_vadr = np.concatenate([np.nonzero(m.dof_jntid == trnid)[0] for trnid in m.actuator_trnid[:, 0]])
         np.testing.assert_array_equal(vadr, expected_vadr)
