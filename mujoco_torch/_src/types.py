@@ -551,7 +551,7 @@ class Model(MjTensorClass):
     body_inertia: torch.Tensor
     body_gravcomp: torch.Tensor
     body_invweight0: torch.Tensor
-    jnt_type: np.ndarray
+    jnt_type: UnbatchedTensor
     jnt_qposadr: np.ndarray
     jnt_dofadr: np.ndarray
     jnt_bodyid: np.ndarray
@@ -694,9 +694,9 @@ class Model(MjTensorClass):
     wrap_objid: np.ndarray
     wrap_prm: np.ndarray
     actuator_trntype: np.ndarray
-    actuator_dyntype: np.ndarray
-    actuator_gaintype: np.ndarray
-    actuator_biastype: np.ndarray
+    actuator_dyntype: UnbatchedTensor
+    actuator_gaintype: UnbatchedTensor
+    actuator_biastype: UnbatchedTensor
     actuator_trnid: np.ndarray
     actuator_actadr: np.ndarray
     actuator_actnum: np.ndarray

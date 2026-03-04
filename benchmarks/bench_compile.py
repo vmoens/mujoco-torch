@@ -16,13 +16,22 @@ from benchmarks._helpers import (
 )
 
 
-def _bench_compile(benchmark, model_name, batch_size, *, backend_label, inductor_tuning=False, step_kwargs=None):
+def _bench_compile(
+    benchmark,
+    model_name,
+    batch_size,
+    *,
+    backend_label,
+    inductor_tuning=False,
+    step_kwargs=None,
+    scan_padding=False,
+):
     inductor_config.coordinate_descent_tuning = inductor_tuning
     inductor_config.aggressive_fusion = inductor_tuning
 
     m_mj = load_model(model_name)
     with torch.device("cpu"):
-        mx = mujoco_torch.device_put(m_mj)
+        mx = mujoco_torch.device_put(m_mj, scan_padding=scan_padding)
     mx = mx.to(DEVICE)
     warm_caches(mx, m_mj, DEVICE)
 
@@ -68,6 +77,16 @@ def test_compile_h4(benchmark, model_name, batch_size):
         batch_size,
         backend_label="torch compile (H4)",
         inductor_tuning=True,
+    )
+
+
+def test_compile_padded(benchmark, model_name, batch_size):
+    _bench_compile(
+        benchmark,
+        model_name,
+        batch_size,
+        backend_label="torch compile (padded)",
+        scan_padding=True,
     )
 
 

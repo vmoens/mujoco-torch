@@ -854,7 +854,12 @@ def device_put(value: mujoco.MjData, *, dtype: torch.dtype | None = None, scan_p
 
 
 @overload
-def device_put(value: mujoco.MjModel, *, dtype: torch.dtype | None = None, scan_padding: bool = False) -> types.Model: ...
+def device_put(
+    value: mujoco.MjModel,
+    *,
+    dtype: torch.dtype | None = None,
+    scan_padding: bool = False,
+) -> types.Model: ...
 
 
 def _cast_float(v, dtype):
@@ -899,6 +904,10 @@ def device_put(value, *, dtype: torch.dtype | None = None, scan_padding: bool = 
 
         if f.type is torch.Tensor:
             field_value = torch.device_put(field_value)
+        elif f.type is UnbatchedTensor:
+            field_value = UnbatchedTensor(
+                torch.as_tensor(np.ascontiguousarray(field_value)),
+            )
         elif type(field_value) in _TYPE_MAP.keys():
             field_value = device_put(field_value, dtype=dtype)
 
