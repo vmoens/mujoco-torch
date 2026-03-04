@@ -24,6 +24,7 @@ from typing import Any, overload
 import mujoco
 import numpy as np
 import torch
+from tensordict import UnbatchedTensor
 from torch.utils._pytree import tree_map
 
 from mujoco_torch._src import collision_driver, mesh, ray, scan, types
@@ -155,6 +156,16 @@ _DERIVED = mesh.DERIVED.union(
         (types.Model, "factor_m_updates"),
         (types.Model, "solve_m_updates_j"),
         (types.Model, "solve_m_updates_i"),
+        # Pre-computed tendon indices
+        (types.Model, "tendon_has_jnt"),
+        (types.Model, "tendon_qposadr_jnt"),
+        (types.Model, "tendon_moment_jnt"),
+        (types.Model, "tendon_segment_ids"),
+        (types.Model, "tendon_tendon_id_jnt"),
+        (types.Model, "tendon_adr_moment_jnt"),
+        (types.Model, "tendon_dofadr_moment_jnt"),
+        (types.Model, "tendon_ntendon_jnt"),
+        (types.Model, "scan_padding"),
     }
 )
 
@@ -519,12 +530,12 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
     return result
 
 
-def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
+def _model_derived(value: mujoco.MjModel, *, scan_padding: bool = False) -> dict[str, Any]:
     global _model_cache_id_counter
     _model_cache_id_counter += 1
 
     mesh_kwargs = mesh.get(value)
-    result = {"cache_id": _model_cache_id_counter}
+    result = {"cache_id": _model_cache_id_counter, "scan_padding": scan_padding}
     for k, v in mesh_kwargs.items():
         result[k] = tuple(torch.tensor(x) if x is not None else None for x in v)
     # mesh_convex: one ConvexMesh per mesh
@@ -588,7 +599,7 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
 
     result.update(_compute_sensor_groups(value))
 
-    scan.precompute_scan_caches(value, _model_cache_id_counter)
+    scan.precompute_scan_caches(value, _model_cache_id_counter, scan_padding=scan_padding)
 
     # Pre-cached tensor versions of numpy model fields.
     # These are regular tensors on CPU; .to(device) on the Model moves them.
@@ -710,6 +721,59 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     result["solve_m_updates_j"] = _build_solve_groups(solve_updates_j, reverse=True)
     result["solve_m_updates_i"] = _build_solve_groups(solve_updates_i, reverse=False)
 
+    # Pre-compute tendon indices
+    _empty_long = UnbatchedTensor(torch.empty(0, dtype=torch.long))
+    _empty_float = UnbatchedTensor(torch.empty(0, dtype=torch.float64))
+    if value.ntendon > 0:
+        wrap_type = np.array(value.wrap_type)
+        (wrap_id_jnt,) = np.nonzero(wrap_type == types.WrapType.JOINT)
+        has_jnt = wrap_id_jnt.size > 0
+    else:
+        has_jnt = False
+    result["tendon_has_jnt"] = has_jnt
+
+    if has_jnt:
+        tendon_adr = np.array(value.tendon_adr)
+        tendon_num = np.array(value.tendon_num)
+        wrap_objid = np.array(value.wrap_objid)
+        wrap_prm = np.array(value.wrap_prm)
+        jnt_qposadr = np.array(value.jnt_qposadr)
+        jnt_dofadr = np.array(value.jnt_dofadr)
+
+        (tendon_id_jnt,) = np.nonzero(np.isin(tendon_adr, wrap_id_jnt))
+        ntendon_jnt = tendon_id_jnt.size
+        wrap_objid_jnt = wrap_objid[wrap_id_jnt]
+        tendon_num_jnt = tendon_num[tendon_id_jnt]
+
+        result["tendon_ntendon_jnt"] = ntendon_jnt
+        result["tendon_qposadr_jnt"] = UnbatchedTensor(
+            torch.as_tensor(jnt_qposadr[wrap_objid_jnt], dtype=torch.long),
+        )
+        result["tendon_moment_jnt"] = UnbatchedTensor(
+            torch.as_tensor(wrap_prm[wrap_id_jnt].copy(), dtype=torch.float64),
+        )
+        tendon_num_jnt_t = torch.as_tensor(tendon_num_jnt)
+        result["tendon_segment_ids"] = UnbatchedTensor(
+            torch.arange(ntendon_jnt).repeat_interleave(tendon_num_jnt_t),
+        )
+        result["tendon_tendon_id_jnt"] = UnbatchedTensor(
+            torch.as_tensor(tendon_id_jnt, dtype=torch.long),
+        )
+        result["tendon_adr_moment_jnt"] = UnbatchedTensor(
+            torch.as_tensor(tendon_id_jnt, dtype=torch.long).repeat_interleave(tendon_num_jnt_t),
+        )
+        result["tendon_dofadr_moment_jnt"] = UnbatchedTensor(
+            torch.as_tensor(jnt_dofadr[wrap_objid_jnt], dtype=torch.long),
+        )
+    else:
+        result["tendon_ntendon_jnt"] = 0
+        result["tendon_qposadr_jnt"] = _empty_long
+        result["tendon_moment_jnt"] = _empty_float
+        result["tendon_segment_ids"] = _empty_long
+        result["tendon_tendon_id_jnt"] = _empty_long
+        result["tendon_adr_moment_jnt"] = _empty_long
+        result["tendon_dofadr_moment_jnt"] = _empty_long
+
     return result
 
 
@@ -786,11 +850,11 @@ def _validate(m: mujoco.MjModel):
 
 
 @overload
-def device_put(value: mujoco.MjData, *, dtype: torch.dtype | None = None) -> types.Data: ...
+def device_put(value: mujoco.MjData, *, dtype: torch.dtype | None = None, scan_padding: bool = False) -> types.Data: ...
 
 
 @overload
-def device_put(value: mujoco.MjModel, *, dtype: torch.dtype | None = None) -> types.Model: ...
+def device_put(value: mujoco.MjModel, *, dtype: torch.dtype | None = None, scan_padding: bool = False) -> types.Model: ...
 
 
 def _cast_float(v, dtype):
@@ -800,7 +864,7 @@ def _cast_float(v, dtype):
     return v
 
 
-def device_put(value, *, dtype: torch.dtype | None = None):
+def device_put(value, *, dtype: torch.dtype | None = None, scan_padding: bool = False):
     """Places mujoco data onto a device.
 
     Args:
@@ -808,6 +872,10 @@ def device_put(value, *, dtype: torch.dtype | None = None):
       dtype: optional floating-point dtype override.  When set, every
         floating-point tensor in the output is cast to *dtype* (e.g.
         ``torch.float32``).  Integer and boolean tensors are unaffected.
+      scan_padding: if True, pad scan tensors to uniform shapes so that
+        every ``torch.vmap`` call in ``scan.flat`` / ``scan.body_tree``
+        sees identical dimensions.  Reduces ``torch.compile``
+        recompilations at the cost of extra computation on padded items.
 
     Returns:
       on-device MJX struct reflecting the input value
@@ -838,7 +906,7 @@ def device_put(value, *, dtype: torch.dtype | None = None):
 
     derived_kwargs = {}
     if isinstance(value, mujoco.MjModel):
-        derived_kwargs = _model_derived(value)
+        derived_kwargs = _model_derived(value, scan_padding=scan_padding)
     elif isinstance(value, mujoco.MjData):
         derived_kwargs = _data_derived(value)
     elif isinstance(value, mujoco.MjOption):
@@ -856,7 +924,9 @@ def device_put(value, *, dtype: torch.dtype | None = None):
 
     if clz is types.Model:
         types._build_device_precomp(
-            result, torch.device("cpu"), scan._resolve_cached_tensors,
+            result,
+            torch.device("cpu"),
+            scan._resolve_cached_tensors,
         )
 
     return result

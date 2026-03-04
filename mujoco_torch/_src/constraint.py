@@ -29,10 +29,7 @@ _ZERO_I32 = _CachedConst(0, dtype=torch.int32)
 # Alternating +1/-1 signs for pyramidal friction edges, one pair per
 # friction direction.  Keyed by condim so the constant is never
 # re-allocated inside torch.vmap / torch.compile.
-_PYRAMID_SIGNS = {
-    condim: _CachedConst([1.0, -1.0] * (condim - 1))
-    for condim in (3, 4, 6)
-}
+_PYRAMID_SIGNS = {condim: _CachedConst([1.0, -1.0] * (condim - 1)) for condim in (3, 4, 6)}
 
 
 def _vmap_index(tensor: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
@@ -637,8 +634,13 @@ def make_constraint(m: Model, d: Data) -> Data:
     if not efcs:
         _dev = d.qpos.device
         z = torch.empty(0, device=_dev)
-        d.update_(efc_J=torch.empty((0, m.nv), device=_dev),
-                  efc_D=z, efc_aref=z, efc_frictionloss=z, nefc=_ZERO_I32.get(torch.int32, _dev))
+        d.update_(
+            efc_J=torch.empty((0, m.nv), device=_dev),
+            efc_D=z,
+            efc_aref=z,
+            efc_frictionloss=z,
+            nefc=_ZERO_I32.get(torch.int32, _dev),
+        )
         return d
 
     efc = torch.cat(list(efcs))
@@ -655,7 +657,11 @@ def make_constraint(m: Model, d: Data) -> Data:
         return aref, r
 
     aref, r = fn(efc)
-    d.update_(efc_J=efc.J, efc_D=1 / r, efc_aref=aref,
-              efc_frictionloss=efc.frictionloss,
-              nefc=torch.full((), r.shape[0], dtype=torch.int32, device=r.device))
+    d.update_(
+        efc_J=efc.J,
+        efc_D=1 / r,
+        efc_aref=aref,
+        efc_frictionloss=efc.frictionloss,
+        nefc=torch.full((), r.shape[0], dtype=torch.int32, device=r.device),
+    )
     return d

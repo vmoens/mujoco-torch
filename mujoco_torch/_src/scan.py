@@ -80,7 +80,8 @@ def warm_device_caches(cache_id: int, device: torch.device):
     for key in list(_body_tree_cache):
         if key[0] == cache_id:
             _body_tree_cache[key] = _resolve_cached_tensors(
-                _body_tree_cache[key], device,
+                _body_tree_cache[key],
+                device,
             )
 
 
@@ -119,7 +120,7 @@ def _signature_applies(m, in_types, out_types, group_by=None):
     return True
 
 
-def precompute_scan_caches(m, cache_id: int):
+def precompute_scan_caches(m, cache_id: int, *, scan_padding: bool = False):
     """Pre-build all scan caches for known call-site signatures.
 
     Called from ``device_put`` so that ``flat()`` and ``body_tree()``
@@ -147,6 +148,8 @@ def precompute_scan_caches(m, cache_id: int):
                 group_np[pos] = _validate_and_convert_np_subset(subset)
             pre_extracted.append(group_np)
         cache["pre_extracted_np"] = pre_extracted
+        if scan_padding:
+            cache["padding"] = _compute_flat_padding(cache, in_types, out_types, group_by)
         _flat_cache[cache_key] = cache
 
     for in_types, out_types, reverse, np_fields in _KNOWN_BODY_TREE_CALLS:
@@ -171,6 +174,8 @@ def precompute_scan_caches(m, cache_id: int):
                 group_np.append(np_val)
             pre_extracted[key] = group_np
         cache["pre_extracted_np"] = pre_extracted
+        if scan_padding:
+            cache["padding"] = _compute_body_tree_padding(cache, in_types, out_types)
         _body_tree_cache[cache_key] = cache
 
 
@@ -254,7 +259,7 @@ def _take(obj: Y, idx) -> Y:
         def take(x):
             if not x.shape[0]:
                 return x
-            return x[cached.to(x.device)]
+            return x[cached.to(x.device)].clone()
 
         return tree_map(take, obj)
 
@@ -265,7 +270,7 @@ def _take(obj: Y, idx) -> Y:
         if not x.shape[0]:
             return x
         i = idx.to(x.device) if idx.device != x.device else idx
-        return x[i]
+        return x[i].clone()
 
     return tree_map(take, obj)
 
@@ -374,6 +379,305 @@ def _extract_np_for_body_tree(args, key_in_take_torch, keys):
             group_np.append(_validate_and_convert_np_subset(subset))
         result[key] = group_np
     return result
+
+
+# ---------------------------------------------------------------------------
+# Scan padding helpers
+# ---------------------------------------------------------------------------
+
+
+def _pad_indices(arr, max_batch, max_width=None):
+    """Pad numpy index array to uniform sizes by repeating edge values.
+
+    For 1D arrays: pad to (max_batch,).
+    For 2D arrays: pad to (max_batch, max_width).
+    Empty dimensions are filled with zeros (valid index into any array).
+    """
+    if arr.ndim == 1:
+        n = arr.shape[0]
+        if n == 0:
+            return np.zeros(max_batch, dtype=arr.dtype)
+        if n >= max_batch:
+            return arr[:max_batch]
+        return np.pad(arr, (0, max_batch - n), mode="edge")
+    n, k = arr.shape
+    result = arr
+    if max_width is not None and k < max_width:
+        if k == 0:
+            result = np.zeros((n, max_width), dtype=arr.dtype)
+        else:
+            result = np.pad(result, ((0, 0), (0, max_width - k)), mode="edge")
+    if n < max_batch:
+        if n == 0:
+            result = np.zeros((max_batch,) + result.shape[1:], dtype=result.dtype)
+        else:
+            result = np.pad(result, ((0, max_batch - n), (0, 0)), mode="edge")
+    return result
+
+
+def _wrap_callback_with_padding(f, out_types, max_out_widths):
+    """Wrap callback to pad output tensors to uniform sizes inside vmap."""
+    if all(mow is None for mow in max_out_widths):
+        return f
+
+    def wrapped(*args):
+        result = f(*args)
+        if result is None:
+            return result
+        is_seq = isinstance(result, (list, tuple))
+        results = list(result) if is_seq else [result]
+        padded = []
+        for r, mow in zip(results, max_out_widths):
+            if mow is None or r.ndim == 0:
+                padded.append(r)
+                continue
+            actual = r.shape[0]
+            if actual < mow:
+                pad_shape = (mow - actual,) + r.shape[1:]
+                r = torch.cat(
+                    [r, torch.zeros(pad_shape, dtype=r.dtype, device=r.device)],
+                )
+            padded.append(r)
+        return tuple(padded) if is_seq else padded[0]
+
+    return wrapped
+
+
+def _trim_padded_output(y, actual_batch, actual_out_widths, out_types, flat_types):
+    """Trim padded vmap output to actual batch and per-item sizes."""
+    is_seq = isinstance(y, (list, tuple))
+    ys = list(y) if is_seq else [y]
+    trimmed = []
+    for yi, aow, t in zip(ys, actual_out_widths, out_types):
+        yi = yi[:actual_batch]
+        if aow is not None and t not in flat_types:
+            yi = yi[:, :aow]
+        trimmed.append(yi)
+    return tuple(trimmed) if is_seq else trimmed[0]
+
+
+def _trim_batch_only(y, actual_batch):
+    """Trim only the batch dimension of padded output."""
+    if y is None:
+        return y
+    if isinstance(y, (list, tuple)):
+        return tuple(yi[:actual_batch] for yi in y)
+    return y[:actual_batch]
+
+
+def _pad_batch_dim(x, max_batch):
+    """Pad a tensor's first dim to *max_batch* by appending zeros."""
+    actual = x.shape[0]
+    if actual >= max_batch:
+        return x
+    pad_shape = (max_batch - actual,) + x.shape[1:]
+    return torch.cat(
+        [x, torch.zeros(pad_shape, dtype=x.dtype, device=x.device)],
+    )
+
+
+def _dct_shape(ids):
+    """Get shape from _DeviceCachedTensor or regular tensor."""
+    if isinstance(ids, _DeviceCachedTensor):
+        return ids._cpu.shape
+    return ids.shape
+
+
+def _dct_numpy(ids):
+    """Convert _DeviceCachedTensor or tensor to numpy."""
+    if isinstance(ids, _DeviceCachedTensor):
+        return ids._cpu.numpy()
+    if isinstance(ids, torch.Tensor):
+        return ids.cpu().numpy()
+    return np.asarray(ids)
+
+
+# ---------------------------------------------------------------------------
+# Flat padding cache
+# ---------------------------------------------------------------------------
+
+
+def _compute_flat_padding(cache, in_types, out_types, group_by):
+    """Compute padding metadata for padded flat scan.
+
+    Returns a dict with ``max_batch``, ``max_out_widths`` (per output
+    position), and ``groups`` (a list parallel to *key_typ_ids* with
+    per-group padded index tensors, actual batch size, and actual output
+    widths).
+    """
+    key_typ_ids = cache["key_typ_ids"]
+    group_has_output = cache["group_has_output"]
+    flat_ = cache["flat_"]
+
+    active = [
+        (i, key, typ_ids)
+        for i, ((key, typ_ids), ho) in enumerate(zip(key_typ_ids, group_has_output))
+        if ho
+    ]
+    if not active:
+        return None
+
+    # -- max batch across active groups --
+    batches = [next(iter(typ_ids.values())).shape[0] for _, _, typ_ids in active]
+    max_batch = max(batches)
+
+    # -- max per-item input widths --
+    max_in_widths: dict[str, int | None] = {}
+    for t in set(in_types):
+        ws = [
+            typ_ids[t].shape[1]
+            for _, _, typ_ids in active
+            if typ_ids[t].ndim >= 2
+        ]
+        max_in_widths[t] = max(ws) if ws else None
+
+    # -- max output widths (per position in out_types) --
+    max_out_widths: list[int | None] = []
+    for t in out_types:
+        if t in flat_:
+            max_out_widths.append(None)
+        elif group_by == "j":
+            ws = []
+            for _, key, _ in active:
+                if t == "q":
+                    ws.append(sum(JointType(jt).qpos_width() for jt in key))
+                elif t == "v":
+                    ws.append(sum(JointType(jt).dof_width() for jt in key))
+                elif t == "j":
+                    ws.append(len(key))
+                else:
+                    ws.append(1)
+            max_out_widths.append(max(ws) if ws else None)
+        else:
+            max_out_widths.append(None)
+
+    # -- per-group padding data (indexed parallel to key_typ_ids) --
+    groups: list[dict | None] = [None] * len(key_typ_ids)
+    for idx, (gi, key, typ_ids) in enumerate(active):
+        batch = batches[idx]
+
+        padded_ids = {}
+        for t in set(in_types):
+            padded_ids[t] = _cached_long(
+                _pad_indices(typ_ids[t], max_batch, max_in_widths.get(t)),
+            )
+
+        actual_out: list[int | None] = []
+        for oi, ot in enumerate(out_types):
+            if max_out_widths[oi] is None:
+                actual_out.append(None)
+            elif group_by == "j":
+                if ot == "q":
+                    actual_out.append(sum(JointType(jt).qpos_width() for jt in key))
+                elif ot == "v":
+                    actual_out.append(sum(JointType(jt).dof_width() for jt in key))
+                elif ot == "j":
+                    actual_out.append(len(key))
+                else:
+                    actual_out.append(1)
+            else:
+                actual_out.append(None)
+
+        groups[gi] = {
+            "padded_ids": padded_ids,
+            "actual_batch": batch,
+            "actual_out_widths": actual_out,
+        }
+
+    return {
+        "max_batch": max_batch,
+        "max_out_widths": max_out_widths,
+        "groups": groups,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Body-tree padding cache
+# ---------------------------------------------------------------------------
+
+
+def _compute_body_tree_padding(cache, in_types, out_types):
+    """Compute padding metadata for padded body_tree scan.
+
+    Returns a dict with ``max_batch``, ``max_out_widths`` (per output
+    position), and ``groups`` (a dict keyed by group key with per-group
+    padded index tensors, actual batch size, and actual output widths).
+    """
+    key_in_take_torch = cache["key_in_take_torch"]
+    keys = cache["keys"]
+
+    # -- batch sizes --
+    batches = {key: _dct_shape(key_in_take_torch[key][0])[0] for key in keys}
+    max_batch = max(batches.values())
+
+    # -- max per-item input widths (per position in in_types) --
+    max_in_widths: list[int | None] = []
+    for j, t in enumerate(in_types):
+        if t == "b":
+            max_in_widths.append(None)
+            continue
+        ws = [
+            _dct_shape(key_in_take_torch[key][j])[1]
+            for key in keys
+            if len(_dct_shape(key_in_take_torch[key][j])) >= 2
+        ]
+        max_in_widths.append(max(ws) if ws else None)
+
+    # -- max output widths: derive from matching in_type entries --
+    max_out_widths: list[int | None] = []
+    for t in out_types:
+        if t == "b":
+            max_out_widths.append(None)
+            continue
+        ws: list[int] = []
+        for j, it in enumerate(in_types):
+            if it == t:
+                for key in keys:
+                    s = _dct_shape(key_in_take_torch[key][j])
+                    if len(s) >= 2:
+                        ws.append(s[1])
+                break
+        max_out_widths.append(max(ws) if ws else None)
+
+    # -- per-group data --
+    groups: dict[tuple, dict] = {}
+    for key in keys:
+        in_takes = key_in_take_torch[key]
+        batch = batches[key]
+
+        padded_ids = []
+        for j, t in enumerate(in_types):
+            ids_np = _dct_numpy(in_takes[j])
+            padded_ids.append(
+                _cached_long(_pad_indices(ids_np, max_batch, max_in_widths[j])),
+            )
+
+        actual_out: list[int | None] = []
+        for oi, t in enumerate(out_types):
+            if max_out_widths[oi] is None:
+                actual_out.append(None)
+                continue
+            matched = False
+            for j, it in enumerate(in_types):
+                if it == t:
+                    s = _dct_shape(in_takes[j])
+                    actual_out.append(s[1] if len(s) >= 2 else 1)
+                    matched = True
+                    break
+            if not matched:
+                actual_out.append(None)
+
+        groups[key] = {
+            "padded_ids": padded_ids,
+            "actual_batch": batch,
+            "actual_out_widths": actual_out,
+        }
+
+    return {
+        "max_batch": max_batch,
+        "max_out_widths": max_out_widths,
+        "groups": groups,
+    }
 
 
 def _nvmap(f: Callable[..., Y], np_args, *args) -> Y:
@@ -641,21 +945,33 @@ def flat(
     group_has_output = cache["group_has_output"]
     flat_ = cache["flat_"]
 
+    padding = cache.get("padding")
+    use_padding = m.scan_padding and padding is not None
+
     # Use pre-extracted numpy if available (pre-computed at device_put time
     # for known signatures), otherwise fall back to runtime extraction.
     all_np_args = cache.get("pre_extracted_np")
     if all_np_args is None:
         all_np_args = _extract_np_for_flat(args, in_types, key_typ_ids_torch, group_has_output)
 
+    callback = f
+    if use_padding:
+        callback = _wrap_callback_with_padding(f, out_types, padding["max_out_widths"])
+
     # Call vmap per group (Dynamo unrolls this constant-length loop)
     ys = []
     for i, ((_, typ_ids_t), has_output) in enumerate(zip(key_typ_ids_torch, group_has_output)):
         if has_output:
+            ids_for_take = padding["groups"][i]["padded_ids"] if use_padding else typ_ids_t
             f_args = [
-                _take(arg, typ_ids_t[typ]) if not isinstance(arg, np.ndarray) else None
+                _take(arg, ids_for_take[typ]) if not isinstance(arg, np.ndarray) else None
                 for arg, typ in zip(args, in_types)
             ]
-            ys.append(_nvmap(f, all_np_args[i], *f_args))
+            y = _nvmap(callback, all_np_args[i], *f_args)
+            if use_padding:
+                pg = padding["groups"][i]
+                y = _trim_padded_output(y, pg["actual_batch"], pg["actual_out_widths"], out_types, flat_)
+            ys.append(y)
         else:
             ys.append(None)
 
@@ -860,11 +1176,18 @@ def body_tree(
     keys = cache["keys"]
     carry_maps = cache["carry_maps"]
 
+    padding = cache.get("padding")
+    use_padding = m.scan_padding and padding is not None
+
     # Use pre-extracted numpy if available (pre-computed at device_put time
     # for known signatures), otherwise fall back to runtime extraction.
     all_np_args = cache.get("pre_extracted_np")
     if all_np_args is None:
         all_np_args = _extract_np_for_body_tree(args, key_in_take_torch, keys)
+
+    callback = f
+    if use_padding:
+        callback = _wrap_callback_with_padding(f, out_types, padding["max_out_widths"])
 
     # Scan over groups in tree order, carrying results up/down
     key_y = {}
@@ -891,11 +1214,24 @@ def body_tree(
                 take_fn = lambda x, i=take_idx: _take(x, i)
                 carry = tree_map(take_fn, y)
 
+        if use_padding:
+            if carry is not None:
+                _mb = padding["max_batch"]
+                carry = tree_map(lambda x, mb=_mb: _pad_batch_dim(x, mb), carry)
+            ids_list = padding["groups"][key]["padded_ids"]
+        else:
+            ids_list = key_in_take_torch[key]
+
         f_args = [
             _take(arg, ids) if not isinstance(arg, np.ndarray) else None
-            for arg, ids in zip(args, key_in_take_torch[key])
+            for arg, ids in zip(args, ids_list)
         ]
-        key_y[key] = _nvmap(f, all_np_args[key], carry, *f_args)
+        y = _nvmap(callback, all_np_args[key], carry, *f_args)
+
+        if use_padding:
+            y = _trim_batch_only(y, padding["groups"][key]["actual_batch"])
+
+        key_y[key] = y
 
     # Filter out keys whose callback returned None
     active_keys = [k for k in keys if key_y[k] is not None]
@@ -907,6 +1243,13 @@ def body_tree(
         y_typ = [key_y[key] for key in active_keys]
         if len(out_types) > 1:
             y_typ = [y_[i] for y_ in y_typ]
+        if use_padding and typ != "b":
+            y_typ = [
+                yg[:, :padding["groups"][key]["actual_out_widths"][i]]
+                if padding["groups"][key]["actual_out_widths"][i] is not None
+                else yg
+                for yg, key in zip(y_typ, active_keys)
+            ]
         if typ != "b":
             y_typ = tree_map(lambda x: torch.flatten(x, 0, 1), y_typ)
         y_typ = tree_map(lambda *x: _cat_device_safe(x), *y_typ)
