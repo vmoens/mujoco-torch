@@ -56,6 +56,45 @@ _MULTI_GEOM_XML = """
 </mujoco>
 """
 
+_CYLINDER_XML = """
+<mujoco>
+  <option>
+    <flag contact="disable"/>
+  </option>
+  <worldbody>
+    <light pos="0 0 3"/>
+    <geom name="floor" type="plane" size="5 5 0.01" rgba="0.5 0.5 0.5 1"
+          contype="0" conaffinity="0"/>
+    <body pos="0 0 0.5">
+      <joint type="slide" axis="0 0 1"/>
+      <geom name="cyl" type="cylinder" size="0.2 0.3" rgba="0 1 0 1"
+            contype="0" conaffinity="0"/>
+    </body>
+    <camera name="cam0" pos="2 0 1" xyaxes="0 1 0 0 0 1"/>
+  </worldbody>
+</mujoco>
+"""
+
+_SHADOW_XML = """
+<mujoco>
+  <option>
+    <flag contact="disable"/>
+  </option>
+  <worldbody>
+    <light pos="0 0 3" diffuse="1 1 1" castshadow="true"/>
+    <geom name="floor" type="plane" size="5 5 0.01" rgba="0.8 0.8 0.8 1"
+          contype="0" conaffinity="0"/>
+    <body pos="0 0 0.5">
+      <joint type="slide" axis="0 0 1"/>
+      <geom name="ball" type="sphere" size="0.3" rgba="1 0 0 1"
+            contype="0" conaffinity="0"/>
+    </body>
+    <camera name="cam0" pos="3 -2 2" xyaxes="0.6 0.8 0 -0.3 0.2 0.9"
+            fovy="60"/>
+  </worldbody>
+</mujoco>
+"""
+
 
 class RenderTest(absltest.TestCase):
     def test_render_returns_correct_shapes(self):
@@ -199,6 +238,118 @@ class RenderTest(absltest.TestCase):
         cam_xpos_np = np.array(d_mj.cam_xpos)
         cam_xpos_torch = dx.cam_xpos.detach().cpu().numpy()
         np.testing.assert_allclose(cam_xpos_torch, cam_xpos_np, atol=1e-6)
+
+    def test_cylinder_rendering(self):
+        """Cylinder geoms are visible and coloured in flat rendering."""
+        m_mj = mujoco.MjModel.from_xml_string(_CYLINDER_XML)
+        d_mj = mujoco.MjData(m_mj)
+        mujoco.mj_forward(m_mj, d_mj)
+
+        mx = mujoco_torch.device_put(m_mj)
+        dx = mujoco_torch.device_put(d_mj)
+        dx = mujoco_torch.forward(mx, dx)
+
+        rgb, _, seg = mujoco_torch.render(mx, dx, camera_id=0, width=32, height=32, shading=False)
+        cyl_id = mujoco.mj_name2id(m_mj, mujoco.mjtObj.mjOBJ_GEOM, "cyl")
+        cyl_mask = seg == cyl_id
+        self.assertTrue(cyl_mask.any(), "Camera should see the cylinder")
+        cyl_rgb = rgb[cyl_mask]
+        np.testing.assert_allclose(
+            cyl_rgb[:, 1].numpy(),
+            1.0,
+            atol=1e-5,
+        )
+
+    def test_shadow_rays(self):
+        """Shadow rays darken occluded regions."""
+        m_mj = mujoco.MjModel.from_xml_string(_SHADOW_XML)
+        d_mj = mujoco.MjData(m_mj)
+        mujoco.mj_forward(m_mj, d_mj)
+
+        mx = mujoco_torch.device_put(m_mj)
+        dx = mujoco_torch.device_put(d_mj)
+        dx = mujoco_torch.forward(mx, dx)
+
+        rgb_no, _, _ = mujoco_torch.render(mx, dx, camera_id=0, width=32, height=32, shadows=False)
+        rgb_sh, _, _ = mujoco_torch.render(mx, dx, camera_id=0, width=32, height=32, shadows=True)
+        diff = (rgb_no - rgb_sh).abs()
+        self.assertGreater(diff.max().item(), 0.01, "Shadows should darken some pixels")
+
+    def test_ssaa(self):
+        """SSAA renders at higher resolution and downsamples."""
+        m_mj = mujoco.MjModel.from_xml_string(_RENDER_XML)
+        d_mj = mujoco.MjData(m_mj)
+        mujoco.mj_forward(m_mj, d_mj)
+
+        mx = mujoco_torch.device_put(m_mj)
+        dx = mujoco_torch.device_put(d_mj)
+
+        rgb1, _, _ = mujoco_torch.render(mx, dx, camera_id=0, width=8, height=8, ssaa=1)
+        rgb2, _, _ = mujoco_torch.render(mx, dx, camera_id=0, width=8, height=8, ssaa=2)
+        self.assertEqual(rgb1.shape, (8, 8, 3))
+        self.assertEqual(rgb2.shape, (8, 8, 3))
+
+    def test_fog(self):
+        """Fog blends distant pixels towards the fog colour."""
+        m_mj = mujoco.MjModel.from_xml_string(_RENDER_XML)
+        d_mj = mujoco.MjData(m_mj)
+        mujoco.mj_forward(m_mj, d_mj)
+
+        mx = mujoco_torch.device_put(m_mj)
+        dx = mujoco_torch.device_put(d_mj)
+
+        fog_color = (0.8, 0.8, 0.9)
+        rgb_no_fog, _, _ = mujoco_torch.render(mx, dx, camera_id=0, width=16, height=16)
+        rgb_fog, _, _ = mujoco_torch.render(
+            mx,
+            dx,
+            camera_id=0,
+            width=16,
+            height=16,
+            fog=(fog_color, 1.0, 5.0),
+        )
+        self.assertGreater(
+            rgb_fog.mean().item(),
+            rgb_no_fog.mean().item(),
+            "Fog should shift mean brightness towards fog colour",
+        )
+
+    def test_render_batch(self):
+        """render_batch produces correctly batched output."""
+        m_mj = mujoco.MjModel.from_xml_string(_RENDER_XML)
+        d_mj = mujoco.MjData(m_mj)
+        mujoco.mj_forward(m_mj, d_mj)
+
+        mx = mujoco_torch.device_put(m_mj)
+        dx = mujoco_torch.device_put(d_mj)
+
+        batch = torch.stack([dx.clone(), dx.clone()])
+        rgb, depth, seg = mujoco_torch.render_batch(mx, batch, camera_id=0, width=8, height=8)
+        self.assertEqual(rgb.shape, (2, 8, 8, 3))
+        self.assertEqual(depth.shape, (2, 8, 8))
+        self.assertEqual(seg.shape, (2, 8, 8))
+        np.testing.assert_array_equal(
+            rgb[0].numpy(),
+            rgb[1].numpy(),
+        )
+
+    def test_background_color(self):
+        """background parameter colours miss pixels."""
+        m_mj = mujoco.MjModel.from_xml_string(_RENDER_XML)
+        d_mj = mujoco.MjData(m_mj)
+        mujoco.mj_forward(m_mj, d_mj)
+
+        mx = mujoco_torch.device_put(m_mj)
+        dx = mujoco_torch.device_put(d_mj)
+
+        bg = (0.2, 0.4, 0.8)
+        rgb, _, seg = mujoco_torch.render(mx, dx, camera_id=0, width=16, height=16, background=bg)
+        miss = seg < 0
+        if miss.any():
+            miss_rgb = rgb[miss]
+            np.testing.assert_allclose(miss_rgb[:, 0].numpy(), bg[0], atol=1e-5)
+            np.testing.assert_allclose(miss_rgb[:, 1].numpy(), bg[1], atol=1e-5)
+            np.testing.assert_allclose(miss_rgb[:, 2].numpy(), bg[2], atol=1e-5)
 
 
 if __name__ == "__main__":

@@ -657,7 +657,18 @@ class Model(MjTensorClass):
     hfield_ncol: np.ndarray
     hfield_adr: np.ndarray
     hfield_data: torch.Tensor
+    ntex: int
+    ntexdata: int
     mat_rgba: torch.Tensor
+    mat_texid: np.ndarray
+    mat_texrepeat: np.ndarray
+    mat_texuniform: np.ndarray
+    tex_type: np.ndarray
+    tex_height: np.ndarray
+    tex_width: np.ndarray
+    tex_nchannel: np.ndarray
+    tex_adr: np.ndarray
+    tex_data: np.ndarray
     pair_dim: np.ndarray
     pair_geom1: np.ndarray
     pair_geom2: np.ndarray

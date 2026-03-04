@@ -232,11 +232,49 @@ def _ray_mesh(
     return dist, id_
 
 
+def _ray_cylinder(
+    size: torch.Tensor,
+    pnt: torch.Tensor,
+    vec: torch.Tensor,
+) -> torch.Tensor:
+    """Returns the distance at which a ray intersects with a cylinder.
+
+    Cylinder has radius ``size[0]`` and half-length ``size[1]`` along z.
+    """
+    inf = torch.full((), torch.inf, dtype=pnt.dtype, device=pnt.device)
+
+    # cylinder round side: project onto xy-plane
+    a = vec[0:2] @ vec[0:2]
+    b = vec[0:2] @ pnt[0:2]
+    c = pnt[0:2] @ pnt[0:2] - size[0] * size[0]
+
+    x0, x1 = _ray_quad(a, b, c)
+    x = torch.where(torch.isinf(x0), x1, x0)
+
+    # keep only hits within the z half-length
+    x = torch.where(torch.abs(pnt[2] + x * vec[2]) <= size[1], x, inf)
+
+    # top cap (z = +half_length)
+    t_top = math.safe_div(size[1] - pnt[2], vec[2])
+    p_top = pnt[0:2] + t_top * vec[0:2]
+    valid_top = (t_top >= 0) & (p_top @ p_top <= size[0] * size[0])
+    x = torch.where(valid_top & (t_top < x), t_top, x)
+
+    # bottom cap (z = -half_length)
+    t_bot = math.safe_div(-size[1] - pnt[2], vec[2])
+    p_bot = pnt[0:2] + t_bot * vec[0:2]
+    valid_bot = (t_bot >= 0) & (p_bot @ p_bot <= size[0] * size[0])
+    x = torch.where(valid_bot & (t_bot < x), t_bot, x)
+
+    return x
+
+
 _RAY_FUNC = {
     GeomType.PLANE: _ray_plane,
     GeomType.SPHERE: _ray_sphere,
     GeomType.CAPSULE: _ray_capsule,
     GeomType.ELLIPSOID: _ray_ellipsoid,
+    GeomType.CYLINDER: _ray_cylinder,
     GeomType.BOX: _ray_box,
     GeomType.MESH: _ray_mesh,
 }
@@ -246,6 +284,7 @@ _PRIMITIVE_RAY_FUNC = {
     GeomType.SPHERE: _ray_sphere,
     GeomType.CAPSULE: _ray_capsule,
     GeomType.ELLIPSOID: _ray_ellipsoid,
+    GeomType.CYLINDER: _ray_cylinder,
     GeomType.BOX: _ray_box,
 }
 
