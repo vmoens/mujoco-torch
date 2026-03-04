@@ -20,9 +20,8 @@ from typing import Any, TypeVar
 
 import numpy as np
 import torch
-from torch.utils._pytree import tree_map
-
 from tensordict import UnbatchedTensor
+from torch.utils._pytree import tree_map
 
 from mujoco_torch._src.math import concatenate
 from mujoco_torch._src.types import JointType, Model, TrnType
@@ -692,7 +691,7 @@ def _compute_body_tree_padding(cache, in_types, out_types):
         batch = batches[key]
 
         padded_ids = []
-        for j, t in enumerate(in_types):
+        for j, _t in enumerate(in_types):
             ids_np = _dct_numpy(in_takes[j])
             padded_ids.append(
                 _cached_long(_pad_indices(ids_np, max_batch, max_in_widths[j])),
@@ -797,9 +796,10 @@ def _check_input(m: Model, args: Any, in_types: str) -> None:
         "c": m.ncam,
     }
     for idx, (arg, typ) in enumerate(zip(args, in_types)):
-        if len(arg) != size[typ]:
+        arg_len = arg.data.shape[0] if isinstance(arg, UnbatchedTensor) else len(arg)
+        if arg_len != size[typ]:
             raise IndexError(
-                f'f argument "{idx}" with type "{typ}" has length "{len(arg)}"'
+                f'f argument "{idx}" with type "{typ}" has length "{arg_len}"'
                 f" which does not match the in_types[{idx}] expected length of "
                 f'"{size[typ]}".'
             )

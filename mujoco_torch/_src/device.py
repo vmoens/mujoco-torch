@@ -854,7 +854,9 @@ def device_put(value: mujoco.MjData, *, dtype: torch.dtype | None = None, scan_p
 
 
 @overload
-def device_put(value: mujoco.MjModel, *, dtype: torch.dtype | None = None, scan_padding: bool = False) -> types.Model: ...
+def device_put(
+    value: mujoco.MjModel, *, dtype: torch.dtype | None = None, scan_padding: bool = False,
+) -> types.Model: ...
 
 
 def _cast_float(v, dtype):

@@ -385,8 +385,7 @@ class ScanPaddingPhysicsTest(absltest.TestCase):
             )
 
     def test_step_equivalence(self):
-        from mujoco_torch._src import test_util
-        from mujoco_torch._src import forward
+        from mujoco_torch._src import forward, test_util
         m_mj = test_util.load_test_file("ant.xml")
 
         mx_np = mujoco_torch.device_put(m_mj)

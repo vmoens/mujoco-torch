@@ -16,7 +16,10 @@ from benchmarks._helpers import (
 )
 
 
-def _bench_compile(benchmark, model_name, batch_size, *, backend_label, inductor_tuning=False, step_kwargs=None, scan_padding=False):
+def _bench_compile(
+    benchmark, model_name, batch_size, *, backend_label,
+    inductor_tuning=False, step_kwargs=None, scan_padding=False,
+):
     inductor_config.coordinate_descent_tuning = inductor_tuning
     inductor_config.aggressive_fusion = inductor_tuning
 
