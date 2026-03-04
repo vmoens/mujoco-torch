@@ -165,6 +165,7 @@ _DERIVED = mesh.DERIVED.union(
         (types.Model, "tendon_adr_moment_jnt"),
         (types.Model, "tendon_dofadr_moment_jnt"),
         (types.Model, "tendon_ntendon_jnt"),
+        (types.Model, "scan_padding"),
     }
 )
 
@@ -529,12 +530,12 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
     return result
 
 
-def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
+def _model_derived(value: mujoco.MjModel, *, scan_padding: bool = False) -> dict[str, Any]:
     global _model_cache_id_counter
     _model_cache_id_counter += 1
 
     mesh_kwargs = mesh.get(value)
-    result = {"cache_id": _model_cache_id_counter}
+    result = {"cache_id": _model_cache_id_counter, "scan_padding": scan_padding}
     for k, v in mesh_kwargs.items():
         result[k] = tuple(torch.tensor(x) if x is not None else None for x in v)
     # mesh_convex: one ConvexMesh per mesh
@@ -598,7 +599,7 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
 
     result.update(_compute_sensor_groups(value))
 
-    scan.precompute_scan_caches(value, _model_cache_id_counter)
+    scan.precompute_scan_caches(value, _model_cache_id_counter, scan_padding=scan_padding)
 
     # Pre-cached tensor versions of numpy model fields.
     # These are regular tensors on CPU; .to(device) on the Model moves them.
@@ -849,11 +850,11 @@ def _validate(m: mujoco.MjModel):
 
 
 @overload
-def device_put(value: mujoco.MjData, *, dtype: torch.dtype | None = None) -> types.Data: ...
+def device_put(value: mujoco.MjData, *, dtype: torch.dtype | None = None, scan_padding: bool = False) -> types.Data: ...
 
 
 @overload
-def device_put(value: mujoco.MjModel, *, dtype: torch.dtype | None = None) -> types.Model: ...
+def device_put(value: mujoco.MjModel, *, dtype: torch.dtype | None = None, scan_padding: bool = False) -> types.Model: ...
 
 
 def _cast_float(v, dtype):
@@ -863,7 +864,7 @@ def _cast_float(v, dtype):
     return v
 
 
-def device_put(value, *, dtype: torch.dtype | None = None):
+def device_put(value, *, dtype: torch.dtype | None = None, scan_padding: bool = False):
     """Places mujoco data onto a device.
 
     Args:
@@ -871,6 +872,10 @@ def device_put(value, *, dtype: torch.dtype | None = None):
       dtype: optional floating-point dtype override.  When set, every
         floating-point tensor in the output is cast to *dtype* (e.g.
         ``torch.float32``).  Integer and boolean tensors are unaffected.
+      scan_padding: if True, pad scan tensors to uniform shapes so that
+        every ``torch.vmap`` call in ``scan.flat`` / ``scan.body_tree``
+        sees identical dimensions.  Reduces ``torch.compile``
+        recompilations at the cost of extra computation on padded items.
 
     Returns:
       on-device MJX struct reflecting the input value
@@ -901,7 +906,7 @@ def device_put(value, *, dtype: torch.dtype | None = None):
 
     derived_kwargs = {}
     if isinstance(value, mujoco.MjModel):
-        derived_kwargs = _model_derived(value)
+        derived_kwargs = _model_derived(value, scan_padding=scan_padding)
     elif isinstance(value, mujoco.MjData):
         derived_kwargs = _data_derived(value)
     elif isinstance(value, mujoco.MjOption):
