@@ -127,6 +127,16 @@ def kinematics(m: Model, d: Data) -> Data:
         site_xpos, site_xmat = v_local_to_global(xpos[m.site_bodyid_t], xquat[m.site_bodyid_t], m.site_pos, m.site_quat)
         kwargs.update(site_xpos=site_xpos, site_xmat=site_xmat)
 
+    if m.ncam:
+        cam_xpos, cam_xmat = v_local_to_global(xpos[m.cam_bodyid_t], xquat[m.cam_bodyid_t], m.cam_pos, m.cam_quat)
+        kwargs.update(cam_xpos=cam_xpos, cam_xmat=cam_xmat)
+
+    if m.nlight:
+        body_quat = xquat[m.light_bodyid_t]
+        light_xpos = xpos[m.light_bodyid_t] + torch.vmap(math.rotate)(m.light_pos, body_quat)
+        light_xdir = torch.vmap(math.rotate)(m.light_dir, body_quat)
+        kwargs.update(light_xpos=light_xpos, light_xdir=light_xdir)
+
     d.update_(**kwargs)
     return d
 

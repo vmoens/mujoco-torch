@@ -53,6 +53,8 @@ def _make_data_public_fields(m: Model) -> dict:
         "site_xmat": (m.nsite, 3, 3),
         "cam_xpos": (m.ncam, 3),
         "cam_xmat": (m.ncam, 3, 3),
+        "light_xpos": (m.nlight, 3),
+        "light_xdir": (m.nlight, 3),
         "subtree_com": (m.nbody, 3),
         "actuator_force": (m.nu,),
         "actuator_length": (m.nu,),
