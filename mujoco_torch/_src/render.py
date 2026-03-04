@@ -319,6 +319,7 @@ def render(
     height: int = 64,
     precomp: tuple | None = None,
     shading: bool = True,
+    background: tuple[float, float, float] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Pure-PyTorch ray-cast render.
 
@@ -338,6 +339,8 @@ def render(
          Computed on-the-fly when *None*.
       shading: when *True* and the model has lights, apply Lambert diffuse +
          Phong specular shading.  Set to *False* for flat-colour output.
+      background: RGB tuple in [0, 1] for pixels that miss all geometry.
+         Defaults to black ``(0, 0, 0)`` when *None*.
 
     Returns:
       ``(rgb, depth, seg)`` where
@@ -371,6 +374,13 @@ def render(
     rgba = _geom_color(m, seg)
     base_rgb = rgba[..., :3]
 
+    miss = (seg < 0).unsqueeze(-1)
+
+    if background is not None:
+        bg = torch.tensor(background, dtype=base_rgb.dtype, device=device)
+    else:
+        bg = torch.zeros(3, dtype=base_rgb.dtype, device=device)
+
     if shading and m.nlight > 0:
         hit_points = (origins_flat + dists.unsqueeze(-1) * dirs_flat).reshape(height, width, 3)
         normals = _compute_normals(
@@ -387,9 +397,8 @@ def render(
             m,
             d,
         ).reshape(height, width, 3)
-        miss = (seg < 0).unsqueeze(-1)
-        rgb = torch.where(miss, torch.zeros_like(rgb), rgb)
+        rgb = torch.where(miss, bg, rgb)
     else:
-        rgb = base_rgb
+        rgb = torch.where(miss, bg, base_rgb)
 
     return rgb, depth, seg

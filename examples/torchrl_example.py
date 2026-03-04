@@ -11,7 +11,11 @@ see ``examples/batched_comparison.py``.
 Run:
     pip install torchrl
     python examples/torchrl_example.py
+    python examples/torchrl_example.py --model cheetah
 """
+
+import argparse
+import re
 
 import mujoco
 import torch
@@ -25,12 +29,10 @@ from torchrl.record.loggers.csv import CSVLogger
 
 import mujoco_torch
 
-MODEL_XML = (epath.resource_path("mujoco_torch") / "test_data" / "ant.xml").read_text()
+_TEST_DATA = epath.resource_path("mujoco_torch") / "test_data"
+MODEL_XML = (_TEST_DATA / "ant.xml").read_text()
 
-# A simpler model with a FIXED camera for pixel rendering demos.
-# The ant.xml cameras use TRACKCOM / TARGETBODY modes which require
-# camera-mode-aware kinematics not yet implemented in mujoco-torch.
-PIXEL_MODEL_XML = """
+ARM_XML = """
 <mujoco model="simple_arm">
   <option timestep="0.002"/>
   <worldbody>
@@ -58,6 +60,28 @@ PIXEL_MODEL_XML = """
 """
 
 
+def _load_cheetah_xml() -> str:
+    """Load halfcheetah.xml with the trackcom camera replaced by a FIXED one.
+
+    The camera stays inside the torso body so it rigidly follows the
+    cheetah as it runs — giving us a tracking side view without needing
+    the TRACKCOM camera mode (not yet supported in mujoco-torch kinematics).
+    """
+    xml = (_TEST_DATA / "halfcheetah.xml").read_text()
+    xml = re.sub(
+        r'<camera\s+name="track"[^/]*/>',
+        '<camera name="side" pos="0 -3 0.3" xyaxes="1 0 0 0 0 1" fovy="45"/>',
+        xml,
+    )
+    return xml
+
+
+PIXEL_MODELS = {
+    "arm": ARM_XML,
+    "cheetah": _load_cheetah_xml(),
+}
+
+
 class MujocoTorchEnv(EnvBase):
     """A batched TorchRL environment backed by mujoco-torch.
 
@@ -74,6 +98,7 @@ class MujocoTorchEnv(EnvBase):
         camera_id: camera index used for rendering.
         render_width: pixel observation width.
         render_height: pixel observation height.
+        background: RGB tuple in [0, 1] for missed-ray pixels (default: sky blue).
     """
 
     def __init__(
@@ -88,6 +113,7 @@ class MujocoTorchEnv(EnvBase):
         camera_id: int = 0,
         render_width: int = 64,
         render_height: int = 64,
+        background: tuple[float, float, float] = (0.4, 0.6, 0.8),
     ):
         super().__init__(device=device, batch_size=torch.Size([num_envs]))
         self.dtype = dtype
@@ -98,6 +124,7 @@ class MujocoTorchEnv(EnvBase):
         self.camera_id = camera_id
         self.render_width = render_width
         self.render_height = render_height
+        self.background = background
 
         m_mj = mujoco.MjModel.from_xml_string(xml_string)
         self._m_mj = m_mj
@@ -151,6 +178,7 @@ class MujocoTorchEnv(EnvBase):
                 width=self.render_width,
                 height=self.render_height,
                 precomp=self._render_precomp,
+                background=self.background,
             )
             frames.append((rgb * 255).clamp(0, 255).to(torch.uint8).permute(2, 0, 1))
         return torch.stack(frames)
@@ -220,6 +248,20 @@ class MujocoTorchEnv(EnvBase):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="TorchRL + mujoco-torch demo")
+    parser.add_argument(
+        "--model",
+        choices=list(PIXEL_MODELS),
+        default="arm",
+        help="Which model to use for pixel rendering / video (default: arm)",
+    )
+    parser.add_argument("--width", type=int, default=128, help="Video render width")
+    parser.add_argument("--height", type=int, default=128, help="Video render height")
+    parser.add_argument("--steps", type=int, default=200, help="Video rollout steps")
+    args = parser.parse_args()
+
+    pixel_xml = PIXEL_MODELS[args.model]
+
     torch.set_default_dtype(torch.float64)
 
     num_envs = 16
@@ -240,10 +282,10 @@ if __name__ == "__main__":
     print(f"  Final qpos[0, :3]:  {rollout[-1]['next', 'qpos'][0, :3].tolist()}")
 
     # --- Pixel observation environment ---
-    print("\n--- Pixel mode (simple arm with FIXED camera) ---")
+    print(f"\n--- Pixel mode ({args.model}) ---")
     num_envs_px = 4
     env_px = MujocoTorchEnv(
-        PIXEL_MODEL_XML,
+        pixel_xml,
         num_envs=num_envs_px,
         max_episode_steps=200,
         from_pixels=True,
@@ -270,29 +312,30 @@ if __name__ == "__main__":
         import torchvision
 
         frame = pixels[-1, 0]  # last step, first env — (3, H, W)
-        torchvision.utils.save_image(frame.float() / 255.0, "arm_render.png")
-        print("  Saved arm_render.png")
+        torchvision.utils.save_image(frame.float() / 255.0, f"{args.model}_render.png")
+        print(f"  Saved {args.model}_render.png")
     except ImportError:
         print("  (install torchvision to save a sample frame)")
 
     # --- Video recording with VideoRecorder ---
-    print("\n--- Video recording ---")
-    logger = CSVLogger(exp_name="arm_render", log_dir="videos", video_format="mp4")
-    recorder = VideoRecorder(logger=logger, tag="arm_video", in_keys=["pixels"])
+    print(f"\n--- Video recording ({args.model}, {args.width}x{args.height}) ---")
+    logger = CSVLogger(exp_name=f"{args.model}_render", log_dir="videos", video_format="mp4")
+    recorder = VideoRecorder(logger=logger, tag=f"{args.model}_video", in_keys=["pixels"])
+    num_envs_vid = 4
     env_video = TransformedEnv(
         MujocoTorchEnv(
-            PIXEL_MODEL_XML,
-            num_envs=1,
-            max_episode_steps=200,
+            pixel_xml,
+            num_envs=num_envs_vid,
+            max_episode_steps=args.steps,
             from_pixels=True,
             pixels_only=False,
             camera_id=0,
-            render_width=128,
-            render_height=128,
+            render_width=args.width,
+            render_height=args.height,
         ),
         recorder,
     )
-    rollout_vid = env_video.rollout(max_steps=100)
+    rollout_vid = env_video.rollout(max_steps=args.steps)
     recorder.dump()
-    print(f"  Recorded {rollout_vid.shape[-1]} frames at 128x128")
+    print(f"  Recorded {rollout_vid.shape[-1]} frames at {args.width}x{args.height}")
     print("  Video saved to videos/")
