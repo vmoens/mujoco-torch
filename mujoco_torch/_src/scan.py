@@ -14,12 +14,15 @@
 # ==============================================================================
 """Scan across data ordered by body joint types and kinematic tree order."""
 
+import dataclasses
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 import numpy as np
 import torch
 from torch.utils._pytree import tree_map
+
+from tensordict import UnbatchedTensor
 
 from mujoco_torch._src.math import concatenate
 from mujoco_torch._src.types import JointType, Model, TrnType
@@ -88,7 +91,7 @@ def warm_device_caches(cache_id: int, device: torch.device):
 # Registry of all known scan call-site signatures.
 # Each entry: (in_types, out_types, group_by_or_reverse,
 #              [(arg_position, model_field_name), ...])
-# The last element lists which arg positions are numpy model fields.
+# The last element lists which arg positions are static model fields.
 _KNOWN_FLAT_CALLS = [
     ("jbbjj", "v", "j", [(0, "jnt_type")]),
     ("uuua", "a", "u", [(0, "actuator_dyntype")]),
@@ -127,12 +130,12 @@ def precompute_scan_caches(m, cache_id: int, *, scan_padding: bool = False):
     never need to build caches at runtime (which would require
     ``@torch.compiler.disable``).
     """
-    for in_types, out_types, group_by, np_fields in _KNOWN_FLAT_CALLS:
+    for in_types, out_types, group_by, static_fields in _KNOWN_FLAT_CALLS:
         if not _signature_applies(m, in_types, out_types, group_by):
             continue
         cache_key = (cache_id, in_types, out_types, group_by)
         cache = _build_flat_cache(m, in_types, out_types, group_by)
-        # Pre-extract numpy static args for all groups
+        # Pre-extract static args for all groups
         key_typ_ids_torch = cache["key_typ_ids_torch"]
         group_has_output = cache["group_has_output"]
         pre_extracted = []
@@ -140,40 +143,40 @@ def precompute_scan_caches(m, cache_id: int, *, scan_padding: bool = False):
             if not has_output:
                 pre_extracted.append(None)
                 continue
-            group_np = [None] * len(in_types)
-            for pos, field_name in np_fields:
-                np_array = getattr(m, field_name)
+            group_static = [None] * len(in_types)
+            for pos, field_name in static_fields:
+                static_array = getattr(m, field_name)
                 typ = in_types[pos]
-                subset = _take(np_array, typ_ids_t[typ])
-                group_np[pos] = _validate_and_convert_np_subset(subset)
-            pre_extracted.append(group_np)
-        cache["pre_extracted_np"] = pre_extracted
+                subset = _take(static_array, typ_ids_t[typ])
+                group_static[pos] = _validate_and_convert_subset(subset)
+            pre_extracted.append(group_static)
+        cache["pre_extracted_static"] = pre_extracted
         if scan_padding:
             cache["padding"] = _compute_flat_padding(cache, in_types, out_types, group_by)
         _flat_cache[cache_key] = cache
 
-    for in_types, out_types, reverse, np_fields in _KNOWN_BODY_TREE_CALLS:
+    for in_types, out_types, reverse, static_fields in _KNOWN_BODY_TREE_CALLS:
         if not _signature_applies(m, in_types, out_types):
             continue
         cache_key = (cache_id, in_types, out_types, reverse)
         cache = _build_body_tree_cache(m, in_types, out_types, reverse)
-        # Pre-extract numpy static args for all groups
+        # Pre-extract static args for all groups
         key_in_take_torch = cache["key_in_take_torch"]
         keys = cache["keys"]
         pre_extracted = {}
         for key in keys:
-            group_np = [None]  # carry is never numpy
+            group_static = [None]  # carry is never static
             for i, ids in enumerate(key_in_take_torch[key]):
-                np_val = None
-                for pos, field_name in np_fields:
+                static_val = None
+                for pos, field_name in static_fields:
                     if pos == i:
-                        np_array = getattr(m, field_name)
-                        subset = _take(np_array, ids)
-                        np_val = _validate_and_convert_np_subset(subset)
+                        static_array = getattr(m, field_name)
+                        subset = _take(static_array, ids)
+                        static_val = _validate_and_convert_subset(subset)
                         break
-                group_np.append(np_val)
-            pre_extracted[key] = group_np
-        cache["pre_extracted_np"] = pre_extracted
+                group_static.append(static_val)
+            pre_extracted[key] = group_static
+        cache["pre_extracted_static"] = pre_extracted
         if scan_padding:
             cache["padding"] = _compute_body_tree_padding(cache, in_types, out_types)
         _body_tree_cache[cache_key] = cache
@@ -275,20 +278,48 @@ def _take(obj: Y, idx) -> Y:
     return tree_map(take, obj)
 
 
+def _as_numpy(val):
+    """Convert to numpy, handling UnbatchedTensor and regular tensors."""
+    if isinstance(val, torch.Tensor):
+        return val.cpu().numpy()
+    return val
+
+
+def _static_arg_mask(m: Model, args: tuple) -> list[bool]:
+    """Determine which args are static metadata (should not go through vmap).
+
+    Uses both isinstance checks (for np.ndarray / UnbatchedTensor) and
+    Model type annotations (matching arg identity against UnbatchedTensor
+    fields).
+    """
+    unbatched_ids = {
+        id(getattr(m, f.name))
+        for f in dataclasses.fields(type(m))
+        if f.type is UnbatchedTensor
+    }
+    return [
+        isinstance(a, (np.ndarray, UnbatchedTensor))
+        or id(a) in unbatched_ids
+        for a in args
+    ]
+
+
 def _q_bodyid(m: Model) -> np.ndarray:
     """Returns the bodyid for each qpos adress."""
+    jnt_type = _as_numpy(m.jnt_type)
     q_bodyids = [np.array([], dtype=np.int32)]
-    for jnt_type, jnt_bodyid in zip(m.jnt_type, m.jnt_bodyid):
-        width = {JointType.FREE: 7, JointType.BALL: 4}.get(jnt_type, 1)
+    for jt, jnt_bodyid in zip(jnt_type, m.jnt_bodyid):
+        width = {JointType.FREE: 7, JointType.BALL: 4}.get(jt, 1)
         q_bodyids.append(np.repeat(jnt_bodyid, width))
     return np.concatenate(q_bodyids)
 
 
 def _q_jointid(m: Model) -> np.ndarray:
     """Returns the jointid for each qpos adress."""
+    jnt_type = _as_numpy(m.jnt_type)
     q_jointid = [np.array([], dtype=np.int32)]
-    for i, jnt_type in enumerate(m.jnt_type):
-        width = {JointType.FREE: 7, JointType.BALL: 4}.get(jnt_type, 1)
+    for i, jt in enumerate(jnt_type):
+        width = {JointType.FREE: 7, JointType.BALL: 4}.get(jt, 1)
         q_jointid.append(np.repeat(i, width))
     return np.concatenate(q_jointid)
 
@@ -315,8 +346,19 @@ def _index(haystack, needle):
     return idx
 
 
-def _np_to_safe(val):
-    """Convert a numpy representative value to a Dynamo-safe Python/tensor form."""
+def _to_safe(val):
+    """Convert a representative value to a Dynamo-safe Python/tensor form.
+
+    Handles both numpy arrays and torch tensors (from UnbatchedTensor).
+    """
+    if isinstance(val, torch.Tensor):
+        if val.ndim == 0:
+            return val.item()
+        if val.numel() == 0:
+            return ()
+        if val.ndim == 1 and val.dtype in (torch.int32, torch.int64, torch.bool):
+            return tuple(int(x) for x in val.tolist())
+        return val
     if isinstance(val, (np.integer, np.floating, np.bool_)):
         return val.item()
     if not isinstance(val, np.ndarray):
@@ -330,16 +372,20 @@ def _np_to_safe(val):
     return torch.as_tensor(np.ascontiguousarray(val))
 
 
-def _validate_and_convert_np_subset(subset):
-    """Validate that a per-group numpy subset has identical rows, then convert."""
-    if subset.shape[0] > 0 and not np.all(subset == subset[0]):
-        raise RuntimeError(f"numpy arg elements do not match: {subset}")
+def _validate_and_convert_subset(subset):
+    """Validate that a per-group subset has identical rows, then convert."""
+    if isinstance(subset, torch.Tensor):
+        if subset.shape[0] > 0 and not torch.all(subset == subset[0]):
+            raise RuntimeError(f"static arg elements do not match: {subset}")
+    else:
+        if subset.shape[0] > 0 and not np.all(subset == subset[0]):
+            raise RuntimeError(f"static arg elements do not match: {subset}")
     val = subset[0] if subset.shape[0] > 0 else subset
-    return _np_to_safe(val)
+    return _to_safe(val)
 
 
-def _extract_np_for_flat(args, in_types, key_typ_ids_torch, group_has_output):
-    """Extract numpy static args for all flat-scan groups at once.
+def _extract_static_for_flat(args, in_types, key_typ_ids_torch, group_has_output, is_static):
+    """Extract static args for all flat-scan groups at once.
 
     This is only called as a fallback for signatures not registered in
     ``_KNOWN_FLAT_CALLS``.  For known signatures, pre-extracted values are
@@ -350,19 +396,19 @@ def _extract_np_for_flat(args, in_types, key_typ_ids_torch, group_has_output):
         if not has_output:
             result.append(None)
             continue
-        group_np = []
-        for arg, typ in zip(args, in_types):
-            if not isinstance(arg, np.ndarray):
-                group_np.append(None)
+        group_static = []
+        for arg, typ, static in zip(args, in_types, is_static):
+            if not static:
+                group_static.append(None)
                 continue
             subset = _take(arg, typ_ids_t[typ])
-            group_np.append(_validate_and_convert_np_subset(subset))
-        result.append(group_np)
+            group_static.append(_validate_and_convert_subset(subset))
+        result.append(group_static)
     return result
 
 
-def _extract_np_for_body_tree(args, key_in_take_torch, keys):
-    """Extract numpy static args for all body-tree groups at once.
+def _extract_static_for_body_tree(args, key_in_take_torch, keys, is_static):
+    """Extract static args for all body-tree groups at once.
 
     This is only called as a fallback for signatures not registered in
     ``_KNOWN_BODY_TREE_CALLS``.  For known signatures, pre-extracted values
@@ -370,14 +416,14 @@ def _extract_np_for_body_tree(args, key_in_take_torch, keys):
     """
     result = {}
     for key in keys:
-        group_np = [None]  # carry is never numpy
-        for arg, ids in zip(args, key_in_take_torch[key]):
-            if not isinstance(arg, np.ndarray):
-                group_np.append(None)
+        group_static = [None]  # carry is never static
+        for arg, ids, static in zip(args, key_in_take_torch[key], is_static):
+            if not static:
+                group_static.append(None)
                 continue
             subset = _take(arg, ids)
-            group_np.append(_validate_and_convert_np_subset(subset))
-        result[key] = group_np
+            group_static.append(_validate_and_convert_subset(subset))
+        result[key] = group_static
     return result
 
 
@@ -680,12 +726,12 @@ def _compute_body_tree_padding(cache, in_types, out_types):
     }
 
 
-def _nvmap(f: Callable[..., Y], np_args, *args) -> Y:
-    """A vmap that accepts pre-extracted numpy static args.
+def _nvmap(f: Callable[..., Y], static_args, *args) -> Y:
+    """A vmap that accepts pre-extracted static args.
 
     Args:
       f: function to be mapped over
-      np_args: pre-extracted numpy static args (from _extract_np_for_groups)
+      static_args: pre-extracted static args (from _extract_static_for_*)
       *args: tensor args to be vmapped
 
     Returns:
@@ -715,16 +761,15 @@ def _nvmap(f: Callable[..., Y], np_args, *args) -> Y:
             return torch.as_tensor(x)
         return x
 
-    def outer_f(*vmap_inputs, _np_args=np_args, _none_mask=none_mask):
+    def outer_f(*vmap_inputs, _static_args=static_args, _none_mask=none_mask):
         it = iter(vmap_inputs)
         full_args = [None if m else next(it) for m in _none_mask]
-        full_args = [a if n is None else n for n, a in zip(_np_args, full_args)]
+        full_args = [a if n is None else n for n, a in zip(_static_args, full_args)]
         result = f(*full_args)
         return tree_map(_ensure_tensor, result)
 
     if not vmap_args:
-        # No tensor args to vmap over; just call f directly with static args.
-        return f(*[n if n is not None else None for n in np_args])
+        return f(*[n if n is not None else None for n in static_args])
 
     if torch.compiler.is_compiling():
         return torch.vmap(outer_f, in_dims=tuple([0] * len(vmap_args)))(*vmap_args)
@@ -779,9 +824,15 @@ def _build_flat_cache(m, in_types, out_types, group_by):
     if group_by not in {"j", "u", "c"}:
         raise NotImplementedError(f'group by type "{group_by}" not implemented.')
 
+    # Convert UnbatchedTensor fields to numpy for grouping logic
+    jnt_type_np = _as_numpy(m.jnt_type)
+    act_biastype_np = _as_numpy(m.actuator_biastype) if m.nu else None
+    act_gaintype_np = _as_numpy(m.actuator_gaintype) if m.nu else None
+    act_dyntype_np = _as_numpy(m.actuator_dyntype) if m.nu else None
+
     def key_j(type_ids):
         if any(t in "jqv" for t in in_types + out_types):
-            return tuple(m.jnt_type[type_ids["j"]])
+            return tuple(jnt_type_np[type_ids["j"]])
         return ()
 
     def type_ids_j(m, i):
@@ -795,11 +846,11 @@ def _build_flat_cache(m, in_types, out_types, group_by):
     def key_u(type_ids):
         ids_u, ids_j = type_ids["u"], type_ids["j"]
         return (
-            m.actuator_biastype[ids_u],
-            m.actuator_gaintype[ids_u],
-            m.actuator_dyntype[ids_u],
+            act_biastype_np[ids_u],
+            act_gaintype_np[ids_u],
+            act_dyntype_np[ids_u],
             m.actuator_trntype[ids_u],
-            m.jnt_type[ids_j],
+            jnt_type_np[ids_j],
             m.actuator_trnid[ids_u, 1] == -1,
         )
 
@@ -948,11 +999,16 @@ def flat(
     padding = cache.get("padding")
     use_padding = m.scan_padding and padding is not None
 
-    # Use pre-extracted numpy if available (pre-computed at device_put time
-    # for known signatures), otherwise fall back to runtime extraction.
-    all_np_args = cache.get("pre_extracted_np")
-    if all_np_args is None:
-        all_np_args = _extract_np_for_flat(args, in_types, key_typ_ids_torch, group_has_output)
+    # Use pre-extracted static args if available (pre-computed at device_put
+    # time for known signatures), otherwise fall back to runtime extraction.
+    all_static_args = cache.get("pre_extracted_static")
+    if all_static_args is not None:
+        # Derive static mask from the pre-extracted data (compile-safe).
+        sample = next((g for g in all_static_args if g is not None), None)
+        is_static = [x is not None for x in sample] if sample else [False] * len(args)
+    else:
+        is_static = _static_arg_mask(m, args)
+        all_static_args = _extract_static_for_flat(args, in_types, key_typ_ids_torch, group_has_output, is_static)
 
     callback = f
     if use_padding:
@@ -964,10 +1020,10 @@ def flat(
         if has_output:
             ids_for_take = padding["groups"][i]["padded_ids"] if use_padding else typ_ids_t
             f_args = [
-                _take(arg, ids_for_take[typ]) if not isinstance(arg, np.ndarray) else None
-                for arg, typ in zip(args, in_types)
+                _take(arg, ids_for_take[typ]) if not static else None
+                for arg, typ, static in zip(args, in_types, is_static)
             ]
-            y = _nvmap(callback, all_np_args[i], *f_args)
+            y = _nvmap(callback, all_static_args[i], *f_args)
             if use_padding:
                 pg = padding["groups"][i]
                 y = _trim_padded_output(y, pg["actual_batch"], pg["actual_out_widths"], out_types, flat_)
@@ -1025,6 +1081,7 @@ def flat(
 
 def _build_body_tree_cache(m, in_types, out_types, reverse):
     """Precompute grouping indices for scan.body_tree (numpy-heavy, runs once)."""
+    jnt_type_np = _as_numpy(m.jnt_type)
     depths = np.zeros(m.nbody, dtype=np.int32)
 
     key_body_ids = {}
@@ -1040,7 +1097,7 @@ def _build_body_tree_cache(m, in_types, out_types, reverse):
             if t == "b":
                 continue
             elif t == "j":
-                key += tuple(m.jnt_type[np.nonzero(m.jnt_bodyid == id_)[0]])
+                key += tuple(jnt_type_np[np.nonzero(m.jnt_bodyid == id_)[0]])
             elif t == "v":
                 key += (len(np.nonzero(m.dof_bodyid == id_)[0]),)
             elif t == "q":
@@ -1179,11 +1236,17 @@ def body_tree(
     padding = cache.get("padding")
     use_padding = m.scan_padding and padding is not None
 
-    # Use pre-extracted numpy if available (pre-computed at device_put time
-    # for known signatures), otherwise fall back to runtime extraction.
-    all_np_args = cache.get("pre_extracted_np")
-    if all_np_args is None:
-        all_np_args = _extract_np_for_body_tree(args, key_in_take_torch, keys)
+    # Use pre-extracted static args if available (pre-computed at device_put
+    # time for known signatures), otherwise fall back to runtime extraction.
+    all_static_args = cache.get("pre_extracted_static")
+    if all_static_args is not None:
+        # Derive static mask from the pre-extracted data (compile-safe).
+        # Skip carry position (index 0) which is always None.
+        sample = next(iter(all_static_args.values()), None)
+        is_static = [x is not None for x in sample[1:]] if sample else [False] * len(args)
+    else:
+        is_static = _static_arg_mask(m, args)
+        all_static_args = _extract_static_for_body_tree(args, key_in_take_torch, keys, is_static)
 
     callback = f
     if use_padding:
@@ -1223,10 +1286,10 @@ def body_tree(
             ids_list = key_in_take_torch[key]
 
         f_args = [
-            _take(arg, ids) if not isinstance(arg, np.ndarray) else None
-            for arg, ids in zip(args, ids_list)
+            _take(arg, ids) if not static else None
+            for arg, ids, static in zip(args, ids_list, is_static)
         ]
-        y = _nvmap(callback, all_np_args[key], carry, *f_args)
+        y = _nvmap(callback, all_static_args[key], carry, *f_args)
 
         if use_padding:
             y = _trim_batch_only(y, padding["groups"][key]["actual_batch"])

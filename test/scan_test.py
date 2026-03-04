@@ -77,7 +77,7 @@ class ScanTest(absltest.TestCase):
 
         # we will test two functions:
         #   1) j_fn receives jnt_types as a torch array
-        #   2) s_fn receives jnt_types as a static np array and can switch on it
+        #   2) s_fn receives jnt_types as a static array and can switch on it
         j_fn = lambda jnt_pos, val: val + torch.sum(jnt_pos)
         s_fn = lambda jnt_types, val: val + sum(jnt_types)
 
@@ -115,7 +115,7 @@ class ScanTest(absltest.TestCase):
 
         # we will test two functions:
         #   1) j_fn receives jnt_pos which is a torch array
-        #   2) s_fn receives jnt_types which is a static np array
+        #   2) s_fn receives jnt_types which is a static array
         def j_fn(carry, jnt_pos, val):
             carry = torch.zeros_like(val) if carry is None else carry
             return carry + val + torch.sum(jnt_pos)
