@@ -80,7 +80,8 @@ def warm_device_caches(cache_id: int, device: torch.device):
     for key in list(_body_tree_cache):
         if key[0] == cache_id:
             _body_tree_cache[key] = _resolve_cached_tensors(
-                _body_tree_cache[key], device,
+                _body_tree_cache[key],
+                device,
             )
 
 

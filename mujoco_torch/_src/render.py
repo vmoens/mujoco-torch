@@ -40,17 +40,11 @@ def precompute_render_data(m: Model) -> tuple:
     geom_size = np.asarray(m.geom_size.cpu())
     geom_type = np.asarray(m.geom_type)
 
-    mat_rgba = (
-        np.asarray(m.mat_rgba.cpu()) if m.mat_rgba.shape[0] > 0
-        else np.empty((0, 4))
-    )
+    mat_rgba = np.asarray(m.mat_rgba.cpu()) if m.mat_rgba.shape[0] > 0 else np.empty((0, 4))
 
     visible = (geom_matid != -1) | (geom_rgba[:, 3] != 0)
     if mat_rgba.shape[0] > 0:
-        visible = visible & (
-            (geom_matid == -1)
-            | (mat_rgba[np.clip(geom_matid, 0, None), 3] != 0)
-        )
+        visible = visible & ((geom_matid == -1) | (mat_rgba[np.clip(geom_matid, 0, None), 3] != 0))
 
     entries = []
     for gt, fn in _PRIMITIVE_RAY_FUNC.items():
@@ -69,12 +63,14 @@ def _resolve_precomp(precomp: tuple, device: torch.device) -> tuple:
     """Move precomp tensors to the target device."""
     resolved = []
     for fn, id_t, size_t, vis_t in precomp:
-        resolved.append((
-            fn,
-            id_t.to(device),
-            size_t.to(device),
-            vis_t.to(device),
-        ))
+        resolved.append(
+            (
+                fn,
+                id_t.to(device),
+                size_t.to(device),
+                vis_t.to(device),
+            )
+        )
     return tuple(resolved)
 
 
@@ -103,9 +99,7 @@ def _generate_rays(
     dtype = cam_xpos.dtype
 
     aspect = width / height
-    half_h = torch.tan(
-        torch.tensor(fovy_deg * (torch.pi / 360.0), dtype=dtype, device=device)
-    )
+    half_h = torch.tan(torch.tensor(fovy_deg * (torch.pi / 360.0), dtype=dtype, device=device))
     half_w = half_h * aspect
 
     u = torch.linspace(0.5, width - 0.5, width, dtype=dtype, device=device)
@@ -185,13 +179,11 @@ def _compute_normals(
     geom_xmat = d.geom_xmat[safe_ids]
     geom_size = m.geom_size[safe_ids]
     geom_type_t = torch.as_tensor(
-        np.asarray(m.geom_type), device=hit_points.device,
+        np.asarray(m.geom_type),
+        device=hit_points.device,
     )[safe_ids]
 
-    hit_local = (
-        geom_xmat.transpose(-1, -2)
-        @ (hit_points - geom_xpos).unsqueeze(-1)
-    ).squeeze(-1)
+    hit_local = (geom_xmat.transpose(-1, -2) @ (hit_points - geom_xpos).unsqueeze(-1)).squeeze(-1)
 
     # --- per-type normals in local frame ---
 
@@ -203,16 +195,15 @@ def _compute_normals(
     n_sphere = _safe_normalize(hit_local)
 
     # Ellipsoid: normalize(hit_local / size^2)
-    n_ellipsoid = _safe_normalize(
-        hit_local / geom_size.square().clamp(min=1e-10)
-    )
+    n_ellipsoid = _safe_normalize(hit_local / geom_size.square().clamp(min=1e-10))
 
     # Box: face normal from the axis with largest |hit_local / size|
     abs_scaled = hit_local.abs() / geom_size.clamp(min=1e-10)
     face_idx = abs_scaled.argmax(dim=-1, keepdim=True)
     n_box = torch.zeros_like(hit_local)
     n_box.scatter_(
-        -1, face_idx,
+        -1,
+        face_idx,
         torch.sign(hit_local).gather(-1, face_idx),
     )
 
@@ -230,19 +221,23 @@ def _compute_normals(
     n_local = n_plane
     n_local = torch.where(
         (geom_type_t == int(GeomType.SPHERE)).unsqueeze(-1),
-        n_sphere, n_local,
+        n_sphere,
+        n_local,
     )
     n_local = torch.where(
         (geom_type_t == int(GeomType.CAPSULE)).unsqueeze(-1),
-        n_capsule, n_local,
+        n_capsule,
+        n_local,
     )
     n_local = torch.where(
         (geom_type_t == int(GeomType.ELLIPSOID)).unsqueeze(-1),
-        n_ellipsoid, n_local,
+        n_ellipsoid,
+        n_local,
     )
     n_local = torch.where(
         (geom_type_t == int(GeomType.BOX)).unsqueeze(-1),
-        n_box, n_local,
+        n_box,
+        n_local,
     )
 
     # transform to world frame
@@ -282,8 +277,7 @@ def _shade(
         to_light_dir = -d.light_xdir[i].expand_as(hit_points)
         to_light_pos = d.light_xpos[i] - hit_points
         to_light = torch.where(
-            torch.tensor(light_type_i == 1, device=hit_points.device)
-            .unsqueeze(-1),
+            torch.tensor(light_type_i == 1, device=hit_points.device).unsqueeze(-1),
             to_light_dir,
             to_light_pos,
         )
@@ -300,9 +294,14 @@ def _shade(
         # Phong specular: R = 2(N·L)N - L
         reflect = 2 * ndotl * normals - to_light
         reflect = _safe_normalize(reflect)
-        rdotv = (-view_dirs * reflect).sum(
-            dim=-1, keepdim=True,
-        ).clamp(min=0)
+        rdotv = (
+            (-view_dirs * reflect)
+            .sum(
+                dim=-1,
+                keepdim=True,
+            )
+            .clamp(min=0)
+        )
         specular = light_spec * rdotv.pow(50)
 
         ambient = base_color * light_amb
@@ -357,9 +356,7 @@ def render(
     cam_xmat = d.cam_xmat[camera_id]
     fovy_deg = float(m.cam_fovy[camera_id])
 
-    origins, directions = _generate_rays(
-        cam_xpos, cam_xmat, fovy_deg, width, height
-    )
+    origins, directions = _generate_rays(cam_xpos, cam_xmat, fovy_deg, width, height)
 
     origins_flat = origins.reshape(-1, 3)
     dirs_flat = directions.reshape(-1, 3)
@@ -375,20 +372,20 @@ def render(
     base_rgb = rgba[..., :3]
 
     if shading and m.nlight > 0:
-        hit_points = (
-            origins_flat + dists.unsqueeze(-1) * dirs_flat
-        ).reshape(height, width, 3)
+        hit_points = (origins_flat + dists.unsqueeze(-1) * dirs_flat).reshape(height, width, 3)
         normals = _compute_normals(
             hit_points.reshape(-1, 3),
             seg.reshape(-1),
-            m, d,
+            m,
+            d,
         ).reshape(height, width, 3)
         rgb = _shade(
             normals.reshape(-1, 3),
             hit_points.reshape(-1, 3),
             dirs_flat,
             base_rgb.reshape(-1, 3),
-            m, d,
+            m,
+            d,
         ).reshape(height, width, 3)
         miss = (seg < 0).unsqueeze(-1)
         rgb = torch.where(miss, torch.zeros_like(rgb), rgb)

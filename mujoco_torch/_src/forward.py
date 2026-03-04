@@ -20,6 +20,7 @@ import mujoco
 
 # pylint: enable=g-importing-member
 import torch
+
 from mujoco_torch._src import (
     collision_driver,
     constraint,

@@ -860,7 +860,9 @@ def device_put(value, *, dtype: torch.dtype | None = None):
 
     if clz is types.Model:
         types._build_device_precomp(
-            result, torch.device("cpu"), scan._resolve_cached_tensors,
+            result,
+            torch.device("cpu"),
+            scan._resolve_cached_tensors,
         )
 
     return result

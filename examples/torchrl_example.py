@@ -113,7 +113,8 @@ class MujocoTorchEnv(EnvBase):
             obs_keys["qvel"] = Unbounded(shape=(num_envs, nv), dtype=dtype, device=self.device)
         if from_pixels:
             obs_keys["pixels"] = Bounded(
-                low=0, high=255,
+                low=0,
+                high=255,
                 shape=(num_envs, 3, render_height, render_width),
                 dtype=torch.uint8,
                 device=self.device,
@@ -144,7 +145,8 @@ class MujocoTorchEnv(EnvBase):
         frames = []
         for i in range(self.num_envs):
             rgb, _, _ = mujoco_torch.render(
-                self.mx, self._dx[i],
+                self.mx,
+                self._dx[i],
                 camera_id=self.camera_id,
                 width=self.render_width,
                 height=self.render_height,
@@ -192,11 +194,7 @@ class MujocoTorchEnv(EnvBase):
 
         self._dx = self._dx.replace(ctrl=action)
         step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
-        self._dx = (
-            step_fn(self._dx[0]).unsqueeze(0)
-            if self.num_envs == 1
-            else torch.vmap(step_fn)(self._dx)
-        )
+        self._dx = step_fn(self._dx[0]).unsqueeze(0) if self.num_envs == 1 else torch.vmap(step_fn)(self._dx)
         self._step_count += 1
 
         ctrl_cost = 0.5 * (action**2).sum(dim=-1, keepdim=True)
@@ -270,6 +268,7 @@ if __name__ == "__main__":
     # Save a sample frame
     try:
         import torchvision
+
         frame = pixels[-1, 0]  # last step, first env — (3, H, W)
         torchvision.utils.save_image(frame.float() / 255.0, "arm_render.png")
         print("  Saved arm_render.png")

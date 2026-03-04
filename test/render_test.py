@@ -105,9 +105,7 @@ class RenderTest(absltest.TestCase):
         miss_mask = seg < 0
         if miss_mask.any():
             np.testing.assert_array_equal(depth[miss_mask].numpy(), -1.0)
-            np.testing.assert_array_equal(
-                rgb[miss_mask].numpy(), np.zeros((miss_mask.sum(), 3))
-            )
+            np.testing.assert_array_equal(rgb[miss_mask].numpy(), np.zeros((miss_mask.sum(), 3)))
 
     def test_sphere_color_lookup_flat(self):
         """Flat-shaded: pixels hitting the red sphere are exactly (1, 0, 0)."""
@@ -120,9 +118,7 @@ class RenderTest(absltest.TestCase):
 
         sphere_id = mujoco.mj_name2id(m_mj, mujoco.mjtObj.mjOBJ_GEOM, "sphere")
 
-        rgb, _, seg = mujoco_torch.render(
-            mx, dx, camera_id=0, width=32, height=32, shading=False
-        )
+        rgb, _, seg = mujoco_torch.render(mx, dx, camera_id=0, width=32, height=32, shading=False)
 
         sphere_mask = seg == sphere_id
         self.assertTrue(sphere_mask.any(), "Camera should see the sphere")
@@ -142,9 +138,7 @@ class RenderTest(absltest.TestCase):
 
         sphere_id = mujoco.mj_name2id(m_mj, mujoco.mjtObj.mjOBJ_GEOM, "sphere")
 
-        rgb, _, seg = mujoco_torch.render(
-            mx, dx, camera_id=0, width=32, height=32, shading=True
-        )
+        rgb, _, seg = mujoco_torch.render(mx, dx, camera_id=0, width=32, height=32, shading=True)
 
         sphere_mask = seg == sphere_id
         self.assertTrue(sphere_mask.any())
@@ -186,9 +180,7 @@ class RenderTest(absltest.TestCase):
 
         precomp = mujoco_torch.precompute_render_data(mx)
         rgb1, depth1, seg1 = mujoco_torch.render(mx, dx, camera_id=0, width=16, height=16)
-        rgb2, depth2, seg2 = mujoco_torch.render(
-            mx, dx, camera_id=0, width=16, height=16, precomp=precomp
-        )
+        rgb2, depth2, seg2 = mujoco_torch.render(mx, dx, camera_id=0, width=16, height=16, precomp=precomp)
 
         np.testing.assert_array_equal(rgb1.numpy(), rgb2.numpy())
         np.testing.assert_array_equal(depth1.numpy(), depth2.numpy())
