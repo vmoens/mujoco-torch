@@ -296,4 +296,4 @@ if __name__ == "__main__":
     rollout_vid = env_video.rollout(max_steps=100)
     recorder.dump()
     print(f"  Recorded {rollout_vid.shape[-1]} frames at 128x128")
-    print(f"  Video saved to videos/")
+    print("  Video saved to videos/")
