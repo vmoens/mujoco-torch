@@ -224,5 +224,271 @@ class ScanTest(absltest.TestCase):
         np.testing.assert_array_equal(qadr, expected_qadr)
 
 
+class ScanPaddingTest(absltest.TestCase):
+    """Tests verifying numerical equivalence of padded and non-padded paths."""
+
+    _MULTI_DOF_XML = ScanTest._MULTI_DOF_XML
+    _MULTI_ACT_XML = ScanTest._MULTI_ACT_XML
+
+    def _models(self, xml):
+        m_mj = mujoco.MjModel.from_xml_string(xml)
+        m_no_pad = mujoco_torch.device_put(m_mj)
+        m_pad = mujoco_torch.device_put(m_mj, scan_padding=True)
+        return m_no_pad, m_pad
+
+    def test_flat_padding_equivalence(self):
+        m_np, m_p = self._models(self._MULTI_DOF_XML)
+
+        j_fn = lambda jnt_pos, val: val + torch.sum(jnt_pos)
+        b_in = torch.tensor([[0, 0], [1, 1], [2, 2], [3, 3]])
+
+        out_np = scan.flat(m_np, j_fn, "jb", "b", m_np.jnt_pos, b_in)
+        out_p = scan.flat(m_p, j_fn, "jb", "b", m_p.jnt_pos, b_in)
+        np.testing.assert_array_equal(np.array(out_np), np.array(out_p))
+
+    def test_flat_padding_static_np(self):
+        m_np, m_p = self._models(self._MULTI_DOF_XML)
+
+        s_fn = lambda jnt_types, val: val + sum(jnt_types)
+        b_in = torch.tensor([[0, 0], [1, 1], [2, 2], [3, 3]])
+
+        out_np = scan.flat(m_np, s_fn, "jb", "b", m_np.jnt_type, b_in)
+        out_p = scan.flat(m_p, s_fn, "jb", "b", m_p.jnt_type, b_in)
+        np.testing.assert_array_equal(np.array(out_np), np.array(out_p))
+
+    def test_flat_padding_v_output(self):
+        m_np, m_p = self._models(self._MULTI_DOF_XML)
+
+        def fn(jnt_types, v_in):
+            return v_in * 2
+
+        v_in = torch.ones((m_np.nv, 1))
+        out_np = scan.flat(m_np, fn, "jv", "v", m_np.jnt_type, v_in)
+        out_p = scan.flat(m_p, fn, "jv", "v", m_p.jnt_type, v_in)
+        np.testing.assert_array_equal(np.array(out_np), np.array(out_p))
+
+    def test_flat_padding_actuators(self):
+        m_np, m_p = self._models(self._MULTI_ACT_XML)
+
+        fn = lambda *args: args
+        args_np = (
+            m_np.actuator_gear,
+            m_np.jnt_type,
+            torch.arange(m_np.nq),
+            torch.arange(m_np.nv),
+            torch.tensor([1.4, 1.1]),
+        )
+        args_p = (
+            m_p.actuator_gear,
+            m_p.jnt_type,
+            torch.arange(m_p.nq),
+            torch.arange(m_p.nv),
+            torch.tensor([1.4, 1.1]),
+        )
+        out_np = scan.flat(
+            m_np,
+            fn,
+            "ujqva",
+            "ujqva",
+            *args_np,
+            group_by="u",
+        )
+        out_p = scan.flat(
+            m_p,
+            fn,
+            "ujqva",
+            "ujqva",
+            *args_p,
+            group_by="u",
+        )
+        for a, b in zip(out_np, out_p):
+            np.testing.assert_array_equal(np.array(a), np.array(b))
+
+    def test_body_tree_padding_forward(self):
+        m_np, m_p = self._models(self._MULTI_DOF_XML)
+
+        def j_fn(carry, jnt_pos, val):
+            carry = torch.zeros_like(val) if carry is None else carry
+            return carry + val + torch.sum(jnt_pos)
+
+        b_in = torch.tensor([[0, 0], [1, 1], [2, 2], [3, 3]])
+
+        out_np = scan.body_tree(
+            m_np,
+            j_fn,
+            "jb",
+            "b",
+            m_np.jnt_pos,
+            b_in,
+        )
+        out_p = scan.body_tree(
+            m_p,
+            j_fn,
+            "jb",
+            "b",
+            m_p.jnt_pos,
+            b_in,
+        )
+        np.testing.assert_array_equal(np.array(out_np), np.array(out_p))
+
+    def test_body_tree_padding_reverse(self):
+        m_np, m_p = self._models(self._MULTI_DOF_XML)
+
+        def j_fn(carry, jnt_pos, val):
+            carry = torch.zeros_like(val) if carry is None else carry
+            return carry + val + torch.sum(jnt_pos)
+
+        b_in = torch.tensor([[0, 0], [1, 1], [2, 2], [3, 3]])
+
+        out_np = scan.body_tree(
+            m_np,
+            j_fn,
+            "jb",
+            "b",
+            m_np.jnt_pos,
+            b_in,
+            reverse=True,
+        )
+        out_p = scan.body_tree(
+            m_p,
+            j_fn,
+            "jb",
+            "b",
+            m_p.jnt_pos,
+            b_in,
+            reverse=True,
+        )
+        np.testing.assert_array_equal(np.array(out_np), np.array(out_p))
+
+    def test_body_tree_padding_static_np(self):
+        m_np, m_p = self._models(self._MULTI_DOF_XML)
+
+        def s_fn(carry, jnt_types, val):
+            carry = torch.zeros_like(val) if carry is None else carry
+            return carry + val + sum(jnt_types)
+
+        b_in = torch.tensor([[0, 0], [1, 1], [2, 2], [3, 3]])
+
+        out_np = scan.body_tree(
+            m_np,
+            s_fn,
+            "jb",
+            "b",
+            m_np.jnt_type,
+            b_in,
+        )
+        out_p = scan.body_tree(
+            m_p,
+            s_fn,
+            "jb",
+            "b",
+            m_p.jnt_type,
+            b_in,
+        )
+        np.testing.assert_array_equal(np.array(out_np), np.array(out_p))
+
+        out_np = scan.body_tree(
+            m_np,
+            s_fn,
+            "jb",
+            "b",
+            m_np.jnt_type,
+            b_in,
+            reverse=True,
+        )
+        out_p = scan.body_tree(
+            m_p,
+            s_fn,
+            "jb",
+            "b",
+            m_p.jnt_type,
+            b_in,
+            reverse=True,
+        )
+        np.testing.assert_array_equal(np.array(out_np), np.array(out_p))
+
+
+class ScanPaddingPhysicsTest(absltest.TestCase):
+    """Test padded scans through full physics pipeline."""
+
+    def test_kinematics_equivalence(self):
+        from mujoco_torch._src import test_util
+
+        m_mj = test_util.load_test_file("ant.xml")
+        d = mujoco.MjData(m_mj)
+
+        mx_np = mujoco_torch.device_put(m_mj)
+        mx_p = mujoco_torch.device_put(m_mj, scan_padding=True)
+
+        np.random.seed(42)
+        d.qvel = np.random.random(m_mj.nv) * 0.05
+        mujoco.mj_step(m_mj, d)
+
+        qpos = torch.tensor(d.qpos.copy())
+        qvel = torch.tensor(d.qvel.copy())
+
+        dx_np = mujoco_torch.make_data(mx_np)
+        dx_p = mujoco_torch.make_data(mx_p)
+
+        dx_np = mujoco_torch.kinematics(
+            mx_np,
+            dx_np.replace(qpos=qpos, qvel=qvel),
+        )
+        dx_p = mujoco_torch.kinematics(
+            mx_p,
+            dx_p.replace(qpos=qpos, qvel=qvel),
+        )
+
+        for attr in ("xpos", "xquat", "xmat", "xanchor", "xaxis"):
+            np.testing.assert_allclose(
+                getattr(dx_np, attr),
+                getattr(dx_p, attr),
+                atol=1e-12,
+                err_msg=f"mismatch in {attr}",
+            )
+
+    def test_step_equivalence(self):
+        from mujoco_torch._src import forward, test_util
+
+        m_mj = test_util.load_test_file("ant.xml")
+
+        mx_np = mujoco_torch.device_put(m_mj)
+        mx_p = mujoco_torch.device_put(m_mj, scan_padding=True)
+
+        d = mujoco.MjData(m_mj)
+        np.random.seed(42)
+        d.qvel = np.random.random(m_mj.nv) * 0.05
+        mujoco.mj_step(m_mj, d)
+
+        qpos = torch.tensor(d.qpos.copy())
+        qvel = torch.tensor(d.qvel.copy())
+
+        dx_np = mujoco_torch.make_data(mx_np).replace(
+            qpos=qpos,
+            qvel=qvel,
+        )
+        dx_p = mujoco_torch.make_data(mx_p).replace(
+            qpos=qpos,
+            qvel=qvel,
+        )
+
+        for _ in range(3):
+            dx_np = forward.step(mx_np, dx_np)
+            dx_p = forward.step(mx_p, dx_p)
+
+        np.testing.assert_allclose(
+            dx_np.qpos,
+            dx_p.qpos,
+            atol=1e-10,
+            err_msg="qpos diverged after 3 steps",
+        )
+        np.testing.assert_allclose(
+            dx_np.qvel,
+            dx_p.qvel,
+            atol=1e-10,
+            err_msg="qvel diverged after 3 steps",
+        )
+
+
 if __name__ == "__main__":
     absltest.main()

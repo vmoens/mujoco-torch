@@ -517,8 +517,8 @@ class TopKContactTest(absltest.TestCase):
         kinematics_jit_fn = mujoco_torch.kinematics
         dx = kinematics_jit_fn(mx_all, dx)
 
-        dx_all = collision_jit_fn(mx_all, dx)
-        dx_top_k = collision_jit_fn(mx_top_k, dx)
+        dx_all = collision_jit_fn(mx_all, dx.clone())
+        dx_top_k = collision_jit_fn(mx_top_k, dx.clone())
 
         self.assertEqual(dx_all.ncon, 3)
         self.assertEqual(dx_top_k.ncon, 2)

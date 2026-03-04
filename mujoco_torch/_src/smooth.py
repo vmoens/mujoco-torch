@@ -15,14 +15,13 @@
 """Core smooth dynamics functions."""
 
 import mujoco
-import numpy as np
 import torch
 
 from mujoco_torch._src import math, scan, support
 from mujoco_torch._src.math import _CachedConst
 
 # pylint: disable=g-importing-member
-from mujoco_torch._src.types import Data, DisableBit, JointType, Model, TrnType, WrapType
+from mujoco_torch._src.types import Data, DisableBit, JointType, Model, TrnType
 
 # pylint: enable=g-importing-member
 
@@ -247,12 +246,10 @@ def factor_m(m: Model, d: Data) -> Data:
 
     for rows, madr_ijs, pivots, out in m._device_precomp["factor_m_updates"]:
         qld_update = -(qld[madr_ijs] / qld[pivots]) * qld[rows]
-        qld = qld.clone()
-        qld[out] = qld[out] + qld_update
+        qld = qld.scatter(0, out, qld[out] + qld_update)
 
     qld_diag = qld[m.dof_Madr_t][:]
     qld = qld / qld[m.factor_m_madr_ds_t]
-    qld = qld.clone()
     qld[m.dof_Madr_t] = qld_diag
 
     d.update_(qLD=qld, qLDiagInv=1 / qld_diag)
@@ -267,16 +264,16 @@ def solve_m(m: Model, d: Data, x: torch.Tensor) -> torch.Tensor:
 
     # x <- inv(L') * x
     for j_t, madr_t, i_t in m._device_precomp["solve_m_updates_j"]:
-        x = x.clone()
-        x[j_t] = x[j_t] + (-d.qLD[madr_t] * x[i_t])
+        update = x[j_t] + (-d.qLD[madr_t] * x[i_t])
+        x = x.scatter(0, j_t, update)
 
     # x <- inv(D) * x
     x = x * d.qLDiagInv
 
     # x <- inv(L) * x
     for i_t, madr_t, j_t in m._device_precomp["solve_m_updates_i"]:
-        x = x.clone()
-        x[i_t] = x[i_t] + (-d.qLD[madr_t] * x[j_t])
+        update = x[i_t] + (-d.qLD[madr_t] * x[j_t])
+        x = x.scatter(0, i_t, update)
 
     return x
 
@@ -399,42 +396,26 @@ def tendon(m: Model, d: Data) -> Data:
     if not m.ntendon:
         return d
 
-    # process joint (fixed) tendons
-    (wrap_id_jnt,) = np.nonzero(m.wrap_type == WrapType.JOINT)
-
-    if wrap_id_jnt.size == 0:
+    if not m.tendon_has_jnt:
         d.update_(
             ten_length=torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device),
             ten_J=torch.zeros((m.ntendon, m.nv), dtype=d.qpos.dtype, device=d.qpos.device),
         )
         return d
 
-    (tendon_id_jnt,) = np.nonzero(np.isin(m.tendon_adr, wrap_id_jnt))
-
-    ntendon_jnt = tendon_id_jnt.size
-    wrap_objid_jnt = m.wrap_objid[wrap_id_jnt]
-    tendon_num_jnt = m.tendon_num[tendon_id_jnt]
-
-    # moment_jnt[i] = wrap_prm (coefficient) for each wrap element
-    moment_jnt = torch.as_tensor(m.wrap_prm[wrap_id_jnt], device=d.qpos.device).to(dtype=d.qpos.dtype)
-    qpos_vals = d.qpos[m.jnt_qposadr[wrap_objid_jnt]]
+    moment_jnt = m.tendon_moment_jnt.data.to(dtype=d.qpos.dtype)
+    qpos_vals = d.qpos[m.tendon_qposadr_jnt.data]
 
     # tendon length = sum of (coefficient * joint position) per tendon
-    segment_ids = torch.arange(ntendon_jnt, device=d.qpos.device).repeat_interleave(
-        torch.as_tensor(tendon_num_jnt, device=d.qpos.device)
-    )
+    ntendon_jnt = m.tendon_ntendon_jnt
     ten_length = torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device)
     ten_length_jnt = torch.zeros(ntendon_jnt, dtype=d.qpos.dtype, device=d.qpos.device)
-    ten_length_jnt = ten_length_jnt.index_add(0, segment_ids, moment_jnt * qpos_vals)
-    ten_length[tendon_id_jnt] = ten_length_jnt
+    ten_length_jnt = ten_length_jnt.index_add(0, m.tendon_segment_ids.data, moment_jnt * qpos_vals)
+    ten_length[m.tendon_tendon_id_jnt.data] = ten_length_jnt
 
     # tendon Jacobian: ten_J[tendon_id, dof_adr] = wrap_prm (coefficient)
     ten_J = torch.zeros((m.ntendon, m.nv), dtype=d.qpos.dtype, device=d.qpos.device)
-    adr_moment_jnt = torch.as_tensor(tendon_id_jnt, device=d.qpos.device).repeat_interleave(
-        torch.as_tensor(tendon_num_jnt, device=d.qpos.device)
-    )
-    dofadr_moment_jnt = m.jnt_dofadr[wrap_objid_jnt]
-    ten_J[adr_moment_jnt, dofadr_moment_jnt] = moment_jnt
+    ten_J[m.tendon_adr_moment_jnt.data, m.tendon_dofadr_moment_jnt.data] = moment_jnt
 
     d.update_(ten_length=ten_length, ten_J=ten_J)
     return d

@@ -19,6 +19,7 @@ import enum
 import mujoco
 import numpy as np
 import torch
+from tensordict import UnbatchedTensor
 
 from mujoco_torch._src.dataclasses import MjTensorClass  # pylint: disable=g-importing-member
 
@@ -803,6 +804,17 @@ class Model(MjTensorClass):
     # Pre-computed solve_m indices
     solve_m_updates_j: tuple
     solve_m_updates_i: tuple
+    # Pre-computed tendon indices (UnbatchedTensor so they move with .to(device))
+    tendon_has_jnt: bool
+    tendon_qposadr_jnt: UnbatchedTensor
+    tendon_moment_jnt: UnbatchedTensor
+    tendon_segment_ids: UnbatchedTensor
+    tendon_tendon_id_jnt: UnbatchedTensor
+    tendon_adr_moment_jnt: UnbatchedTensor
+    tendon_dofadr_moment_jnt: UnbatchedTensor
+    tendon_ntendon_jnt: int
+    # Opt-in scan padding for torch.compile (set via device_put)
+    scan_padding: bool
 
 
 # Model.names collides with TensorDict.names property.  A __getattribute__

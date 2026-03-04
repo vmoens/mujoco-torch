@@ -393,8 +393,7 @@ def step(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
         graph suitable for CUDA graph capture.
     """
     # Shallow clone so that in-place update_() calls downstream don't
-    # mutate the caller's Data.  All functions below step() assume they
-    # have exclusive ownership of d.
+    # mutate the caller's Data.
     d = d.clone(recurse=False)
     d = forward(m, d, fixed_iterations=fixed_iterations)
 
