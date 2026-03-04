@@ -291,16 +291,8 @@ def _static_arg_mask(m: Model, args: tuple) -> list[bool]:
     Model type annotations (matching arg identity against UnbatchedTensor
     fields).
     """
-    unbatched_ids = {
-        id(getattr(m, f.name))
-        for f in dataclasses.fields(type(m))
-        if f.type is UnbatchedTensor
-    }
-    return [
-        isinstance(a, (np.ndarray, UnbatchedTensor))
-        or id(a) in unbatched_ids
-        for a in args
-    ]
+    unbatched_ids = {id(getattr(m, f.name)) for f in dataclasses.fields(type(m)) if f.type is UnbatchedTensor}
+    return [isinstance(a, (np.ndarray, UnbatchedTensor)) or id(a) in unbatched_ids for a in args]
 
 
 def _q_bodyid(m: Model) -> np.ndarray:
@@ -554,11 +546,7 @@ def _compute_flat_padding(cache, in_types, out_types, group_by):
     group_has_output = cache["group_has_output"]
     flat_ = cache["flat_"]
 
-    active = [
-        (i, key, typ_ids)
-        for i, ((key, typ_ids), ho) in enumerate(zip(key_typ_ids, group_has_output))
-        if ho
-    ]
+    active = [(i, key, typ_ids) for i, ((key, typ_ids), ho) in enumerate(zip(key_typ_ids, group_has_output)) if ho]
     if not active:
         return None
 
@@ -569,11 +557,7 @@ def _compute_flat_padding(cache, in_types, out_types, group_by):
     # -- max per-item input widths --
     max_in_widths: dict[str, int | None] = {}
     for t in set(in_types):
-        ws = [
-            typ_ids[t].shape[1]
-            for _, _, typ_ids in active
-            if typ_ids[t].ndim >= 2
-        ]
+        ws = [typ_ids[t].shape[1] for _, _, typ_ids in active if typ_ids[t].ndim >= 2]
         max_in_widths[t] = max(ws) if ws else None
 
     # -- max output widths (per position in out_types) --
@@ -662,9 +646,7 @@ def _compute_body_tree_padding(cache, in_types, out_types):
             max_in_widths.append(None)
             continue
         ws = [
-            _dct_shape(key_in_take_torch[key][j])[1]
-            for key in keys
-            if len(_dct_shape(key_in_take_torch[key][j])) >= 2
+            _dct_shape(key_in_take_torch[key][j])[1] for key in keys if len(_dct_shape(key_in_take_torch[key][j])) >= 2
         ]
         max_in_widths.append(max(ws) if ws else None)
 
@@ -1285,10 +1267,7 @@ def body_tree(
         else:
             ids_list = key_in_take_torch[key]
 
-        f_args = [
-            _take(arg, ids) if not static else None
-            for arg, ids, static in zip(args, ids_list, is_static)
-        ]
+        f_args = [_take(arg, ids) if not static else None for arg, ids, static in zip(args, ids_list, is_static)]
         y = _nvmap(callback, all_static_args[key], carry, *f_args)
 
         if use_padding:
@@ -1308,7 +1287,7 @@ def body_tree(
             y_typ = [y_[i] for y_ in y_typ]
         if use_padding and typ != "b":
             y_typ = [
-                yg[:, :padding["groups"][key]["actual_out_widths"][i]]
+                yg[:, : padding["groups"][key]["actual_out_widths"][i]]
                 if padding["groups"][key]["actual_out_widths"][i] is not None
                 else yg
                 for yg, key in zip(y_typ, active_keys)
