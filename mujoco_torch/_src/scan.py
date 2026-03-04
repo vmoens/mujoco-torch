@@ -246,6 +246,8 @@ def _take(obj: Y, idx) -> Y:
     Returns:
       obj pytree with leaves taken by idxs
     """
+    if isinstance(obj, UnbatchedTensor):
+        obj = obj.data
     if isinstance(obj, np.ndarray):
         if isinstance(idx, _DeviceCachedTensor):
             return obj[idx._cpu.numpy()]
@@ -279,6 +281,8 @@ def _take(obj: Y, idx) -> Y:
 
 def _as_numpy(val):
     """Convert to numpy, handling UnbatchedTensor and regular tensors."""
+    if isinstance(val, UnbatchedTensor):
+        return val.data.cpu().numpy()
     if isinstance(val, torch.Tensor):
         return val.cpu().numpy()
     return val

@@ -216,7 +216,7 @@ class ScanTest(absltest.TestCase):
         gear, jnt_typ, qadr, vadr, act = scan.flat(m, fn, "ujqva", "ujqva", *args, group_by="u")
 
         np.testing.assert_array_equal(gear, m.actuator_gear)
-        np.testing.assert_array_equal(jnt_typ, m.jnt_type[m.actuator_trnid[:, 0]])
+        np.testing.assert_array_equal(jnt_typ, m.jnt_type.data[m.actuator_trnid[:, 0]])
         np.testing.assert_array_equal(act, torch.tensor([1.4, 1.1]))
         expected_vadr = np.concatenate([np.nonzero(m.dof_jntid == trnid)[0] for trnid in m.actuator_trnid[:, 0]])
         np.testing.assert_array_equal(vadr, expected_vadr)
