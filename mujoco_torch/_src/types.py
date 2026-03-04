@@ -632,6 +632,11 @@ class Model(MjTensorClass):
     light_pos0: torch.Tensor
     light_dir0: torch.Tensor
     light_cutoff: torch.Tensor
+    light_diffuse: torch.Tensor
+    light_ambient: torch.Tensor
+    light_specular: torch.Tensor
+    light_attenuation: torch.Tensor
+    light_active: torch.Tensor
     mesh_vertadr: np.ndarray
     mesh_vertnum: np.ndarray
     mesh_faceadr: np.ndarray
@@ -781,6 +786,8 @@ class Model(MjTensorClass):
     dof_tri_col_t: torch.Tensor
     geom_bodyid_t: torch.Tensor
     site_bodyid_t: torch.Tensor
+    cam_bodyid_t: torch.Tensor
+    light_bodyid_t: torch.Tensor
     dof_jntid_t: torch.Tensor
     actuator_ctrllimited_bool: torch.Tensor
     actuator_forcelimited_bool: torch.Tensor
@@ -1078,6 +1085,8 @@ class Data(MjTensorClass):
     site_xmat: torch.Tensor
     cam_xpos: torch.Tensor
     cam_xmat: torch.Tensor
+    light_xpos: torch.Tensor
+    light_xdir: torch.Tensor
     subtree_com: torch.Tensor
     cdof: torch.Tensor
     cinert: torch.Tensor

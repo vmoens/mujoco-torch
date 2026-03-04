@@ -55,6 +55,9 @@ from mujoco_torch._src.passive import passive
 # Raycasting
 from mujoco_torch._src.ray import ray, ray_geom
 
+# Rendering
+from mujoco_torch._src.render import precompute_render_data, render
+
 # Sensors
 from mujoco_torch._src.sensor import sensor_acc, sensor_pos, sensor_vel
 

@@ -143,6 +143,8 @@ _DERIVED = mesh.DERIVED.union(
         (types.Model, "dof_tri_col_t"),
         (types.Model, "geom_bodyid_t"),
         (types.Model, "site_bodyid_t"),
+        (types.Model, "cam_bodyid_t"),
+        (types.Model, "light_bodyid_t"),
         (types.Model, "dof_jntid_t"),
         (types.Model, "actuator_ctrllimited_bool"),
         (types.Model, "actuator_forcelimited_bool"),
@@ -610,6 +612,8 @@ def _model_derived(value: mujoco.MjModel, *, scan_padding: bool = False) -> dict
     result["dof_tri_col_t"] = torch.as_tensor(result["dof_tri_col"], dtype=torch.long)
     result["geom_bodyid_t"] = torch.as_tensor(np.array(value.geom_bodyid), dtype=torch.long)
     result["site_bodyid_t"] = torch.as_tensor(np.array(value.site_bodyid), dtype=torch.long)
+    result["cam_bodyid_t"] = torch.as_tensor(np.array(value.cam_bodyid), dtype=torch.long)
+    result["light_bodyid_t"] = torch.as_tensor(np.array(value.light_bodyid), dtype=torch.long)
     result["dof_jntid_t"] = torch.as_tensor(np.array(value.dof_jntid), dtype=torch.long)
     result["actuator_ctrllimited_bool"] = (
         torch.as_tensor(np.array(value.actuator_ctrllimited)[:, None], dtype=torch.bool)

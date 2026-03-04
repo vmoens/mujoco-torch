@@ -696,7 +696,10 @@ def collision(m: Model, d: Data) -> Data:
 
     if ncon_ == 0:
         dev = d.qpos.device
-        d.update_(contact=Contact.zero(device=dev), ncon=torch.zeros((), dtype=torch.int32, device=dev))
+        d.update_(
+            contact=Contact.zero(device=dev),
+            ncon=torch.zeros((), dtype=torch.int32, device=dev),
+        )
         return d
 
     contacts = []

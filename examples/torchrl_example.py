@@ -11,19 +11,75 @@ see ``examples/batched_comparison.py``.
 Run:
     pip install torchrl
     python examples/torchrl_example.py
+    python examples/torchrl_example.py --model cheetah
 """
+
+import argparse
+import re
 
 import mujoco
 import torch
 from etils import epath
 from tensordict import TensorDict
 from torchrl.data import Bounded, Composite, Unbounded
-from torchrl.envs import EnvBase
+from torchrl.envs import EnvBase, TransformedEnv
 from torchrl.envs.utils import check_env_specs
+from torchrl.record import VideoRecorder
+from torchrl.record.loggers.csv import CSVLogger
 
 import mujoco_torch
 
-MODEL_XML = (epath.resource_path("mujoco_torch") / "test_data" / "ant.xml").read_text()
+_TEST_DATA = epath.resource_path("mujoco_torch") / "test_data"
+MODEL_XML = (_TEST_DATA / "ant.xml").read_text()
+
+ARM_XML = """
+<mujoco model="simple_arm">
+  <option timestep="0.002"/>
+  <worldbody>
+    <light pos="0 -1 3" diffuse="1 1 1" ambient="0.2 0.2 0.2"
+           specular="0.3 0.3 0.3"/>
+    <geom type="plane" size="2 2 0.01" rgba="0.4 0.4 0.4 1"/>
+    <body name="upper" pos="0 0 0.5">
+      <joint name="shoulder" type="hinge" axis="0 1 0"/>
+      <geom type="capsule" fromto="0 0 0 0 0 0.5" size="0.06"
+            rgba="0.2 0.6 0.9 1"/>
+      <body name="lower" pos="0 0 0.5">
+        <joint name="elbow" type="hinge" axis="0 1 0"/>
+        <geom type="capsule" fromto="0 0 0 0 0 0.4" size="0.04"
+              rgba="0.9 0.3 0.2 1"/>
+      </body>
+    </body>
+    <camera name="side" pos="1.5 -1.5 1" xyaxes="1 1 0 0 0 1"
+            fovy="60"/>
+  </worldbody>
+  <actuator>
+    <motor joint="shoulder" ctrlrange="-1 1"/>
+    <motor joint="elbow"    ctrlrange="-1 1"/>
+  </actuator>
+</mujoco>
+"""
+
+
+def _load_cheetah_xml() -> str:
+    """Load halfcheetah.xml with the trackcom camera replaced by a FIXED one.
+
+    The camera stays inside the torso body so it rigidly follows the
+    cheetah as it runs — giving us a tracking side view without needing
+    the TRACKCOM camera mode (not yet supported in mujoco-torch kinematics).
+    """
+    xml = (_TEST_DATA / "halfcheetah.xml").read_text()
+    xml = re.sub(
+        r'<camera\s+name="track"[^/]*/>',
+        '<camera name="side" pos="0 -3 0.3" xyaxes="1 0 0 0 0 1" fovy="45"/>',
+        xml,
+    )
+    return xml
+
+
+PIXEL_MODELS = {
+    "arm": ARM_XML,
+    "cheetah": _load_cheetah_xml(),
+}
 
 
 class MujocoTorchEnv(EnvBase):
@@ -35,6 +91,14 @@ class MujocoTorchEnv(EnvBase):
         max_episode_steps: truncation horizon per environment.
         device: torch device.
         dtype: floating-point dtype for observations, actions, rewards.
+        from_pixels: if *True*, render pixel observations each step using
+            the pure-PyTorch ray-cast renderer.
+        pixels_only: if *True* (requires ``from_pixels``), drop ``qpos`` /
+            ``qvel`` from the observation spec — only pixels are returned.
+        camera_id: camera index used for rendering.
+        render_width: pixel observation width.
+        render_height: pixel observation height.
+        background: RGB tuple in [0, 1] for missed-ray pixels (default: sky blue).
     """
 
     def __init__(
@@ -44,11 +108,23 @@ class MujocoTorchEnv(EnvBase):
         max_episode_steps: int = 1000,
         device=None,
         dtype=torch.float64,
+        from_pixels: bool = False,
+        pixels_only: bool = False,
+        camera_id: int = 0,
+        render_width: int = 64,
+        render_height: int = 64,
+        background: tuple[float, float, float] = (0.4, 0.6, 0.8),
     ):
         super().__init__(device=device, batch_size=torch.Size([num_envs]))
         self.dtype = dtype
         self.num_envs = num_envs
         self.max_episode_steps = max_episode_steps
+        self.from_pixels = from_pixels
+        self.pixels_only = pixels_only
+        self.camera_id = camera_id
+        self.render_width = render_width
+        self.render_height = render_height
+        self.background = background
 
         m_mj = mujoco.MjModel.from_xml_string(xml_string)
         self._m_mj = m_mj
@@ -58,11 +134,21 @@ class MujocoTorchEnv(EnvBase):
 
         nq, nv, nu = m_mj.nq, m_mj.nv, m_mj.nu
 
-        self.observation_spec = Composite(
-            qpos=Unbounded(shape=(num_envs, nq), dtype=dtype, device=self.device),
-            qvel=Unbounded(shape=(num_envs, nv), dtype=dtype, device=self.device),
-            batch_size=[num_envs],
-        )
+        obs_keys = {}
+        if not pixels_only:
+            obs_keys["qpos"] = Unbounded(shape=(num_envs, nq), dtype=dtype, device=self.device)
+            obs_keys["qvel"] = Unbounded(shape=(num_envs, nv), dtype=dtype, device=self.device)
+        if from_pixels:
+            obs_keys["pixels"] = Bounded(
+                low=0,
+                high=255,
+                shape=(num_envs, 3, render_height, render_width),
+                dtype=torch.uint8,
+                device=self.device,
+            )
+            self._render_precomp = mujoco_torch.precompute_render_data(self.mx)
+        self.observation_spec = Composite(**obs_keys, batch_size=[num_envs])
+
         self.action_spec = Bounded(
             low=-1.0,
             high=1.0,
@@ -81,6 +167,32 @@ class MujocoTorchEnv(EnvBase):
     def _make_batch(self, n):
         return torch.stack([self._dx0.clone() for _ in range(n)])
 
+    def _render_pixels(self):
+        """Render pixel observations for every env in the batch."""
+        frames = []
+        for i in range(self.num_envs):
+            rgb, _, _ = mujoco_torch.render(
+                self.mx,
+                self._dx[i],
+                camera_id=self.camera_id,
+                width=self.render_width,
+                height=self.render_height,
+                precomp=self._render_precomp,
+                background=self.background,
+            )
+            frames.append((rgb * 255).clamp(0, 255).to(torch.uint8).permute(2, 0, 1))
+        return torch.stack(frames)
+
+    def _obs_dict(self):
+        """Build the observation dict from the current state."""
+        obs = {}
+        if not self.pixels_only:
+            obs["qpos"] = self._dx.qpos.to(self.dtype)
+            obs["qvel"] = self._dx.qvel.to(self.dtype)
+        if self.from_pixels:
+            obs["pixels"] = self._render_pixels()
+        return obs
+
     def _reset(self, tensordict=None, **kwargs):
         reset_mask = None
         if tensordict is not None and "_reset" in tensordict.keys():
@@ -97,8 +209,7 @@ class MujocoTorchEnv(EnvBase):
 
         return TensorDict(
             {
-                "qpos": self._dx.qpos.to(self.dtype),
-                "qvel": self._dx.qvel.to(self.dtype),
+                **self._obs_dict(),
                 "done": torch.zeros(*self.batch_size, 1, dtype=torch.bool, device=self.device),
                 "terminated": torch.zeros(*self.batch_size, 1, dtype=torch.bool, device=self.device),
             },
@@ -110,7 +221,8 @@ class MujocoTorchEnv(EnvBase):
         action = tensordict["action"].to(self.dtype)
 
         self._dx = self._dx.replace(ctrl=action)
-        self._dx = torch.vmap(lambda d: mujoco_torch.step(self.mx, d))(self._dx)
+        step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
+        self._dx = step_fn(self._dx[0]).unsqueeze(0) if self.num_envs == 1 else torch.vmap(step_fn)(self._dx)
         self._step_count += 1
 
         ctrl_cost = 0.5 * (action**2).sum(dim=-1, keepdim=True)
@@ -122,8 +234,7 @@ class MujocoTorchEnv(EnvBase):
 
         return TensorDict(
             {
-                "qpos": self._dx.qpos.to(self.dtype),
-                "qvel": self._dx.qvel.to(self.dtype),
+                **self._obs_dict(),
                 "reward": reward,
                 "done": done,
                 "terminated": terminated,
@@ -137,9 +248,25 @@ class MujocoTorchEnv(EnvBase):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="TorchRL + mujoco-torch demo")
+    parser.add_argument(
+        "--model",
+        choices=list(PIXEL_MODELS),
+        default="arm",
+        help="Which model to use for pixel rendering / video (default: arm)",
+    )
+    parser.add_argument("--width", type=int, default=128, help="Video render width")
+    parser.add_argument("--height", type=int, default=128, help="Video render height")
+    parser.add_argument("--steps", type=int, default=200, help="Video rollout steps")
+    args = parser.parse_args()
+
+    pixel_xml = PIXEL_MODELS[args.model]
+
     torch.set_default_dtype(torch.float64)
 
     num_envs = 16
+
+    # --- State-only environment ---
     env = MujocoTorchEnv(MODEL_XML, num_envs=num_envs, max_episode_steps=200)
     print(f"Created batched env: {num_envs} parallel envs  (batch_size={env.batch_size})")
 
@@ -153,3 +280,62 @@ if __name__ == "__main__":
     print(f"  Mean total reward:  {total_reward.mean():.2f}")
     print(f"  Reward std:         {total_reward.std():.2f}")
     print(f"  Final qpos[0, :3]:  {rollout[-1]['next', 'qpos'][0, :3].tolist()}")
+
+    # --- Pixel observation environment ---
+    print(f"\n--- Pixel mode ({args.model}) ---")
+    num_envs_px = 4
+    env_px = MujocoTorchEnv(
+        pixel_xml,
+        num_envs=num_envs_px,
+        max_episode_steps=200,
+        from_pixels=True,
+        pixels_only=False,
+        camera_id=0,
+        render_width=64,
+        render_height=64,
+    )
+    print(f"Created pixel env: {num_envs_px} envs, 64x64 pixels")
+    print(f"  Observation keys: {list(env_px.observation_spec.keys())}")
+
+    print("Checking env specs ...")
+    check_env_specs(env_px, seed=42)
+    print("Env specs OK!\n")
+
+    rollout_px = env_px.rollout(max_steps=10)
+    pixels = rollout_px["next", "pixels"]
+    print(f"Rollout: {rollout_px.shape[-1]} steps x {num_envs_px} envs")
+    print(f"  Pixel tensor shape: {pixels.shape}")
+    print(f"  Pixel range: [{pixels.min():.3f}, {pixels.max():.3f}]")
+
+    # Save a sample frame
+    try:
+        import torchvision
+
+        frame = pixels[-1, 0]  # last step, first env — (3, H, W)
+        torchvision.utils.save_image(frame.float() / 255.0, f"{args.model}_render.png")
+        print(f"  Saved {args.model}_render.png")
+    except ImportError:
+        print("  (install torchvision to save a sample frame)")
+
+    # --- Video recording with VideoRecorder ---
+    print(f"\n--- Video recording ({args.model}, {args.width}x{args.height}) ---")
+    logger = CSVLogger(exp_name=f"{args.model}_render", log_dir="videos", video_format="mp4")
+    recorder = VideoRecorder(logger=logger, tag=f"{args.model}_video", in_keys=["pixels"])
+    num_envs_vid = 4
+    env_video = TransformedEnv(
+        MujocoTorchEnv(
+            pixel_xml,
+            num_envs=num_envs_vid,
+            max_episode_steps=args.steps,
+            from_pixels=True,
+            pixels_only=False,
+            camera_id=0,
+            render_width=args.width,
+            render_height=args.height,
+        ),
+        recorder,
+    )
+    rollout_vid = env_video.rollout(max_steps=args.steps)
+    recorder.dump()
+    print(f"  Recorded {rollout_vid.shape[-1]} frames at {args.width}x{args.height}")
+    print("  Video saved to videos/")
