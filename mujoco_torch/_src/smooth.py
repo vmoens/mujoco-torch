@@ -385,7 +385,7 @@ def rne(m: Model, d: Data, flg_acc: bool = False) -> Data:
         return cfrc
 
     cfrc = scan.body_tree(m, cfrc_fn, "b", "b", loc_cfrc, reverse=True)
-    qfrc_bias = torch.vmap(torch.dot)(d.cdof, cfrc[m.dof_bodyid_t])
+    qfrc_bias = (d.cdof * cfrc[m.dof_bodyid_t]).sum(-1)
 
     d.update_(qfrc_bias=qfrc_bias)
     return d
@@ -499,7 +499,7 @@ def transmission(m: Model, d: Data) -> Data:
             if trntype == TrnType.JOINTINPARENT:
                 quat_neg = math.quat_inv(qpos)
                 gearaxis = math.rotate(gear[:3], quat_neg)
-            lengths.append(torch.dot(axis * angle, gearaxis))
+            lengths.append((axis * angle * gearaxis).sum(-1))
             moments.append(_moment_row(gearaxis, dofadr, m.nv))
         elif jnt_typ in (JointType.SLIDE, JointType.HINGE):
             lengths.append(d.qpos[qposadr] * gear[0])

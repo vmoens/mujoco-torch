@@ -32,7 +32,7 @@ def _plane_sphere(
     sphere_radius: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Returns the distance and contact point between a plane and sphere."""
-    dist = torch.dot(sphere_pos - plane_pos, plane_normal) - sphere_radius
+    dist = ((sphere_pos - plane_pos) * plane_normal).sum(-1) - sphere_radius
     pos = sphere_pos - plane_normal * (sphere_radius + 0.5 * dist)
     return dist, pos
 
@@ -48,7 +48,7 @@ def plane_capsule(plane: GeomInfo, cap: GeomInfo) -> Contact:
     """Calculates two contacts between a capsule and a plane."""
     n, axis = plane.mat[:, 2], cap.mat[:, 2]
     # align contact frames with capsule axis
-    b, b_norm = math.normalize_with_norm(axis - n * torch.dot(n, axis))
+    b, b_norm = math.normalize_with_norm(axis - n * (n * axis).sum(-1))
     y, z = (
         torch.eye(3, dtype=axis.dtype, device=axis.device)[1],
         torch.eye(3, dtype=axis.dtype, device=axis.device)[2],
@@ -71,7 +71,7 @@ def plane_ellipsoid(plane: GeomInfo, ellipsoid: GeomInfo) -> Contact:
     size = ellipsoid.geom_size
     sphere_support = -math.normalize((ellipsoid.mat.T @ n) * size)
     pos = ellipsoid.pos + ellipsoid.mat @ (sphere_support * size)
-    dist = torch.dot(n, pos - plane.pos)
+    dist = (n * (pos - plane.pos)).sum(-1)
     pos = pos - n * dist * 0.5
     return torch.utils._pytree.tree_map(lambda x: torch.unsqueeze(x, 0), (dist, pos, math.make_frame(n)))
 
@@ -82,13 +82,13 @@ def plane_cylinder(plane: GeomInfo, cylinder: GeomInfo) -> Contact:
     axis = cylinder.mat[:, 2]
 
     # make sure axis points towards plane
-    prjaxis = torch.dot(n, axis)
+    prjaxis = (n * axis).sum(-1)
     sign = -math.sign(prjaxis)
     axis = axis * sign
     prjaxis = prjaxis * sign
 
     # compute normal distance to cylinder center
-    dist0 = torch.dot(cylinder.pos - plane.pos, n)
+    dist0 = ((cylinder.pos - plane.pos) * n).sum(-1)
 
     # remove component of -normal along axis, compute length
     vec = axis * prjaxis - n
@@ -101,7 +101,7 @@ def plane_cylinder(plane: GeomInfo, cylinder: GeomInfo) -> Contact:
     )
 
     # project vector on normal
-    prjvec = torch.dot(vec, n)
+    prjvec = (vec * n).sum(-1)
 
     # scale axis by half-length
     axis = axis * cylinder.geom_size[1]
