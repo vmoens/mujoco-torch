@@ -402,6 +402,36 @@ def _extract_static_for_body_tree(args, key_in_take_torch, keys, is_static):
     return result
 
 
+def _invert_segment_ids(segment_ids, num_segments):
+    """Precompute gather indices for scatter_add-free segment sum.
+
+    Returns:
+      inv_idx: (num_segments, max_children) LongTensor of source indices
+      inv_mask: (num_segments, max_children) float mask (1.0 or 0.0)
+    """
+    buckets = [[] for _ in range(num_segments)]
+    for i, s in enumerate(segment_ids):
+        buckets[s].append(i)
+    max_children = max((len(b) for b in buckets), default=0)
+    inv_idx = np.zeros((num_segments, max_children), dtype=np.int64)
+    inv_mask = np.zeros((num_segments, max_children), dtype=np.float64)
+    for s, bucket in enumerate(buckets):
+        for j, idx in enumerate(bucket):
+            inv_idx[s, j] = idx
+            inv_mask[s, j] = 1.0
+    return inv_idx, torch.tensor(inv_mask)
+
+
+def _gather_segment_sum(data, inv_idx, inv_mask):
+    """Segment sum via gather + masked reduction (no atomics)."""
+    idx = inv_idx.to(data.device)
+    mask = inv_mask.to(device=data.device, dtype=data.dtype)
+    gathered = data[idx]
+    for _ in range(data.ndim - 1):
+        mask = mask.unsqueeze(-1)
+    return (gathered * mask).sum(1)
+
+
 def _nvmap(f: Callable[..., Y], static_args, *args) -> Y:
     """A vmap that accepts pre-extracted static args.
 
@@ -785,7 +815,12 @@ def _build_body_tree_cache(m, in_types, out_types, reverse):
                 body_ids = key_body_ids[key]
                 parent_ids = m.body_parentid[key_body_ids[child_key]]
                 id_map = _index(body_ids, parent_ids)
-                child_info.append((child_key, _cached_long(id_map), body_ids.size))
+                inv_idx, inv_mask = _invert_segment_ids(id_map, body_ids.size)
+                child_info.append((
+                    child_key,
+                    _cached_long(inv_idx),
+                    _DeviceCachedTensor(inv_mask),
+                ))
             carry_maps[key] = child_info
         elif key in key_parents:
             body_ids_all = [key_body_ids[p] for p in key_parents[key]]
@@ -890,15 +925,15 @@ def body_tree(
         carry = None
 
         if reverse:
-            for child_key, id_map, n_segments in carry_maps[key]:
+            for child_key, inv_idx, inv_mask in carry_maps[key]:
                 y = key_y[child_key]
                 if y is None:
                     continue
 
-                def index_sum(x, i=id_map, s=n_segments):
-                    return segment_sum(x, i, s)
+                def gather_sum(x, ii=inv_idx, im=inv_mask):
+                    return _gather_segment_sum(x, ii, im)
 
-                y = tree_map(index_sum, y)
+                y = tree_map(gather_sum, y)
                 carry = y if carry is None else tree_map(torch.add, carry, y)
         elif key in carry_maps:
             parent_keys, take_idx = carry_maps[key]
