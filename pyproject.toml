@@ -40,6 +40,7 @@ markers = ["mjx: benchmarks requiring JAX and mujoco.mjx"]
 
 [tool.ruff]
 line-length = 120
+exclude = ["output_code_*.py"]
 
 [tool.ruff.lint]
 select = [
@@ -64,3 +65,4 @@ ignore = [
 "examples/*" = ["T201"]
 "test/*" = ["T201"]
 "benchmarks/*" = ["T201"]
+"scripts/*" = ["T201"]
