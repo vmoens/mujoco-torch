@@ -12,9 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Scan across data ordered by body joint types and kinematic tree order."""
+"""Scan across data ordered by body joint types and kinematic tree order.
 
-import dataclasses
+Single-vmap implementation: ``flat()`` issues one ``torch.vmap`` call per
+invocation; ``body_tree()`` issues one per depth level.  Type-dependent
+logic is handled inside callbacks via ``torch.where``.
+"""
+
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -23,20 +27,22 @@ import torch
 from tensordict import UnbatchedTensor
 from torch.utils._pytree import tree_map
 
-from mujoco_torch._src.math import concatenate
 from mujoco_torch._src.types import JointType, Model, TrnType
 
 Y = TypeVar("Y")
 
-# Module-level caches for scan grouping indices.  Keyed by
-# (cache_id, in_types, out_types, group_by_or_reverse).
-# Models carry a ``cache_id`` int assigned at device_put time.
+MAX_QPOS_PER_JNT = 7  # FREE joint has the most: 7 qpos values
+MAX_DOF_PER_JNT = 6  # FREE joint has the most: 6 dofs
+
+_QPOS_WIDTH = {0: 7, 1: 4, 2: 1, 3: 1}  # JointType int -> qpos width
+_DOF_WIDTH = {0: 6, 1: 3, 2: 1, 3: 1}  # JointType int -> dof width
+
+# Module-level caches.  Keyed by (cache_id, in_types, out_types, group_by_or_reverse).
 _flat_cache: dict = {}
 _body_tree_cache: dict = {}
 
 
 def _model_cache_id(m: Model) -> int:
-    """Return the unique cache ID for this model (set at device_put time)."""
     return m.cache_id
 
 
@@ -47,13 +53,7 @@ def clear_scan_caches():
 
 
 def _resolve_cached_tensors(obj, device: torch.device):
-    """Recursively replace _DeviceCachedTensor and CPU tensors with device tensors.
-
-    Returns a new structure where every _DeviceCachedTensor has been
-    resolved to a regular torch.Tensor on *device* and every plain CPU
-    tensor has been moved, so that ``torch.compile`` never sees a
-    CPU→GPU copy inside the traced graph.
-    """
+    """Recursively replace _DeviceCachedTensor and CPU tensors with device tensors."""
     if isinstance(obj, _DeviceCachedTensor):
         return obj.to(device)
     if isinstance(obj, torch.Tensor) and obj.device != device:
@@ -68,50 +68,37 @@ def _resolve_cached_tensors(obj, device: torch.device):
 
 
 def warm_device_caches(cache_id: int, device: torch.device):
-    """Resolve all _DeviceCachedTensor entries for *cache_id* to *device*.
-
-    Call this after ``Model.to(device)`` so that ``torch.compile`` never
-    sees a CPU→GPU copy inside the traced graph.  Replaces
-    _DeviceCachedTensor instances with plain device tensors in-place.
-    """
+    """Resolve all _DeviceCachedTensor entries for *cache_id* to *device*."""
     device = torch.device(device)
-
     for key in list(_flat_cache):
         if key[0] == cache_id:
             _flat_cache[key] = _resolve_cached_tensors(_flat_cache[key], device)
     for key in list(_body_tree_cache):
         if key[0] == cache_id:
-            _body_tree_cache[key] = _resolve_cached_tensors(
-                _body_tree_cache[key],
-                device,
-            )
+            _body_tree_cache[key] = _resolve_cached_tensors(_body_tree_cache[key], device)
 
 
-# Registry of all known scan call-site signatures.
-# Each entry: (in_types, out_types, group_by_or_reverse,
-#              [(arg_position, model_field_name), ...])
-# The last element lists which arg positions are static model fields.
+# Known scan call-site signatures: (in_types, out_types, group_by_or_reverse).
 _KNOWN_FLAT_CALLS = [
-    ("jbbjj", "v", "j", [(0, "jnt_type")]),
-    ("uuua", "a", "u", [(0, "actuator_dyntype")]),
-    ("uuuuuuuuu", "u", "u", [(0, "actuator_gaintype"), (2, "actuator_biastype")]),
-    ("uuaau", "a", "u", [(0, "actuator_dyntype")]),
-    ("au", "a", "u", []),
-    ("jqv", "q", "j", [(0, "jnt_type")]),
-    ("jjqq", "v", "j", [(0, "jnt_type")]),
+    ("jbbjj", "v", "j"),
+    ("uuua", "a", "u"),
+    ("uuuuuuuuu", "u", "u"),
+    ("uuaau", "a", "u"),
+    ("au", "a", "u"),
+    ("jqv", "q", "j"),
+    ("jjqq", "v", "j"),
 ]
 
 _KNOWN_BODY_TREE_CALLS = [
-    ("jjjqqbb", "qjjbbb", False, [(0, "jnt_type")]),
-    ("bb", "bb", True, []),
-    ("b", "b", True, []),
-    ("jvv", "bv", False, [(0, "jnt_type")]),
-    ("vvvv", "b", False, []),
+    ("jjjqqbbb", "qjjbbb", False),
+    ("bb", "bb", True),
+    ("b", "b", True),
+    ("jvvb", "bv", False),
+    ("vvvvjb", "b", False),
 ]
 
 
 def _signature_applies(m, in_types, out_types, group_by=None):
-    """Check whether a scan signature is relevant for a given model."""
     all_types = set(in_types + out_types)
     if group_by is not None:
         all_types.add(group_by)
@@ -122,77 +109,37 @@ def _signature_applies(m, in_types, out_types, group_by=None):
     return True
 
 
-def precompute_scan_caches(m, cache_id: int, *, scan_padding: bool = False):
-    """Pre-build all scan caches for known call-site signatures.
+def precompute_scan_caches(m, cache_id: int):
+    """Pre-build all scan caches for known call-site signatures."""
+    jnt_type_np = np.array(m.jnt_type)
+    jt_set = frozenset(int(t) for t in jnt_type_np) if m.njnt > 0 else frozenset()
+    max_qw = max((_QPOS_WIDTH[t] for t in jt_set), default=1)
+    max_dw = max((_DOF_WIDTH[t] for t in jt_set), default=1)
 
-    Called from ``device_put`` so that ``flat()`` and ``body_tree()``
-    never need to build caches at runtime (which would require
-    ``@torch.compiler.disable``).
-    """
-    for in_types, out_types, group_by, static_fields in _KNOWN_FLAT_CALLS:
+    for in_types, out_types, group_by in _KNOWN_FLAT_CALLS:
         if not _signature_applies(m, in_types, out_types, group_by):
             continue
-        cache_key = (cache_id, in_types, out_types, group_by)
-        cache = _build_flat_cache(m, in_types, out_types, group_by)
-        # Pre-extract static args for all groups
-        key_typ_ids_torch = cache["key_typ_ids_torch"]
-        group_has_output = cache["group_has_output"]
-        pre_extracted = []
-        for (_, typ_ids_t), has_output in zip(key_typ_ids_torch, group_has_output):
-            if not has_output:
-                pre_extracted.append(None)
-                continue
-            group_static = [None] * len(in_types)
-            for pos, field_name in static_fields:
-                static_array = getattr(m, field_name)
-                typ = in_types[pos]
-                subset = _take(static_array, typ_ids_t[typ])
-                group_static[pos] = _validate_and_convert_subset(subset)
-            pre_extracted.append(group_static)
-        cache["pre_extracted_static"] = pre_extracted
-        if scan_padding:
-            cache["padding"] = _compute_flat_padding(cache, in_types, out_types, group_by)
-        _flat_cache[cache_key] = cache
+        _flat_cache[(cache_id, in_types, out_types, group_by)] = _build_flat_cache(
+            m, in_types, out_types, group_by, max_qw, max_dw,
+        )
 
-    for in_types, out_types, reverse, static_fields in _KNOWN_BODY_TREE_CALLS:
+    for in_types, out_types, reverse in _KNOWN_BODY_TREE_CALLS:
         if not _signature_applies(m, in_types, out_types):
             continue
-        cache_key = (cache_id, in_types, out_types, reverse)
-        cache = _build_body_tree_cache(m, in_types, out_types, reverse)
-        # Pre-extract static args for all groups
-        key_in_take_torch = cache["key_in_take_torch"]
-        keys = cache["keys"]
-        pre_extracted = {}
-        for key in keys:
-            group_static = [None]  # carry is never static
-            for i, ids in enumerate(key_in_take_torch[key]):
-                static_val = None
-                for pos, field_name in static_fields:
-                    if pos == i:
-                        static_array = getattr(m, field_name)
-                        subset = _take(static_array, ids)
-                        static_val = _validate_and_convert_subset(subset)
-                        break
-                group_static.append(static_val)
-            pre_extracted[key] = group_static
-        cache["pre_extracted_static"] = pre_extracted
-        if scan_padding:
-            cache["padding"] = _compute_body_tree_padding(cache, in_types, out_types)
-        _body_tree_cache[cache_key] = cache
+        cache = _build_body_tree_cache(m, in_types, out_types, reverse, max_qw, max_dw)
+        _body_tree_cache[(cache_id, in_types, out_types, reverse)] = cache
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _np_to_long(x):
-    """Convert numpy array to torch.LongTensor."""
     return torch.as_tensor(np.asarray(x), dtype=torch.long)
 
 
 class _DeviceCachedTensor:
-    """A CPU index tensor that lazily caches per-device copies.
-
-    On first access for a given device, moves the tensor and caches it.
-    Subsequent accesses for the same device return the cached copy with
-    no CPU-GPU transfer.
-    """
+    """A CPU index tensor that lazily caches per-device copies."""
 
     def __init__(self, cpu_tensor: torch.Tensor):
         self._cpu = cpu_tensor
@@ -217,13 +164,11 @@ class _DeviceCachedTensor:
 
 
 def _cached_long(x) -> _DeviceCachedTensor:
-    """Convert to a device-cached LongTensor (lazy GPU transfer)."""
     cpu_tensor = torch.as_tensor(np.asarray(x), dtype=torch.long).cpu()
     return _DeviceCachedTensor(cpu_tensor)
 
 
 def _cat_device_safe(tensors):
-    """Concatenates tensors, moving all to the device of the first non-CPU tensor."""
     device = None
     for t in tensors:
         if t.device.type != "cpu":
@@ -235,17 +180,7 @@ def _cat_device_safe(tensors):
 
 
 def _take(obj: Y, idx) -> Y:
-    """Takes idxs on any pytree given to it.
-
-    Supports both numpy and torch index arrays.
-
-    Args:
-      obj: an input pytree
-      idx: indices to take (numpy array or torch.LongTensor)
-
-    Returns:
-      obj pytree with leaves taken by idxs
-    """
+    """Takes idxs on any pytree given to it."""
     if isinstance(obj, UnbatchedTensor):
         obj = obj.data
     if isinstance(obj, np.ndarray):
@@ -255,8 +190,6 @@ def _take(obj: Y, idx) -> Y:
             return obj[idx.cpu().numpy()]
         return obj[idx]
 
-    # Resolve idx to a regular tensor once (or keep _DeviceCachedTensor for
-    # lazy device resolution — needed for CUDA graph capture).
     if isinstance(idx, _DeviceCachedTensor):
         cached = idx
 
@@ -280,7 +213,6 @@ def _take(obj: Y, idx) -> Y:
 
 
 def _as_numpy(val):
-    """Convert to numpy, handling UnbatchedTensor and regular tensors."""
     if isinstance(val, UnbatchedTensor):
         return val.data.cpu().numpy()
     if isinstance(val, torch.Tensor):
@@ -288,19 +220,8 @@ def _as_numpy(val):
     return val
 
 
-def _static_arg_mask(m: Model, args: tuple) -> list[bool]:
-    """Determine which args are static metadata (should not go through vmap).
-
-    Uses both isinstance checks (for np.ndarray / UnbatchedTensor) and
-    Model type annotations (matching arg identity against UnbatchedTensor
-    fields).
-    """
-    unbatched_ids = {id(getattr(m, f.name)) for f in dataclasses.fields(type(m)) if f.type is UnbatchedTensor}
-    return [isinstance(a, (np.ndarray, UnbatchedTensor)) or id(a) in unbatched_ids for a in args]
-
-
 def _q_bodyid(m: Model) -> np.ndarray:
-    """Returns the bodyid for each qpos adress."""
+    """Returns the bodyid for each qpos address (Model version)."""
     jnt_type = _as_numpy(m.jnt_type)
     q_bodyids = [np.array([], dtype=np.int32)]
     for jt, jnt_bodyid in zip(jnt_type, m.jnt_bodyid):
@@ -309,8 +230,17 @@ def _q_bodyid(m: Model) -> np.ndarray:
     return np.concatenate(q_bodyids)
 
 
+def _q_bodyid_np(m) -> np.ndarray:
+    """Returns the bodyid for each qpos address (raw MjModel version)."""
+    jnt_type = np.array(m.jnt_type)
+    q_bodyids = [np.array([], dtype=np.int32)]
+    for jt, jnt_bodyid in zip(jnt_type, m.jnt_bodyid):
+        width = {0: 7, 1: 4}.get(int(jt), 1)
+        q_bodyids.append(np.repeat(jnt_bodyid, width))
+    return np.concatenate(q_bodyids)
+
+
 def _q_jointid(m: Model) -> np.ndarray:
-    """Returns the jointid for each qpos adress."""
     jnt_type = _as_numpy(m.jnt_type)
     q_jointid = [np.array([], dtype=np.int32)]
     for i, jt in enumerate(jnt_type):
@@ -320,10 +250,6 @@ def _q_jointid(m: Model) -> np.ndarray:
 
 
 def _index(haystack, needle):
-    """Returns indexes in haystack for elements in needle.
-
-    Works with both numpy arrays and torch tensors.
-    """
     if isinstance(haystack, torch.Tensor):
         idx = torch.argsort(haystack)
         sorted_haystack = haystack[idx]
@@ -332,7 +258,6 @@ def _index(haystack, needle):
         result = idx[sorted_idx]
         result = torch.where(haystack[result] == needle, result, torch.full_like(result, -1))
         return result
-    # numpy fallback
     idx = np.argsort(haystack)
     sorted_haystack = haystack[idx]
     sorted_idx = np.searchsorted(sorted_haystack, needle)
@@ -341,389 +266,19 @@ def _index(haystack, needle):
     return idx
 
 
-def _to_safe(val):
-    """Convert a representative value to a Dynamo-safe Python/tensor form.
-
-    Handles both numpy arrays and torch tensors (from UnbatchedTensor).
-    """
-    if isinstance(val, torch.Tensor):
-        if val.ndim == 0:
-            return val.item()
-        if val.numel() == 0:
-            return ()
-        if val.ndim == 1 and val.dtype in (torch.int32, torch.int64, torch.bool):
-            return tuple(int(x) for x in val.tolist())
-        return val
-    if isinstance(val, (np.integer, np.floating, np.bool_)):
-        return val.item()
-    if not isinstance(val, np.ndarray):
-        return val
-    if val.ndim == 0:
-        return val.item()
-    if val.size == 0:
-        return ()
-    if val.ndim == 1 and isinstance(val.flat[0], (np.integer, np.bool_)):
-        return tuple(int(x) for x in val)
-    return torch.as_tensor(np.ascontiguousarray(val))
+def _pad_1d(arr, max_len):
+    """Pad a 1D numpy array to max_len using edge padding."""
+    n = len(arr)
+    if n == 0:
+        return np.zeros(max_len, dtype=arr.dtype)
+    if n >= max_len:
+        return arr[:max_len]
+    return np.pad(arr, (0, max_len - n), mode="edge")
 
 
-def _validate_and_convert_subset(subset):
-    """Validate that a per-group subset has identical rows, then convert."""
-    if isinstance(subset, torch.Tensor):
-        if subset.shape[0] > 0 and not torch.all(subset == subset[0]):
-            raise RuntimeError(f"static arg elements do not match: {subset}")
-    else:
-        if subset.shape[0] > 0 and not np.all(subset == subset[0]):
-            raise RuntimeError(f"static arg elements do not match: {subset}")
-    val = subset[0] if subset.shape[0] > 0 else subset
-    return _to_safe(val)
+def _nvmap(f: Callable[..., Y], *args) -> Y:
+    """A vmap wrapper that handles None arguments."""
 
-
-def _extract_static_for_flat(args, in_types, key_typ_ids_torch, group_has_output, is_static):
-    """Extract static args for all flat-scan groups at once.
-
-    This is only called as a fallback for signatures not registered in
-    ``_KNOWN_FLAT_CALLS``.  For known signatures, pre-extracted values are
-    stored in the cache at ``device_put`` time.
-    """
-    result = []
-    for (_, typ_ids_t), has_output in zip(key_typ_ids_torch, group_has_output):
-        if not has_output:
-            result.append(None)
-            continue
-        group_static = []
-        for arg, typ, static in zip(args, in_types, is_static):
-            if not static:
-                group_static.append(None)
-                continue
-            subset = _take(arg, typ_ids_t[typ])
-            group_static.append(_validate_and_convert_subset(subset))
-        result.append(group_static)
-    return result
-
-
-def _extract_static_for_body_tree(args, key_in_take_torch, keys, is_static):
-    """Extract static args for all body-tree groups at once.
-
-    This is only called as a fallback for signatures not registered in
-    ``_KNOWN_BODY_TREE_CALLS``.  For known signatures, pre-extracted values
-    are stored in the cache at ``device_put`` time.
-    """
-    result = {}
-    for key in keys:
-        group_static = [None]  # carry is never static
-        for arg, ids, static in zip(args, key_in_take_torch[key], is_static):
-            if not static:
-                group_static.append(None)
-                continue
-            subset = _take(arg, ids)
-            group_static.append(_validate_and_convert_subset(subset))
-        result[key] = group_static
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Scan padding helpers
-# ---------------------------------------------------------------------------
-
-
-def _pad_indices(arr, max_batch, max_width=None):
-    """Pad numpy index array to uniform sizes by repeating edge values.
-
-    For 1D arrays: pad to (max_batch,).
-    For 2D arrays: pad to (max_batch, max_width).
-    Empty dimensions are filled with zeros (valid index into any array).
-    """
-    if arr.ndim == 1:
-        n = arr.shape[0]
-        if n == 0:
-            return np.zeros(max_batch, dtype=arr.dtype)
-        if n >= max_batch:
-            return arr[:max_batch]
-        return np.pad(arr, (0, max_batch - n), mode="edge")
-    n, k = arr.shape
-    result = arr
-    if max_width is not None and k < max_width:
-        if k == 0:
-            result = np.zeros((n, max_width), dtype=arr.dtype)
-        else:
-            result = np.pad(result, ((0, 0), (0, max_width - k)), mode="edge")
-    if n < max_batch:
-        if n == 0:
-            result = np.zeros((max_batch,) + result.shape[1:], dtype=result.dtype)
-        else:
-            result = np.pad(result, ((0, max_batch - n), (0, 0)), mode="edge")
-    return result
-
-
-def _wrap_callback_with_padding(f, out_types, max_out_widths):
-    """Wrap callback to pad output tensors to uniform sizes inside vmap."""
-    if all(mow is None for mow in max_out_widths):
-        return f
-
-    def wrapped(*args):
-        result = f(*args)
-        if result is None:
-            return result
-        is_seq = isinstance(result, (list, tuple))
-        results = list(result) if is_seq else [result]
-        padded = []
-        for r, mow in zip(results, max_out_widths):
-            if mow is None or r.ndim == 0:
-                padded.append(r)
-                continue
-            actual = r.shape[0]
-            if actual < mow:
-                pad_shape = (mow - actual,) + r.shape[1:]
-                r = torch.cat(
-                    [r, torch.zeros(pad_shape, dtype=r.dtype, device=r.device)],
-                )
-            padded.append(r)
-        return tuple(padded) if is_seq else padded[0]
-
-    return wrapped
-
-
-def _trim_padded_output(y, actual_batch, actual_out_widths, out_types, flat_types):
-    """Trim padded vmap output to actual batch and per-item sizes."""
-    is_seq = isinstance(y, (list, tuple))
-    ys = list(y) if is_seq else [y]
-    trimmed = []
-    for yi, aow, t in zip(ys, actual_out_widths, out_types):
-        yi = yi[:actual_batch]
-        if aow is not None and t not in flat_types:
-            yi = yi[:, :aow]
-        trimmed.append(yi)
-    return tuple(trimmed) if is_seq else trimmed[0]
-
-
-def _trim_batch_only(y, actual_batch):
-    """Trim only the batch dimension of padded output."""
-    if y is None:
-        return y
-    if isinstance(y, (list, tuple)):
-        return tuple(yi[:actual_batch] for yi in y)
-    return y[:actual_batch]
-
-
-def _pad_batch_dim(x, max_batch):
-    """Pad a tensor's first dim to *max_batch* by appending zeros."""
-    actual = x.shape[0]
-    if actual >= max_batch:
-        return x
-    pad_shape = (max_batch - actual,) + x.shape[1:]
-    return torch.cat(
-        [x, torch.zeros(pad_shape, dtype=x.dtype, device=x.device)],
-    )
-
-
-def _dct_shape(ids):
-    """Get shape from _DeviceCachedTensor or regular tensor."""
-    if isinstance(ids, _DeviceCachedTensor):
-        return ids._cpu.shape
-    return ids.shape
-
-
-def _dct_numpy(ids):
-    """Convert _DeviceCachedTensor or tensor to numpy."""
-    if isinstance(ids, _DeviceCachedTensor):
-        return ids._cpu.numpy()
-    if isinstance(ids, torch.Tensor):
-        return ids.cpu().numpy()
-    return np.asarray(ids)
-
-
-# ---------------------------------------------------------------------------
-# Flat padding cache
-# ---------------------------------------------------------------------------
-
-
-def _compute_flat_padding(cache, in_types, out_types, group_by):
-    """Compute padding metadata for padded flat scan.
-
-    Returns a dict with ``max_batch``, ``max_out_widths`` (per output
-    position), and ``groups`` (a list parallel to *key_typ_ids* with
-    per-group padded index tensors, actual batch size, and actual output
-    widths).
-    """
-    key_typ_ids = cache["key_typ_ids"]
-    group_has_output = cache["group_has_output"]
-    flat_ = cache["flat_"]
-
-    active = [(i, key, typ_ids) for i, ((key, typ_ids), ho) in enumerate(zip(key_typ_ids, group_has_output)) if ho]
-    if not active:
-        return None
-
-    # -- max batch across active groups --
-    batches = [next(iter(typ_ids.values())).shape[0] for _, _, typ_ids in active]
-    max_batch = max(batches)
-
-    # -- max per-item input widths --
-    max_in_widths: dict[str, int | None] = {}
-    for t in set(in_types):
-        ws = [typ_ids[t].shape[1] for _, _, typ_ids in active if typ_ids[t].ndim >= 2]
-        max_in_widths[t] = max(ws) if ws else None
-
-    # -- max output widths (per position in out_types) --
-    max_out_widths: list[int | None] = []
-    for t in out_types:
-        if t in flat_:
-            max_out_widths.append(None)
-        elif group_by == "j":
-            ws = []
-            for _, key, _ in active:
-                if t == "q":
-                    ws.append(sum(JointType(jt).qpos_width() for jt in key))
-                elif t == "v":
-                    ws.append(sum(JointType(jt).dof_width() for jt in key))
-                elif t == "j":
-                    ws.append(len(key))
-                else:
-                    ws.append(1)
-            max_out_widths.append(max(ws) if ws else None)
-        else:
-            max_out_widths.append(None)
-
-    # -- per-group padding data (indexed parallel to key_typ_ids) --
-    groups: list[dict | None] = [None] * len(key_typ_ids)
-    for idx, (gi, key, typ_ids) in enumerate(active):
-        batch = batches[idx]
-
-        padded_ids = {}
-        for t in set(in_types):
-            padded_ids[t] = _cached_long(
-                _pad_indices(typ_ids[t], max_batch, max_in_widths.get(t)),
-            )
-
-        actual_out: list[int | None] = []
-        for oi, ot in enumerate(out_types):
-            if max_out_widths[oi] is None:
-                actual_out.append(None)
-            elif group_by == "j":
-                if ot == "q":
-                    actual_out.append(sum(JointType(jt).qpos_width() for jt in key))
-                elif ot == "v":
-                    actual_out.append(sum(JointType(jt).dof_width() for jt in key))
-                elif ot == "j":
-                    actual_out.append(len(key))
-                else:
-                    actual_out.append(1)
-            else:
-                actual_out.append(None)
-
-        groups[gi] = {
-            "padded_ids": padded_ids,
-            "actual_batch": batch,
-            "actual_out_widths": actual_out,
-        }
-
-    return {
-        "max_batch": max_batch,
-        "max_out_widths": max_out_widths,
-        "groups": groups,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Body-tree padding cache
-# ---------------------------------------------------------------------------
-
-
-def _compute_body_tree_padding(cache, in_types, out_types):
-    """Compute padding metadata for padded body_tree scan.
-
-    Returns a dict with ``max_batch``, ``max_out_widths`` (per output
-    position), and ``groups`` (a dict keyed by group key with per-group
-    padded index tensors, actual batch size, and actual output widths).
-    """
-    key_in_take_torch = cache["key_in_take_torch"]
-    keys = cache["keys"]
-
-    # -- batch sizes --
-    batches = {key: _dct_shape(key_in_take_torch[key][0])[0] for key in keys}
-    max_batch = max(batches.values())
-
-    # -- max per-item input widths (per position in in_types) --
-    max_in_widths: list[int | None] = []
-    for j, t in enumerate(in_types):
-        if t == "b":
-            max_in_widths.append(None)
-            continue
-        ws = [
-            _dct_shape(key_in_take_torch[key][j])[1] for key in keys if len(_dct_shape(key_in_take_torch[key][j])) >= 2
-        ]
-        max_in_widths.append(max(ws) if ws else None)
-
-    # -- max output widths: derive from matching in_type entries --
-    max_out_widths: list[int | None] = []
-    for t in out_types:
-        if t == "b":
-            max_out_widths.append(None)
-            continue
-        ws: list[int] = []
-        for j, it in enumerate(in_types):
-            if it == t:
-                for key in keys:
-                    s = _dct_shape(key_in_take_torch[key][j])
-                    if len(s) >= 2:
-                        ws.append(s[1])
-                break
-        max_out_widths.append(max(ws) if ws else None)
-
-    # -- per-group data --
-    groups: dict[tuple, dict] = {}
-    for key in keys:
-        in_takes = key_in_take_torch[key]
-        batch = batches[key]
-
-        padded_ids = []
-        for j, _t in enumerate(in_types):
-            ids_np = _dct_numpy(in_takes[j])
-            padded_ids.append(
-                _cached_long(_pad_indices(ids_np, max_batch, max_in_widths[j])),
-            )
-
-        actual_out: list[int | None] = []
-        for oi, t in enumerate(out_types):
-            if max_out_widths[oi] is None:
-                actual_out.append(None)
-                continue
-            matched = False
-            for j, it in enumerate(in_types):
-                if it == t:
-                    s = _dct_shape(in_takes[j])
-                    actual_out.append(s[1] if len(s) >= 2 else 1)
-                    matched = True
-                    break
-            if not matched:
-                actual_out.append(None)
-
-        groups[key] = {
-            "padded_ids": padded_ids,
-            "actual_batch": batch,
-            "actual_out_widths": actual_out,
-        }
-
-    return {
-        "max_batch": max_batch,
-        "max_out_widths": max_out_widths,
-        "groups": groups,
-    }
-
-
-def _nvmap(f: Callable[..., Y], static_args, *args) -> Y:
-    """A vmap that accepts pre-extracted static args.
-
-    Args:
-      f: function to be mapped over
-      static_args: pre-extracted static args (from _extract_static_for_*)
-      *args: tensor args to be vmapped
-
-    Returns:
-      the result of vmapping f over args
-    """
-
-    # remove empty args that we should not vmap over
     def _check_empty(a):
         if a is None:
             return None
@@ -732,29 +287,24 @@ def _nvmap(f: Callable[..., Y], static_args, *args) -> Y:
         return a
 
     args = [_check_empty(a) for a in args]
-
-    # torch.vmap does not accept None arguments, so filter them out and
-    # reconstruct the full args list inside the vmapped function.
     none_mask = [a is None for a in args]
     vmap_args = [a for a in args if a is not None]
 
     def _ensure_tensor(x):
-        """Convert numpy scalars/arrays and Python scalars to tensors for vmap compatibility."""
         if isinstance(x, (np.ndarray, np.integer, np.floating)):
             return torch.as_tensor(x)
         if isinstance(x, (int, float, bool)):
             return torch.as_tensor(x)
         return x
 
-    def outer_f(*vmap_inputs, _static_args=static_args, _none_mask=none_mask):
+    def outer_f(*vmap_inputs, _none_mask=none_mask):
         it = iter(vmap_inputs)
         full_args = [None if m else next(it) for m in _none_mask]
-        full_args = [a if n is None else n for n, a in zip(_static_args, full_args)]
         result = f(*full_args)
         return tree_map(_ensure_tensor, result)
 
     if not vmap_args:
-        return f(*[n if n is not None else None for n in static_args])
+        return f(*[None] * len(args))
 
     if torch.compiler.is_compiling():
         return torch.vmap(outer_f, in_dims=tuple([0] * len(vmap_args)))(*vmap_args)
@@ -768,18 +318,11 @@ def _nvmap(f: Callable[..., Y], static_args, *args) -> Y:
 
 
 def _check_input(m: Model, args: Any, in_types: str) -> None:
-    """Checks that scan input has the right shape."""
     if torch.compiler.is_compiling():
         return
     size = {
-        "b": m.nbody,
-        "j": m.njnt,
-        "q": m.nq,
-        "v": m.nv,
-        "u": m.nu,
-        "a": m.na,
-        "s": m.nsite,
-        "c": m.ncam,
+        "b": m.nbody, "j": m.njnt, "q": m.nq, "v": m.nv,
+        "u": m.nu, "a": m.na, "s": m.nsite, "c": m.ncam,
     }
     for idx, (arg, typ) in enumerate(zip(args, in_types)):
         arg_len = arg.data.shape[0] if isinstance(arg, UnbatchedTensor) else len(arg)
@@ -791,148 +334,258 @@ def _check_input(m: Model, args: Any, in_types: str) -> None:
             )
 
 
-def _check_output(y: torch.Tensor, take_ids, typ: str, idx: int) -> None:
-    """Checks that scan output has the right shape."""
-    if torch.compiler.is_compiling():
-        return
-    n = take_ids.shape[0] if isinstance(take_ids, (np.ndarray, torch.Tensor)) else len(take_ids)
-    if y.shape[0] != n:
-        raise IndexError(
-            f'f output "{idx}" with type "{typ}" has shape "{y.shape[0]}" '
-            f"which does not match the out_types[{idx}] expected size of"
-            f' "{n}".'
-        )
+# ---------------------------------------------------------------------------
+# Per-body index helpers for group_by="j"
+#
+# For types "q" and "v", indices are organized per-joint:
+#   "q": (nbody, max_j, MAX_QPOS_PER_JNT)  -- 7 qpos slots per joint
+#   "v": (nbody, max_j, MAX_DOF_PER_JNT)   -- 6 dof  slots per joint
+#   "j": (nbody, max_j)                     -- 1 joint index per joint
+#   "b": (nbody,)                           -- 1 body index
+#
+# After _take, the callback receives per-joint arrays.  The scan function
+# flattens the per-joint dims in the output before gathering.
+# ---------------------------------------------------------------------------
 
-
-def _build_flat_cache(m, in_types, out_types, group_by):
-    """Precompute grouping indices for scan.flat (numpy-heavy, runs once)."""
-
-    if group_by not in {"j", "u", "c"}:
-        raise NotImplementedError(f'group by type "{group_by}" not implemented.')
-
-    # Convert UnbatchedTensor fields to numpy for grouping logic
+def _build_body_joint_indices(m, all_types, max_j, max_qw, max_dw):
+    """Compute per-body padded index tensors for group_by='j'."""
     jnt_type_np = _as_numpy(m.jnt_type)
-    act_biastype_np = _as_numpy(m.actuator_biastype) if m.nu else None
-    act_gaintype_np = _as_numpy(m.actuator_gaintype) if m.nu else None
-    act_dyntype_np = _as_numpy(m.actuator_dyntype) if m.nu else None
+    nbody = m.nbody
 
-    def key_j(type_ids):
-        if any(t in "jqv" for t in in_types + out_types):
-            return tuple(jnt_type_np[type_ids["j"]])
-        return ()
+    padded: dict[str, Any] = {}
 
-    def type_ids_j(m, i):
-        return {
-            "b": i,
-            "j": np.nonzero(m.jnt_bodyid == i)[0],
-            "v": np.nonzero(m.dof_bodyid == i)[0],
-            "q": np.nonzero(_q_bodyid(m) == i)[0],
-        }
+    if "b" in all_types:
+        padded["b"] = _cached_long(np.arange(nbody, dtype=np.int64))
 
-    def key_u(type_ids):
-        ids_u, ids_j = type_ids["u"], type_ids["j"]
-        return (
-            act_biastype_np[ids_u],
-            act_gaintype_np[ids_u],
-            act_dyntype_np[ids_u],
-            m.actuator_trntype[ids_u],
-            jnt_type_np[ids_j],
-            m.actuator_trnid[ids_u, 1] == -1,
-        )
+    if "j" in all_types:
+        j_arr = np.zeros((nbody, max_j), dtype=np.int64)
+        for i in range(nbody):
+            jids = np.nonzero(m.jnt_bodyid == i)[0]
+            for k, jid in enumerate(jids):
+                j_arr[i, k] = jid
+            if len(jids) > 0:
+                j_arr[i, len(jids):] = jids[-1]
+        padded["j"] = _cached_long(j_arr)
 
-    def type_ids_u(m, i):
-        typ_ids = {
-            "u": i,
-            "a": m.actuator_actadr[i],
-            "j": (m.actuator_trnid[i, 0] if m.actuator_trntype[i] in (TrnType.JOINT, TrnType.JOINTINPARENT) else -1),
-            "s": (m.actuator_trnid[i] if m.actuator_trntype[i] == TrnType.SITE else np.array([-1, -1])),
-        }
-        v, q = np.array([-1]), np.array([-1])
-        if m.actuator_trntype[i] in (TrnType.JOINT, TrnType.JOINTINPARENT):
-            v = np.nonzero(m.dof_jntid == typ_ids["j"])[0]
-            q = np.nonzero(_q_jointid(m) == typ_ids["j"])[0]
-        typ_ids.update({"v": v, "q": q})
-        return typ_ids
+    if "q" in all_types:
+        q_arr = np.zeros((nbody, max_j, max_qw), dtype=np.int64)
+        jnt_qposadr = np.array(m.jnt_qposadr, dtype=np.int64)
+        for i in range(nbody):
+            jids = np.nonzero(m.jnt_bodyid == i)[0]
+            for k, jid in enumerate(jids):
+                jt = int(jnt_type_np[jid])
+                qw = _QPOS_WIDTH[jt]
+                qa = jnt_qposadr[jid]
+                q_ids = np.arange(qa, qa + qw, dtype=np.int64)
+                q_arr[i, k, :qw] = q_ids
+                if qw > 0:
+                    q_arr[i, k, qw:] = q_ids[-1]
+            if len(jids) > 0:
+                q_arr[i, len(jids):] = q_arr[i, len(jids) - 1]
+        padded["q"] = _cached_long(q_arr)
 
-    def key_c(type_ids):
-        return m.cam_mode[type_ids["c"]], m.cam_targetbodyid[type_ids["c"]] >= 0
+    if "v" in all_types:
+        v_arr = np.zeros((nbody, max_j, max_dw), dtype=np.int64)
+        jnt_dofadr = np.array(m.jnt_dofadr, dtype=np.int64)
+        for i in range(nbody):
+            jids = np.nonzero(m.jnt_bodyid == i)[0]
+            for k, jid in enumerate(jids):
+                jt = int(jnt_type_np[jid])
+                dw = _DOF_WIDTH[jt]
+                da = jnt_dofadr[jid]
+                d_ids = np.arange(da, da + dw, dtype=np.int64)
+                v_arr[i, k, :dw] = d_ids
+                if dw > 0:
+                    v_arr[i, k, dw:] = d_ids[-1]
+            if len(jids) > 0:
+                v_arr[i, len(jids):] = v_arr[i, len(jids) - 1]
+        padded["v"] = _cached_long(v_arr)
 
-    def type_ids_c(unused_m, i):
-        return {"c": i}
+    return padded
 
-    type_ids_fn = {"j": type_ids_j, "u": type_ids_u, "c": type_ids_c}[group_by]
-    key_fn = {"j": key_j, "u": key_u, "c": key_c}[group_by]
 
+def _build_gather_indices_j(m, out_types, max_j, max_qw, max_dw):
+    """Compute output gather indices for group_by='j'.
+
+    Returns dict mapping output type to (body_idx, offset_idx) or None.
+    Also returns per_joint_inner_width mapping type -> inner width for
+    flattening per-joint output dimensions.
+    """
+    gather: dict[str, tuple | None] = {}
+    inner_w: dict[str, int | None] = {}
+
+    for t in set(out_types):
+        if t == "b":
+            gather[t] = None
+            inner_w[t] = None
+        elif t == "j":
+            body_list, off_list = [], []
+            for jid in range(m.njnt):
+                bid = int(m.jnt_bodyid[jid])
+                local_j = int(np.count_nonzero(m.jnt_bodyid[:jid] == bid))
+                body_list.append(bid)
+                off_list.append(local_j)
+            gather[t] = (
+                _cached_long(np.array(body_list, dtype=np.int64)),
+                _cached_long(np.array(off_list, dtype=np.int64)),
+            )
+            inner_w[t] = None
+        elif t == "q":
+            body_list, off_list = [], []
+            jnt_qposadr = np.array(m.jnt_qposadr, dtype=np.int64)
+            q_bid = _q_bodyid(m)
+            q_jid = _q_jointid(m)
+            for k in range(m.nq):
+                bid = int(q_bid[k])
+                jid = int(q_jid[k])
+                local_j = int(np.count_nonzero(m.jnt_bodyid[:jid] == bid))
+                qpos_in_jnt = k - int(jnt_qposadr[jid])
+                body_list.append(bid)
+                off_list.append(local_j * max_qw + qpos_in_jnt)
+            gather[t] = (
+                _cached_long(np.array(body_list, dtype=np.int64)),
+                _cached_long(np.array(off_list, dtype=np.int64)),
+            )
+            inner_w[t] = max_qw
+        elif t == "v":
+            body_list, off_list = [], []
+            jnt_dofadr = np.array(m.jnt_dofadr, dtype=np.int64)
+            dof_jntid = np.array(m.dof_jntid, dtype=np.int64)
+            for k in range(m.nv):
+                bid = int(m.dof_bodyid[k])
+                jid = int(dof_jntid[k])
+                local_j = int(np.count_nonzero(m.jnt_bodyid[:jid] == bid))
+                dof_in_jnt = k - int(jnt_dofadr[jid])
+                body_list.append(bid)
+                off_list.append(local_j * max_dw + dof_in_jnt)
+            gather[t] = (
+                _cached_long(np.array(body_list, dtype=np.int64)),
+                _cached_long(np.array(off_list, dtype=np.int64)),
+            )
+            inner_w[t] = max_dw
+
+    return gather, inner_w
+
+
+# ---------------------------------------------------------------------------
+# Flat scan (single vmap)
+# ---------------------------------------------------------------------------
+
+def _build_flat_cache(m, in_types, out_types, group_by, max_qw=MAX_QPOS_PER_JNT, max_dw=MAX_DOF_PER_JNT):
     all_types = set(in_types + out_types)
-    n_items = {"j": m.nbody, "u": m.nu, "c": m.ncam}[group_by]
-    key_typ_ids, order = {}, []
-    for i in np.arange(n_items, dtype=np.int32):
-        typ_ids = type_ids_fn(m, i)
-        key = key_fn(typ_ids)
-        order.append((key, typ_ids))
+    flat_types = {"j": "b", "u": "uaj", "c": "c"}[group_by]
+
+    if group_by == "j":
+        max_j = max(1, int(np.max([np.count_nonzero(m.jnt_bodyid == i) for i in range(m.nbody)]))) if m.nbody else 1
+        padded_indices = _build_body_joint_indices(m, all_types, max_j, max_qw, max_dw)
+        gather_indices, per_joint_inner_w = _build_gather_indices_j(m, out_types, max_j, max_qw, max_dw)
+        return {
+            "padded_indices": padded_indices,
+            "gather_indices": gather_indices,
+            "per_joint_inner_w": per_joint_inner_w,
+            "flat_types": flat_types,
+            "n_items": m.nbody,
+        }
+
+    elif group_by == "u":
+        n_items = m.nu
+        padded_indices: dict[str, Any] = {}
         for t in all_types:
-            out = key_typ_ids.setdefault(key, {})
-            val = np.expand_dims(typ_ids[t], axis=0)
-            out[t] = np.concatenate((out[t], val)) if t in out else val
+            if t == "u":
+                padded_indices[t] = _cached_long(np.arange(n_items, dtype=np.int64))
+            elif t == "a":
+                actadr = np.array(m.actuator_actadr, dtype=np.int64)
+                padded_indices[t] = _cached_long(np.where(actadr < 0, 0, actadr))
+            elif t == "j":
+                jnt_ids = np.array(m.actuator_trnid[:, 0], dtype=np.int64)
+                padded_indices[t] = _cached_long(np.where(jnt_ids < 0, 0, jnt_ids))
+            elif t == "v":
+                v_list = []
+                for i in range(n_items):
+                    if m.actuator_trntype[i] in (TrnType.JOINT, TrnType.JOINTINPARENT):
+                        jid = m.actuator_trnid[i, 0]
+                        v_list.append(np.nonzero(m.dof_jntid == jid)[0].astype(np.int64))
+                    else:
+                        v_list.append(np.array([0], dtype=np.int64))
+                max_v = max(len(a) for a in v_list) if v_list else 1
+                padded_indices[t] = _cached_long(np.stack([_pad_1d(a, max_v) for a in v_list]))
+            elif t == "q":
+                q_list = []
+                for i in range(n_items):
+                    if m.actuator_trntype[i] in (TrnType.JOINT, TrnType.JOINTINPARENT):
+                        jid = m.actuator_trnid[i, 0]
+                        q_list.append(np.nonzero(_q_jointid(m) == jid)[0].astype(np.int64))
+                    else:
+                        q_list.append(np.array([0], dtype=np.int64))
+                max_q = max(len(a) for a in q_list) if q_list else 1
+                padded_indices[t] = _cached_long(np.stack([_pad_1d(a, max_q) for a in q_list]))
+            elif t == "s":
+                site_ids = np.array(m.actuator_trnid, dtype=np.int64)
+                padded_indices[t] = _cached_long(np.where(site_ids < 0, 0, site_ids))
 
-    key_typ_ids = list(sorted(key_typ_ids.items()))
+        gather_indices: dict[str, tuple | None] = {}
+        for t in set(out_types):
+            if t in flat_types:
+                gather_indices[t] = None
+            elif t == "a":
+                actadr = np.array(m.actuator_actadr, dtype=np.int64)
+                valid = np.nonzero(actadr >= 0)[0]
+                gather_indices[t] = (_cached_long(valid[np.argsort(actadr[valid])]),)
+            else:
+                gather_indices[t] = None
 
-    # Determine which groups could possibly have output (non-empty take ids)
-    group_has_output = [any(typ_ids[v].size > 0 for v in out_types) for _, typ_ids in key_typ_ids]
+        return {
+            "padded_indices": padded_indices,
+            "gather_indices": gather_indices,
+            "per_joint_inner_w": {},
+            "flat_types": flat_types,
+            "n_items": n_items,
+        }
 
-    flat_ = {"j": "b", "u": "uaj", "c": "c"}[group_by]
-
-    # ---- Precompute torch indices for runtime use ----
-
-    # Convert typ_ids to device-cached LongTensors for _take operations
-    key_typ_ids_torch = []
-    for key, typ_ids in key_typ_ids:
-        typ_ids_t = {t: _cached_long(v) for t, v in typ_ids.items()}
-        key_typ_ids_torch.append((key, typ_ids_t))
-
-    # Pre-compute reorder indices for the compile path.
-    # Assumes all has_output groups produce results (always true in production;
-    # only test callbacks that return None break this assumption).
-    active_kti_np = [(k, v) for (k, v), ho in zip(key_typ_ids, group_has_output) if ho]
-    active_keys = set(k for k, _ in active_kti_np)
-    active_order = [typ_ids for key, typ_ids in order if key in active_keys]
-    active_order_per_type = [[o[t] for o in active_order] for t in all_types]
-    active_order_per_type = [
-        (np.concatenate(o) if isinstance(o[0], np.ndarray) else np.array(o)) if o else np.array([], dtype=np.int64)
-        for o in active_order_per_type
-    ]
-    order_dict = dict(zip(all_types, active_order_per_type))
-
-    reorder_indices = {}
-    for typ in set(out_types):
-        ids = np.concatenate([np.hstack(v[typ]) for _, v in active_kti_np])
-        input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
-        reorder_indices[typ] = _cached_long(_index(ids, input_order))
-
-    return {
-        "key_typ_ids": key_typ_ids,
-        "key_typ_ids_torch": key_typ_ids_torch,
-        "group_has_output": group_has_output,
-        "order": order,
-        "all_types": all_types,
-        "flat_": flat_,
-        "reorder_indices": reorder_indices,
-    }
+    elif group_by == "c":
+        padded_indices = {}
+        for t in all_types:
+            if t == "c":
+                padded_indices[t] = _cached_long(np.arange(m.ncam, dtype=np.int64))
+        return {
+            "padded_indices": padded_indices,
+            "gather_indices": {t: None for t in set(out_types)},
+            "per_joint_inner_w": {},
+            "flat_types": "c",
+            "n_items": m.ncam,
+        }
+    else:
+        raise NotImplementedError(f'group by type "{group_by}" not implemented.')
 
 
 def _get_flat_cache(m, in_types, out_types, group_by):
-    """Get or build flat scan cache for the given model and type signature.
-
-    For known signatures (registered in ``_KNOWN_FLAT_CALLS``), the cache is
-    pre-built at ``device_put`` time via ``precompute_scan_caches`` so this
-    is a simple dict lookup with no graph break.
-    """
     cache_key = (_model_cache_id(m), in_types, out_types, group_by)
     cache = _flat_cache.get(cache_key)
     if cache is None:
-        cache = _build_flat_cache(m, in_types, out_types, group_by)
+        cache = _build_flat_cache(m, in_types, out_types, group_by, m.max_qpos_per_jnt, m.max_dof_per_jnt)
         _flat_cache[cache_key] = cache
     return cache
+
+
+def _gather_output(yi, gi, inner_w):
+    """Gather a single output tensor using precomputed indices."""
+    if gi is None:
+        return yi
+    if len(gi) == 1:
+        idx = gi[0]
+        idx = idx.to(yi.device) if isinstance(idx, _DeviceCachedTensor) else idx
+        return yi[idx]
+
+    body_idx, offset_idx = gi
+    bi = body_idx.to(yi.device) if isinstance(body_idx, _DeviceCachedTensor) else body_idx
+    oi = offset_idx.to(yi.device) if isinstance(offset_idx, _DeviceCachedTensor) else offset_idx
+
+    # Flatten per-joint inner dimension if needed:
+    #   (batch, max_j, inner_w, ...) -> (batch, max_j * inner_w, ...)
+    if inner_w is not None and yi.ndim >= 3:
+        yi = yi.reshape(yi.shape[0], -1, *yi.shape[3:])
+
+    return yi[bi, oi]
 
 
 def flat(
@@ -943,234 +596,191 @@ def flat(
     *args,
     group_by: str = "j",
 ) -> Y:
-    r"""Scan a function across bodies or actuators.
+    r"""Scan a function across bodies or actuators using a single vmap call.
 
-    Scan group data according to type and batch shape then calls vmap(f) on it.
-    Grouping indices are precomputed and cached per model to avoid redundant
-    numpy work on repeated calls.
+    All items are processed in a single ``torch.vmap`` call. Type-dependent
+    logic is handled inside the callback via ``torch.where``.  For
+    ``group_by="j"``, per-joint inputs (types ``"q"`` and ``"v"``) are
+    organized as ``(max_j, 7)`` and ``(max_j, 6)`` respectively inside the
+    vmapped function, enabling fixed-offset indexing with no data-dependent
+    slicing.
 
     Args:
       m: an mjx model
-      f: a function to be scanned with the following type signature:
-          def f(key, *args) -> y
-        where
-          ``key`` gives grouping key for this function instance
-          ``*args`` are input arguments with types matching ``in_types``
-          ``y`` is an output arguments with types matching ``out_type``
-      in_types: string specifying the type of each input arg:
-        'b': split according to bodies
-        'j': split according to joint types
-        'q': split according to generalized coordinates (len(qpos))
-        'v': split according to degrees of freedom (len(qvel))
-        'u': split according to actuators
-        'a': split according to actuator activations
-        'c': split according to camera
+      f: a function to be scanned
+      in_types: string specifying the type of each input arg
       out_types: string specifying the types the output dimension matches
       *args: the input arguments corresponding to ``in_types``
-      group_by: the type to group by, either joints, actuators, or cameras
+      group_by: the type to group by ("j", "u", or "c")
 
     Returns:
-      The stacked outputs of ``f`` matching the model's order.
-
-    Raises:
-        IndexError: if function output shape does not match out_types shape
+      The outputs of ``f`` in model order.
     """
     _check_input(m, args, in_types)
 
     cache = _get_flat_cache(m, in_types, out_types, group_by)
-    key_typ_ids_torch = cache["key_typ_ids_torch"]
-    group_has_output = cache["group_has_output"]
-    flat_ = cache["flat_"]
+    padded = cache["padded_indices"]
+    gather = cache["gather_indices"]
+    inner_w = cache["per_joint_inner_w"]
 
-    padding = cache.get("padding")
-    use_padding = m.scan_padding and padding is not None
+    f_args = [_take(arg, padded[typ]) for arg, typ in zip(args, in_types)]
+    y = _nvmap(f, *f_args)
 
-    # Use pre-extracted static args if available (pre-computed at device_put
-    # time for known signatures), otherwise fall back to runtime extraction.
-    all_static_args = cache.get("pre_extracted_static")
-    if all_static_args is not None:
-        # Derive static mask from the pre-extracted data (compile-safe).
-        sample = next((g for g in all_static_args if g is not None), None)
-        is_static = [x is not None for x in sample] if sample else [False] * len(args)
-    else:
-        is_static = _static_arg_mask(m, args)
-        all_static_args = _extract_static_for_flat(args, in_types, key_typ_ids_torch, group_has_output, is_static)
+    if y is None:
+        return None
 
-    callback = f
-    if use_padding:
-        callback = _wrap_callback_with_padding(f, out_types, padding["max_out_widths"])
+    is_seq = isinstance(y, (list, tuple))
+    ys = list(y) if is_seq else [y]
+    result = [_gather_output(yi, gather.get(typ), inner_w.get(typ)) for yi, typ in zip(ys, out_types)]
 
-    # Call vmap per group (Dynamo unrolls this constant-length loop)
-    ys = []
-    for i, ((_, typ_ids_t), has_output) in enumerate(zip(key_typ_ids_torch, group_has_output)):
-        if has_output:
-            ids_for_take = padding["groups"][i]["padded_ids"] if use_padding else typ_ids_t
-            f_args = [
-                _take(arg, ids_for_take[typ]) if not static else None
-                for arg, typ, static in zip(args, in_types, is_static)
-            ]
-            y = _nvmap(callback, all_static_args[i], *f_args)
-            if use_padding:
-                pg = padding["groups"][i]
-                y = _trim_padded_output(y, pg["actual_batch"], pg["actual_out_widths"], out_types, flat_)
-            ys.append(y)
-        else:
-            ys.append(None)
-
-    # Filter None results and matching cache entries
-    active_kti = [v for y, v in zip(ys, key_typ_ids_torch) if y is not None]
-    ys = [y for y in ys if y is not None]
-
-    # Flatten grouped dimensions and concatenate across groups
-    f_ret_is_seq = isinstance(ys[0], (list, tuple))
-    ys = ys if f_ret_is_seq else [[y] for y in ys]
-    ys = [[v if typ in flat_ else torch.flatten(v, 0, 1) for v, typ in zip(y, out_types)] for y in ys]
-    ys = tree_map(lambda *x: concatenate(x), *ys)
-
-    # Put concatenated results back in model order.
-    # The precomputed indices assume all has_output groups actually return
-    # values (which is always true in production physics callbacks).  When a
-    # callback returns None for a has_output group (only in tests) fall back
-    # to dynamically computing the reorder indices.
-    n_expected = sum(cache["group_has_output"])
-    reordered_ys = []
-    if len(active_kti) == n_expected:
-        reorder_indices = cache["reorder_indices"]
-        for i, typ in enumerate(out_types):
-            reordered_ys.append(_take(ys[i], reorder_indices[typ]))
-    else:
-        order = cache["order"]
-        all_types = cache["all_types"]
-        ys_keys = set(k for k, _ in active_kti)
-        active_order = [typ_ids for key, typ_ids in order if key in ys_keys]
-        active_order_per_type = [[o[t] for o in active_order] for t in all_types]
-        active_order_per_type = [
-            np.concatenate(o) if isinstance(o[0], np.ndarray) else np.array(o) for o in active_order_per_type
-        ]
-        order_dict = dict(zip(all_types, active_order_per_type))
-        for i, typ in enumerate(out_types):
-
-            def _to_np(v):
-                if isinstance(v, _DeviceCachedTensor):
-                    return v._cpu.numpy()
-                if isinstance(v, torch.Tensor):
-                    return v.cpu().numpy()
-                return v
-
-            ids = np.concatenate([np.hstack(_to_np(v[typ])) for _, v in active_kti])
-            input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
-            reorder_idx = _np_to_long(_index(ids, input_order))
-            reordered_ys.append(_take(ys[i], reorder_idx))
-
-    return reordered_ys if f_ret_is_seq else reordered_ys[0]
+    return tuple(result) if is_seq else result[0]
 
 
-def _build_body_tree_cache(m, in_types, out_types, reverse):
-    """Precompute grouping indices for scan.body_tree (numpy-heavy, runs once)."""
+# ---------------------------------------------------------------------------
+# Body-tree scan (per-depth single vmap)
+# ---------------------------------------------------------------------------
+
+def _build_body_tree_cache(m, in_types, out_types, reverse, max_qw=MAX_QPOS_PER_JNT, max_dw=MAX_DOF_PER_JNT):
     jnt_type_np = _as_numpy(m.jnt_type)
+
+    # Compute depths
     depths = np.zeros(m.nbody, dtype=np.int32)
+    for body_id in range(1, m.nbody):
+        depths[body_id] = 1 + depths[m.body_parentid[body_id]]
 
-    key_body_ids = {}
-    for body_id in range(m.nbody):
-        parent_id = -1
-        if body_id > 0:
-            parent_id = m.body_parentid[body_id]
-        depths[body_id] = 1 + depths[parent_id]
+    max_depth = int(depths.max()) if m.nbody > 0 else 0
+    max_j = max(1, int(np.max([np.count_nonzero(m.jnt_bodyid == i) for i in range(m.nbody)]))) if m.nbody else 1
 
-        key = (depths[body_id],)
-        for i, t in enumerate(out_types + in_types):
-            id_ = parent_id if i < len(out_types) else body_id
-            if t == "b":
+    # Bodies per depth level
+    depth_body_ids: dict[int, np.ndarray] = {}
+    for d in range(max_depth + 1):
+        depth_body_ids[d] = np.nonzero(depths == d)[0].astype(np.int64)
+
+    # Per-depth padded indices (re-use body-joint helpers restricted to each depth's bodies)
+    per_depth_padded: dict[int, dict[str, Any]] = {}
+    for d in range(max_depth + 1):
+        bids = depth_body_ids[d]
+        pd: dict[str, Any] = {}
+
+        if "b" in set(in_types):
+            pd["b"] = _cached_long(bids)
+
+        if "j" in set(in_types):
+            j_arr = np.zeros((len(bids), max_j), dtype=np.int64)
+            for li, b in enumerate(bids):
+                jids = np.nonzero(m.jnt_bodyid == b)[0]
+                for k, jid in enumerate(jids):
+                    j_arr[li, k] = jid
+                if len(jids) > 0:
+                    j_arr[li, len(jids):] = jids[-1]
+            pd["j"] = _cached_long(j_arr)
+
+        if "q" in set(in_types):
+            jnt_qposadr = np.array(m.jnt_qposadr, dtype=np.int64)
+            q_arr = np.zeros((len(bids), max_j, max_qw), dtype=np.int64)
+            for li, b in enumerate(bids):
+                jids = np.nonzero(m.jnt_bodyid == b)[0]
+                for k, jid in enumerate(jids):
+                    jt = int(jnt_type_np[jid])
+                    qw = _QPOS_WIDTH[jt]
+                    qa = jnt_qposadr[jid]
+                    q_ids = np.arange(qa, qa + qw, dtype=np.int64)
+                    q_arr[li, k, :qw] = q_ids
+                    if qw > 0:
+                        q_arr[li, k, qw:] = q_ids[-1]
+                if len(jids) > 0:
+                    q_arr[li, len(jids):] = q_arr[li, len(jids) - 1]
+            pd["q"] = _cached_long(q_arr)
+
+        if "v" in set(in_types):
+            jnt_dofadr = np.array(m.jnt_dofadr, dtype=np.int64)
+            v_arr = np.zeros((len(bids), max_j, max_dw), dtype=np.int64)
+            for li, b in enumerate(bids):
+                jids = np.nonzero(m.jnt_bodyid == b)[0]
+                for k, jid in enumerate(jids):
+                    jt = int(jnt_type_np[jid])
+                    dw = _DOF_WIDTH[jt]
+                    da = jnt_dofadr[jid]
+                    d_ids = np.arange(da, da + dw, dtype=np.int64)
+                    v_arr[li, k, :dw] = d_ids
+                    if dw > 0:
+                        v_arr[li, k, dw:] = d_ids[-1]
+                if len(jids) > 0:
+                    v_arr[li, len(jids):] = v_arr[li, len(jids) - 1]
+            pd["v"] = _cached_long(v_arr)
+
+        per_depth_padded[d] = pd
+
+    # Carry propagation
+    carry_maps: dict[int, Any] = {}
+    if not reverse:
+        for d in range(1, max_depth + 1):
+            bids = depth_body_ids[d]
+            parent_bids = np.array([m.body_parentid[b] for b in bids], dtype=np.int64)
+            prev_bids = depth_body_ids[d - 1]
+            carry_maps[d] = _cached_long(_index(prev_bids, parent_bids))
+    else:
+        for d in range(max_depth - 1, -1, -1):
+            if d + 1 > max_depth:
+                carry_maps[d] = None
                 continue
-            elif t == "j":
-                key += tuple(jnt_type_np[np.nonzero(m.jnt_bodyid == id_)[0]])
-            elif t == "v":
-                key += (len(np.nonzero(m.dof_bodyid == id_)[0]),)
-            elif t == "q":
-                key += (len(np.nonzero(_q_bodyid(m) == id_)[0]),)
+            child_bids = depth_body_ids[d + 1]
+            parent_bids_child = np.array([m.body_parentid[b] for b in child_bids], dtype=np.int64)
+            cur_bids = depth_body_ids[d]
+            carry_maps[d] = (_cached_long(_index(cur_bids, parent_bids_child)), len(cur_bids))
 
-        body_ids = key_body_ids.get(key, np.array([], dtype=np.int32))
-        key_body_ids[key] = np.append(body_ids, body_id)
+    # Output gather
+    depth_order = list(range(max_depth, -1, -1)) if reverse else list(range(max_depth + 1))
+    concat_body_order = np.concatenate([depth_body_ids[d] for d in depth_order])
 
-    key_parents = {}
-    for key, body_ids in key_body_ids.items():
-        body_ids_nz = body_ids[body_ids != 0]
-        if body_ids_nz.size == 0:
-            continue
-        pids = m.body_parentid[body_ids_nz]
-        parents = {k for k, v in key_body_ids.items() if np.isin(v, pids).any()}
-        key_parents[key] = list(sorted(parents))
+    # Build gather similar to flat scan
+    gather_indices, per_joint_inner_w = _build_gather_indices_j(m, out_types, max_j, max_qw, max_dw)
 
-    key_in_take, key_y_take = {}, {}
-    for key, body_ids in key_body_ids.items():
-        for i, typ in enumerate(in_types + out_types):
-            if typ == "b":
-                ids = body_ids
-            elif typ == "j":
-                ids = np.stack([np.nonzero(m.jnt_bodyid == b)[0] for b in body_ids])
-            elif typ == "v":
-                ids = np.stack([np.nonzero(m.dof_bodyid == b)[0] for b in body_ids])
-            elif typ == "q":
-                ids = np.stack([np.nonzero(_q_bodyid(m) == b)[0] for b in body_ids])
-            else:
-                raise ValueError(f"Unknown in_type: {typ}")
-            if i < len(in_types):
-                key_in_take.setdefault(key, []).append(ids)
-            else:
-                key_y_take.setdefault(key, []).append(np.hstack(ids))
+    # For body_tree, we need to map from concat body order to model order
+    body_to_concat_pos = np.empty(m.nbody, dtype=np.int64)
+    cp = 0
+    for d in depth_order:
+        bids = depth_body_ids[d]
+        for li, b in enumerate(bids):
+            body_to_concat_pos[b] = cp + li
+        cp += len(bids)
 
-    keys = sorted(key_body_ids, reverse=reverse)
-
-    # Precompute carry-propagation index maps
-    carry_maps = {}
-    for key in keys:
-        if reverse:
-            child_keys = [k for k, v in key_parents.items() if key in v]
-            child_info = []
-            for child_key in child_keys:
-                body_ids = key_body_ids[key]
-                parent_ids = m.body_parentid[key_body_ids[child_key]]
-                id_map = _index(body_ids, parent_ids)
-                child_info.append((child_key, _cached_long(id_map), body_ids.size))
-            carry_maps[key] = child_info
-        elif key in key_parents:
-            body_ids_all = [key_body_ids[p] for p in key_parents[key]]
-            concat_body_ids = np.concatenate(body_ids_all)
-            parent_ids = m.body_parentid[key_body_ids[key]]
-            take_idx = _index(concat_body_ids, parent_ids)
-            carry_maps[key] = (key_parents[key], _cached_long(take_idx))
-
-    # Convert in_take indices to device-cached tensors
-    key_in_take_torch = {}
-    for key, take_list in key_in_take.items():
-        key_in_take_torch[key] = [_cached_long(ids) for ids in take_list]
-
-    # Pre-compute reorder indices for the compile path (assumes all keys
-    # produce output, which is always true in production code).
-    y_take_torch = []
-    for i in range(len(out_types)):
-        y_take_torch.append(_cached_long(np.argsort(np.concatenate([key_y_take[key][i] for key in keys]))))
+    # Remap gather indices to use concat position instead of body id
+    output_gather: dict[str, tuple | None] = {}
+    output_inner_w: dict[str, int | None] = {}
+    for t in set(out_types):
+        gi = gather_indices.get(t)
+        iw = per_joint_inner_w.get(t)
+        output_inner_w[t] = iw
+        if gi is None:
+            # "b" type: simple reorder
+            output_gather[t] = (_cached_long(np.argsort(concat_body_order)),)
+        else:
+            body_idx_np = gi[0]._cpu.numpy()
+            offset_idx_np = gi[1]._cpu.numpy()
+            # Remap body ids to concat positions
+            remapped_body = body_to_concat_pos[body_idx_np]
+            output_gather[t] = (
+                _cached_long(remapped_body),
+                _cached_long(offset_idx_np),
+            )
 
     return {
-        "key_in_take_torch": key_in_take_torch,
-        "key_y_take": key_y_take,
-        "keys": keys,
+        "depth_body_ids": depth_body_ids,
+        "per_depth_padded": per_depth_padded,
         "carry_maps": carry_maps,
-        "y_take_torch": y_take_torch,
+        "output_gather": output_gather,
+        "output_inner_w": output_inner_w,
+        "depth_order": depth_order,
+        "max_depth": max_depth,
     }
 
 
 def _get_body_tree_cache(m, in_types, out_types, reverse):
-    """Get or build body_tree scan cache.
-
-    For known signatures (registered in ``_KNOWN_BODY_TREE_CALLS``), the
-    cache is pre-built at ``device_put`` time so this is a simple dict
-    lookup with no graph break.
-    """
     cache_key = (_model_cache_id(m), in_types, out_types, reverse)
     cache = _body_tree_cache.get(cache_key)
     if cache is None:
-        cache = _build_body_tree_cache(m, in_types, out_types, reverse)
+        cache = _build_body_tree_cache(m, in_types, out_types, reverse, m.max_qpos_per_jnt, m.max_dof_per_jnt)
         _body_tree_cache[cache_key] = cache
     return cache
 
@@ -1183,131 +793,79 @@ def body_tree(
     *args,
     reverse: bool = False,
 ) -> Y:
-    r"""Scan ``f`` across bodies in tree order, carrying results up/down the tree.
-
-    This function groups bodies according to level and attached joints, then calls
-    vmap(f) on them.  Grouping indices are precomputed and cached per model.
+    r"""Scan ``f`` across bodies in tree order with a single vmap per depth level.
 
     Args:
-      m: an mjx mjmodel
-      f: a function to be scanned with the following type signature:
-          def f(y, *args) -> y
-        where
-          ``y`` is the carry value and return value
-          ``*args`` are input arguments with types matching ``in_types``
-      in_types: string specifying the type of each input arg:
-        'b': split according to bodies
-        'j': split according to joint types
-        'q': split according to generalized coordinates (len(qpos))
-        'v': split according to degrees of freedom (len(qvel))
+      m: an mjx model
+      f: a function ``f(carry, *args) -> y``
+      in_types: string specifying the type of each input arg
       out_types: string specifying the types the output dimension matches
       *args: the input arguments corresponding to ``in_types``
-      reverse: if True, scans up the body tree from leaves to root, otherwise
-        root to leaves
+      reverse: if True, scan from leaves to root
 
     Returns:
-      The stacked outputs of ``f`` matching the model's body order.
-
-    Raises:
-        IndexError: if function output shape does not match out_types shape
+      The stacked outputs of ``f`` matching the model's order.
     """
     _check_input(m, args, in_types)
 
     cache = _get_body_tree_cache(m, in_types, out_types, reverse)
-    key_in_take_torch = cache["key_in_take_torch"]
-    key_y_take = cache["key_y_take"]
-    keys = cache["keys"]
+    depth_order = cache["depth_order"]
+    per_depth_padded = cache["per_depth_padded"]
     carry_maps = cache["carry_maps"]
+    output_gather = cache["output_gather"]
+    output_inner_w = cache["output_inner_w"]
 
-    padding = cache.get("padding")
-    use_padding = m.scan_padding and padding is not None
+    depth_y: dict[int, Any] = {}
+    for d in depth_order:
+        padded = per_depth_padded[d]
 
-    # Use pre-extracted static args if available (pre-computed at device_put
-    # time for known signatures), otherwise fall back to runtime extraction.
-    all_static_args = cache.get("pre_extracted_static")
-    if all_static_args is not None:
-        # Derive static mask from the pre-extracted data (compile-safe).
-        # Skip carry position (index 0) which is always None.
-        sample = next(iter(all_static_args.values()), None)
-        is_static = [x is not None for x in sample[1:]] if sample else [False] * len(args)
-    else:
-        is_static = _static_arg_mask(m, args)
-        all_static_args = _extract_static_for_body_tree(args, key_in_take_torch, keys, is_static)
-
-    callback = f
-    if use_padding:
-        callback = _wrap_callback_with_padding(f, out_types, padding["max_out_widths"])
-
-    # Scan over groups in tree order, carrying results up/down
-    key_y = {}
-    for key in keys:
         carry = None
+        if not reverse and d > 0:
+            parent_index = carry_maps[d]
+            prev_y = depth_y[d - 1]
+            if prev_y is not None:
+                carry = tree_map(lambda x, i=parent_index: _take(x, i), prev_y)
+        elif reverse and d < cache["max_depth"]:
+            cm = carry_maps[d]
+            if cm is not None:
+                seg_ids, n_seg = cm
+                child_y = depth_y[d + 1]
+                if child_y is not None:
+                    carry = tree_map(lambda x, i=seg_ids, s=n_seg: segment_sum(x, i, s), child_y)
 
-        if reverse:
-            for child_key, id_map, n_segments in carry_maps[key]:
-                y = key_y[child_key]
-                if y is None:
-                    continue
+        f_args = [_take(arg, padded[typ]) for arg, typ in zip(args, in_types)]
+        y = _nvmap(f, carry, *f_args)
+        depth_y[d] = y
 
-                def index_sum(x, i=id_map, s=n_segments):
-                    return segment_sum(x, i, s)
-
-                y = tree_map(index_sum, y)
-                carry = y if carry is None else tree_map(torch.add, carry, y)
-        elif key in carry_maps:
-            parent_keys, take_idx = carry_maps[key]
-            ys_all = [key_y[p] for p in parent_keys]
-            ys_filtered = [y_val for y_val in ys_all if y_val is not None]
-            if ys_filtered:
-                y = tree_map(lambda *x: concatenate(x), *ys_filtered) if len(ys_filtered) > 1 else ys_filtered[0]
-                take_fn = lambda x, i=take_idx: _take(x, i)
-                carry = tree_map(take_fn, y)
-
-        if use_padding:
-            if carry is not None:
-                _mb = padding["max_batch"]
-                carry = tree_map(lambda x, mb=_mb: _pad_batch_dim(x, mb), carry)
-            ids_list = padding["groups"][key]["padded_ids"]
-        else:
-            ids_list = key_in_take_torch[key]
-
-        f_args = [_take(arg, ids) if not static else None for arg, ids, static in zip(args, ids_list, is_static)]
-        y = _nvmap(callback, all_static_args[key], carry, *f_args)
-
-        if use_padding:
-            y = _trim_batch_only(y, padding["groups"][key]["actual_batch"])
-
-        key_y[key] = y
-
-    # Filter out keys whose callback returned None
-    active_keys = [k for k in keys if key_y[k] is not None]
-
-    # Concatenate results, drop grouping dimensions, put back in model order
-    use_precomputed = len(active_keys) == len(keys)
-    y = []
+    # Concatenate across depths and gather into model order
+    result = []
     for i, typ in enumerate(out_types):
-        y_typ = [key_y[key] for key in active_keys]
-        if len(out_types) > 1:
-            y_typ = [y_[i] for y_ in y_typ]
-        if use_padding and typ != "b":
-            y_typ = [
-                yg[:, : padding["groups"][key]["actual_out_widths"][i]]
-                if padding["groups"][key]["actual_out_widths"][i] is not None
-                else yg
-                for yg, key in zip(y_typ, active_keys)
-            ]
-        if typ != "b":
-            y_typ = tree_map(lambda x: torch.flatten(x, 0, 1), y_typ)
-        y_typ = tree_map(lambda *x: _cat_device_safe(x), *y_typ)
-        if use_precomputed:
-            y_take = cache["y_take_torch"][i]
+        y_parts = []
+        for d in depth_order:
+            y_d = depth_y[d]
+            if y_d is None:
+                continue
+            part = y_d[i] if len(out_types) > 1 else y_d
+            y_parts.append(part)
+
+        if not y_parts:
+            result.append(torch.empty(0))
+            continue
+
+        y_cat = tree_map(lambda *x: _cat_device_safe(x), *y_parts) if len(y_parts) > 1 else y_parts[0]
+
+        gi = output_gather[typ]
+        iw = output_inner_w.get(typ)
+        if gi is not None and len(gi) == 1:
+            idx = gi[0]
+            idx = idx.to(y_cat.device) if isinstance(idx, _DeviceCachedTensor) else idx
+            result.append(y_cat[idx])
+        elif gi is not None and len(gi) == 2:
+            result.append(_gather_output(y_cat, gi, iw))
         else:
-            y_take = _np_to_long(np.argsort(np.concatenate([key_y_take[key][i] for key in active_keys])))
-        y.append(_take(y_typ, y_take))
+            result.append(y_cat)
 
-    y = y[0] if len(out_types) == 1 else y
-
-    return y
+    return result[0] if len(out_types) == 1 else result
 
 
 def segment_sum(
@@ -1315,18 +873,7 @@ def segment_sum(
     segment_ids: torch.Tensor,
     num_segments: int,
 ) -> torch.Tensor:
-    """Computes the sum within segments of a tensor.
-
-    Equivalent to jax.ops.segment_sum.
-
-    Args:
-      data: values to segment-sum
-      segment_ids: segment index for each element in data
-      num_segments: total number of segments
-
-    Returns:
-      Tensor of shape (num_segments, *data.shape[1:]) with summed values.
-    """
+    """Computes the sum within segments of a tensor."""
     if isinstance(segment_ids, _DeviceCachedTensor):
         segment_ids = segment_ids.to(data.device).long()
     elif not isinstance(segment_ids, torch.Tensor):
@@ -1337,7 +884,6 @@ def segment_sum(
     data = data.clone().contiguous()
     shape = (num_segments,) + data.shape[1:]
     result = torch.zeros(shape, dtype=data.dtype, device=data.device)
-    # Use out-of-place operations to be compatible with vmap
     idx = segment_ids
     for _ in range(data.ndim - 1):
         idx = idx.unsqueeze(-1)

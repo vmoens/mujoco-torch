@@ -25,6 +25,9 @@ from mujoco_torch._src import math, scan, support
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import Data, DisableBit, JointType, Model
 
+_FREE = JointType.FREE
+_BALL = JointType.BALL
+
 # pylint: enable=g-importing-member
 
 
@@ -78,27 +81,40 @@ def _inertia_box_fluid_model(
 def _spring_damper(m: Model, d: Data) -> torch.Tensor:
     """Applies joint level spring and damping forces."""
 
+    max_j = m.max_joints_per_body
+    has_free = _FREE in m.joint_types_present
+    has_ball = _BALL in m.joint_types_present
+    max_dw = m.max_dof_per_jnt
+
     def fn(jnt_typs, stiffness, qpos_spring, qpos):
-        qpos_i = 0
-        qfrcs = []
-        for i in range(len(jnt_typs)):
-            jnt_typ = JointType(jnt_typs[i])
-            q = qpos[qpos_i : qpos_i + jnt_typ.qpos_width()]
-            qs = qpos_spring[qpos_i : qpos_i + jnt_typ.qpos_width()]
-            qfrc = torch.zeros(jnt_typ.dof_width(), dtype=qpos.dtype, device=qpos.device)
-            if jnt_typ == JointType.FREE:
-                trans = -stiffness[i] * (q[:3] - qs[:3])
-                rot = -stiffness[i] * math.quat_sub(q[3:7], qs[3:7])
-                qfrc = torch.cat([trans, rot])
-            elif jnt_typ == JointType.BALL:
-                qfrc = -stiffness[i] * math.quat_sub(q, qs)
-            elif jnt_typ in (JointType.SLIDE, JointType.HINGE):
-                qfrc = -stiffness[i] * (q - qs)
-            else:
-                raise RuntimeError(f"unrecognized joint type: {jnt_typ}")
-            qfrcs.append(qfrc)
-            qpos_i = qpos_i + jnt_typ.qpos_width()
-        return torch.cat(qfrcs)
+        dtype, device = qpos.dtype, qpos.device
+        pad = max_dw - 1
+        qfrc_list = []
+
+        for j in range(max_j):
+            jt = jnt_typs[j]
+            q = qpos[j]
+            qs = qpos_spring[j]
+            s = stiffness[j]
+
+            # HINGE/SLIDE: 1 DOF + pad zeros
+            hs_val = -s * (q[0] - qs[0])
+            qfrc = torch.cat([hs_val.unsqueeze(0), torch.zeros(pad, dtype=dtype, device=device)])
+
+            if has_ball:
+                ball_rot = -s * math.quat_sub(q[:4], qs[:4])
+                ball_qfrc = torch.cat([ball_rot, torch.zeros(max_dw - 3, dtype=dtype, device=device)])
+                qfrc = torch.where(jt == _BALL, ball_qfrc, qfrc)
+
+            if has_free:
+                free_trans = -s * (q[:3] - qs[:3])
+                free_rot = -s * math.quat_sub(q[3:7], qs[3:7])
+                free_qfrc = torch.cat([free_trans, free_rot])
+                qfrc = torch.where(jt == _FREE, free_qfrc, qfrc)
+
+            qfrc_list.append(qfrc)
+
+        return torch.stack(qfrc_list)
 
     qfrc = torch.zeros(m.nv, dtype=d.qpos.dtype, device=d.qpos.device)
 

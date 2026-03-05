@@ -14,8 +14,6 @@
 # ==============================================================================
 """Forward step functions."""
 
-from collections.abc import Sequence
-
 import mujoco
 
 # pylint: enable=g-importing-member
@@ -36,6 +34,9 @@ from mujoco_torch._src import (
 
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import BiasType, Data, DisableBit, DynType, GainType, IntegratorType, JointType, Model
+
+_FREE = JointType.FREE
+_BALL = JointType.BALL
 
 # RK4 tableau (cached per device to avoid CPU→CUDA copies during graph capture)
 _RK4_A = math._CachedConst(
@@ -98,17 +99,13 @@ def _actuation(m: Model, d: Data) -> Data:
 
     # act_dot for stateful actuators
     def get_act_dot(dyn_typ, dyn_prm, ctrl, act):
-        if dyn_typ == DynType.NONE:
-            act_dot = torch.zeros_like(ctrl)
-        elif dyn_typ == DynType.INTEGRATOR:
-            act_dot = ctrl
-        elif dyn_typ in (DynType.FILTER, DynType.FILTEREXACT):
-            act_dot = (ctrl - act) / torch.clamp_min(dyn_prm[0], mujoco.mjMINVAL)
-        elif dyn_typ == DynType.MUSCLE:
-            act_dot = support.muscle_dynamics(ctrl, act, dyn_prm)
-        else:
-            raise NotImplementedError(f"dyntype {dyn_typ.name} not implemented.")
-        return act_dot
+        none_val = torch.zeros_like(ctrl)
+        integrator_val = ctrl.clone()
+        filter_val = (ctrl - act) / torch.clamp_min(dyn_prm[0], mujoco.mjMINVAL)
+        muscle_val = support.muscle_dynamics(ctrl, act, dyn_prm)
+        return torch.where(dyn_typ == DynType.NONE, none_val,
+               torch.where(dyn_typ == DynType.INTEGRATOR, integrator_val,
+               torch.where(dyn_typ == DynType.MUSCLE, muscle_val, filter_val)))
 
     act_dot = torch.zeros((m.na,), dtype=d.qpos.dtype, device=d.qpos.device)
     if m.na:
@@ -132,22 +129,16 @@ def _actuation(m: Model, d: Data) -> Data:
     def get_force(*args):
         gain_t, gain_p, bias_t, bias_p, len_, vel, ctrl_act, len_range, acc0 = args
 
-        typ, prm = GainType(gain_t), gain_p
-        if typ == GainType.FIXED:
-            gain = prm[0]
-        elif typ == GainType.AFFINE:
-            gain = prm[0] + prm[1] * len_ + prm[2] * vel
-        elif typ == GainType.MUSCLE:
-            gain = support.muscle_gain(len_, vel, len_range, acc0, prm)
-        else:
-            raise RuntimeError(f"unrecognized gaintype {typ.name}.")
+        fixed_gain = gain_p[0]
+        affine_gain = gain_p[0] + gain_p[1] * len_ + gain_p[2] * vel
+        muscle_gain = support.muscle_gain(len_, vel, len_range, acc0, gain_p)
+        gain = torch.where(gain_t == GainType.FIXED, fixed_gain,
+               torch.where(gain_t == GainType.AFFINE, affine_gain, muscle_gain))
 
-        typ, prm = BiasType(bias_t), bias_p
-        bias = torch.zeros_like(len_)
-        if typ == BiasType.AFFINE:
-            bias = prm[0] + prm[1] * len_ + prm[2] * vel
-        elif typ == BiasType.MUSCLE:
-            bias = support.muscle_bias(len_, len_range, acc0, prm)
+        affine_bias = bias_p[0] + bias_p[1] * len_ + bias_p[2] * vel
+        muscle_bias = support.muscle_bias(len_, len_range, acc0, bias_p)
+        bias = torch.where(bias_t == BiasType.NONE, torch.zeros_like(len_),
+               torch.where(bias_t == BiasType.AFFINE, affine_bias, muscle_bias))
 
         return gain * ctrl_act + bias
 
@@ -202,28 +193,32 @@ def _acceleration(m: Model, d: Data) -> Data:
     return d
 
 
-def _integrate_pos(jnt_typs: Sequence[str], qpos: torch.Tensor, qvel: torch.Tensor, dt: torch.Tensor) -> torch.Tensor:
+def _integrate_pos(max_j: int, has_free: bool, has_ball: bool, jnt_typs: torch.Tensor, qpos: torch.Tensor, qvel: torch.Tensor, dt: torch.Tensor) -> torch.Tensor:
     """Integrate position given velocity."""
-    qs, qi, vi = [], 0, 0
+    q_list = []
 
-    for jnt_typ in jnt_typs:
-        if jnt_typ == JointType.FREE:
-            pos = qpos[qi : qi + 3] + dt * qvel[vi : vi + 3]
-            quat = math.quat_integrate(qpos[qi + 3 : qi + 7], qvel[vi + 3 : vi + 6], dt)
-            qs.append(torch.cat([pos, quat]))
-            qi, vi = qi + 7, vi + 6
-        elif jnt_typ == JointType.BALL:
-            quat = math.quat_integrate(qpos[qi : qi + 4], qvel[vi : vi + 3], dt)
-            qs.append(quat)
-            qi, vi = qi + 4, vi + 3
-        elif jnt_typ in (JointType.HINGE, JointType.SLIDE):
-            pos = qpos[qi] + dt * qvel[vi]
-            qs.append(pos[None])
-            qi, vi = qi + 1, vi + 1
-        else:
-            raise RuntimeError(f"unrecognized joint type: {jnt_typ}")
+    for j in range(max_j):
+        jt = jnt_typs[j]
+        q = qpos[j]
+        v = qvel[j]
 
-    return torch.cat(qs) if qs else torch.empty((0,))
+        # HINGE/SLIDE
+        new_q = torch.cat([(q[0] + dt * v[0]).unsqueeze(0), q[1:]])
+
+        if has_ball:
+            ball_quat = math.quat_integrate(q[:4], v[:3], dt)
+            ball_q = torch.cat([ball_quat, q[4:]])
+            new_q = torch.where(jt == _BALL, ball_q, new_q)
+
+        if has_free:
+            free_pos = q[:3] + dt * v[:3]
+            free_quat = math.quat_integrate(q[3:7], v[3:6], dt)
+            free_q = torch.cat([free_pos, free_quat])
+            new_q = torch.where(jt == _FREE, free_q, new_q)
+
+        q_list.append(new_q)
+
+    return torch.stack(q_list)
 
 
 def _advance(
@@ -243,12 +238,11 @@ def _advance(
         )
 
         def _next_act(dyntype, dynprm, act, act_dot_i, actrange_i):
-            if dyntype == DynType.FILTEREXACT:
-                tau = torch.clamp_min(dynprm[0], mujoco.mjMINVAL)
-                act = act + act_dot_i * tau * (1 - torch.exp(-m.opt.timestep / tau))
-            else:
-                act = act + act_dot_i * m.opt.timestep
-            return torch.clamp(act, actrange_i[0], actrange_i[1])
+            tau = torch.clamp_min(dynprm[0], mujoco.mjMINVAL)
+            filterexact_act = act + act_dot_i * tau * (1 - torch.exp(-m.opt.timestep / tau))
+            other_act = act + act_dot_i * m.opt.timestep
+            new_act = torch.where(dyntype == DynType.FILTEREXACT, filterexact_act, other_act)
+            return torch.clamp(new_act, actrange_i[0], actrange_i[1])
 
         act = scan.flat(
             m,
@@ -270,7 +264,10 @@ def _advance(
     # already-updated velocity (new_qvel), matching the original replace()-
     # based code where d.qvel was updated before the position integration.
     qvel_for_pos = new_qvel if qvel is None else qvel
-    integrate_fn = lambda *args: _integrate_pos(*args, dt=m.opt.timestep)
+    max_j = m.max_joints_per_body
+    _hf = _FREE in m.joint_types_present
+    _hb = _BALL in m.joint_types_present
+    integrate_fn = lambda jt, qp, qv: _integrate_pos(max_j, _hf, _hb, jt, qp, qv, m.opt.timestep)
     qpos = scan.flat(m, integrate_fn, "jqv", "q", m.jnt_type, d.qpos, qvel_for_pos)
 
     # advance time
@@ -315,7 +312,10 @@ def _rungekutta4(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     kqvel = d.qvel  # intermediate RK solution
     # RK solutions sum
     qvel, qacc, act_dot = torch.utils._pytree.tree_map(lambda k: B_t[0] * k, (kqvel, d.qacc, d.act_dot))
-    integrate_fn = lambda *args: _integrate_pos(*args, dt=m.opt.timestep)
+    max_j = m.max_joints_per_body
+    _hf = _FREE in m.joint_types_present
+    _hb = _BALL in m.joint_types_present
+    integrate_fn = lambda jt, qp, qv: _integrate_pos(max_j, _hf, _hb, jt, qp, qv, m.opt.timestep)
 
     # Unrolled loop (3 iterations) instead of torch_scan HOP.
     # The body calls forward() which accesses module-level scan caches — these
