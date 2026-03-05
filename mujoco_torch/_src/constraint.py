@@ -265,11 +265,11 @@ def _instantiate_equality_joint(m: Model, d: Data, precomp: dict) -> _Efc:
         dif = pos2 - ref2
         dif_power = torch.pow(dif, torch.arange(0, 5, dtype=data.dtype, device=data.device))
 
-        deriv = torch.dot(data[1:5], dif_power[:4] * torch.arange(1, 5, dtype=data.dtype, device=data.device))
+        deriv = (data[1:5] * dif_power[:4] * torch.arange(1, 5, dtype=data.dtype, device=data.device)).sum(-1)
         j = torch.zeros(m.nv, dtype=data.dtype, device=data.device)
         j = j.scatter(0, dofadr1.unsqueeze(0), torch.ones(1, dtype=data.dtype, device=data.device))
         j = j.scatter(0, dofadr2.unsqueeze(0), (-deriv).unsqueeze(0))
-        pos = pos1 - ref1 - torch.dot(data[:5], dif_power)
+        pos = pos1 - ref1 - (data[:5] * dif_power).sum(-1)
         return j * active, pos * active
 
     j, pos = fn(data, id2_t, dofadr1_t, dofadr2_t, qposadr1_t, qposadr2_t, active)

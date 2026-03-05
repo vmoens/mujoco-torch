@@ -184,8 +184,8 @@ def _ray_triangle(
     # intersect ray with plane of triangle
     nrm = math.cross(vert[0] - vert[2], vert[1] - vert[2])
     dist = math.safe_div(
-        torch.dot(vert[2] - pnt, nrm),
-        torch.dot(vec, nrm),
+        ((vert[2] - pnt) * nrm).sum(-1),
+        (vec * nrm).sum(-1),
     )
     valid = valid & (dist >= 0)
     dist = torch.where(valid, dist, torch.full((), torch.inf, dtype=dist.dtype, device=dist.device))

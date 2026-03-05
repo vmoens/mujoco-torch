@@ -51,7 +51,7 @@ def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, to
     @torch.vmap
     def get_support(face, normal):
         pos = sphere_pos - normal * sphere.geom_size[0]
-        return torch.dot(pos - face[0], normal)
+        return ((pos - face[0]) * normal).sum(-1)
 
     support = get_support(faces, normals)
     support = torch.where(
@@ -67,7 +67,7 @@ def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, to
     edge_p0 = torch.roll(face, 1, dims=0)
     edge_p1 = face
     edge_normals = torch.vmap(math.cross, (0, None))(edge_p1 - edge_p0, normal)
-    edge_dist = torch.vmap(lambda pp, pn: torch.dot(pt - pp, pn))(edge_p0, edge_normals)
+    edge_dist = ((pt - edge_p0) * edge_normals).sum(-1)
     inside = torch.all(edge_dist <= 0)
 
     degenerate = torch.all(edge_normals == 0, dim=1)
@@ -105,7 +105,7 @@ def _capsule_prism(cap: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torc
     @torch.vmap
     def get_support(face, normal):
         pts = cap_pts - normal * cap.geom_size[0]
-        sup = torch.vmap(lambda x: torch.dot(x - face[0], normal))(pts)
+        sup = ((pts - face[0]) * normal).sum(-1)
         return sup.min()
 
     support = get_support(faces, normals)
