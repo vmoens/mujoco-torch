@@ -4,9 +4,9 @@ Usage:
     TORCH_LOGS="output_code" python scripts/dump_output_code.py 2>&1 | tee /tmp/output_code.txt
 """
 
-import torch
 import mujoco
 import numpy as np
+import torch
 
 import mujoco_torch
 from mujoco_torch._src import test_util
