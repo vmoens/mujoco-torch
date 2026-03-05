@@ -246,8 +246,6 @@ def _take(obj: Y, idx) -> Y:
     Returns:
       obj pytree with leaves taken by idxs
     """
-    if isinstance(obj, UnbatchedTensor):
-        obj = obj.data
     if isinstance(obj, np.ndarray):
         if isinstance(idx, _DeviceCachedTensor):
             return obj[idx._cpu.numpy()]
@@ -281,8 +279,6 @@ def _take(obj: Y, idx) -> Y:
 
 def _as_numpy(val):
     """Convert to numpy, handling UnbatchedTensor and regular tensors."""
-    if isinstance(val, UnbatchedTensor):
-        return val.data.cpu().numpy()
     if isinstance(val, torch.Tensor):
         return val.cpu().numpy()
     return val
@@ -782,7 +778,7 @@ def _check_input(m: Model, args: Any, in_types: str) -> None:
         "c": m.ncam,
     }
     for idx, (arg, typ) in enumerate(zip(args, in_types)):
-        arg_len = arg.data.shape[0] if isinstance(arg, UnbatchedTensor) else len(arg)
+        arg_len = len(arg)
         if arg_len != size[typ]:
             raise IndexError(
                 f'f argument "{idx}" with type "{typ}" has length "{arg_len}"'

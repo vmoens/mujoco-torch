@@ -25,6 +25,7 @@ def _bench_compile(
     inductor_tuning=False,
     step_kwargs=None,
     scan_padding=False,
+    compile_mode=None,
 ):
     inductor_config.coordinate_descent_tuning = inductor_tuning
     inductor_config.aggressive_fusion = inductor_tuning
@@ -37,7 +38,10 @@ def _bench_compile(
 
     kw = step_kwargs or {}
     vmap_step = torch.vmap(lambda d: mujoco_torch.step(mx, d, **kw))
-    compiled_fn = torch.compile(vmap_step, fullgraph=True)
+    compile_kwargs = {"fullgraph": True}
+    if compile_mode is not None:
+        compile_kwargs["mode"] = compile_mode
+    compiled_fn = torch.compile(vmap_step, **compile_kwargs)
     d_batch = make_batch(mx, m_mj, batch_size, DEVICE)
 
     for _ in range(COMPILE_WARMUP_ITERS):
@@ -87,6 +91,16 @@ def test_compile_padded(benchmark, model_name, batch_size):
         batch_size,
         backend_label="torch compile (padded)",
         scan_padding=True,
+    )
+
+
+def test_compile_reduce_overhead(benchmark, model_name, batch_size):
+    _bench_compile(
+        benchmark,
+        model_name,
+        batch_size,
+        backend_label="torch compile (reduce-overhead)",
+        compile_mode="reduce-overhead",
     )
 
 

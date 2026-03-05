@@ -24,7 +24,6 @@ import numpy as np
 # from torch import numpy as torch
 import torch
 from absl.testing import absltest, parameterized
-from tensordict import UnbatchedTensor
 
 import mujoco_torch
 from mujoco_torch._src import device, test_util, types
@@ -56,8 +55,6 @@ def _assert_eq(testcase, a, b, attr=None, name=None):
         testcase.assertEqual(a, b, err_msg)
         return
 
-    if isinstance(a, UnbatchedTensor):
-        a = a.data
     a, b = np.array(a), np.array(b)
     np.testing.assert_allclose(a, b, err_msg=err_msg, atol=1e-8)
 
