@@ -191,11 +191,14 @@ def quat_mul(u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     Returns:
       A quaternion u * v.
     """
-    w1, xyz1 = u[:1], u[1:]
-    w2, xyz2 = v[:1], v[1:]
-    w = w1 * w2 - (xyz1 * xyz2).sum(-1, keepdim=True)
-    xyz = w1 * xyz2 + w2 * xyz1 + cross(xyz1, xyz2)
-    return torch.cat([w, xyz])
+    return torch.stack(
+        [
+            u[0] * v[0] - u[1] * v[1] - u[2] * v[2] - u[3] * v[3],
+            u[0] * v[1] + u[1] * v[0] + u[2] * v[3] - u[3] * v[2],
+            u[0] * v[2] - u[1] * v[3] + u[2] * v[0] + u[3] * v[1],
+            u[0] * v[3] + u[1] * v[2] - u[2] * v[1] + u[3] * v[0],
+        ]
+    )
 
 
 def quat_mul_axis(q: torch.Tensor, axis: torch.Tensor) -> torch.Tensor:
@@ -208,24 +211,43 @@ def quat_mul_axis(q: torch.Tensor, axis: torch.Tensor) -> torch.Tensor:
     Returns:
       A quaternion q * axis
     """
-    w, xyz = q[:1], q[1:]
-    res_w = -(xyz * axis).sum(-1, keepdim=True)
-    res_xyz = w * axis + cross(xyz, axis)
-    return torch.cat([res_w, res_xyz])
+    return torch.stack(
+        [
+            -q[1] * axis[0] - q[2] * axis[1] - q[3] * axis[2],
+            q[0] * axis[0] + q[2] * axis[2] - q[3] * axis[1],
+            q[0] * axis[1] + q[3] * axis[0] - q[1] * axis[2],
+            q[0] * axis[2] + q[1] * axis[1] - q[2] * axis[0],
+        ]
+    )
 
 
 def quat_to_mat(q: torch.Tensor) -> torch.Tensor:
-    """Converts a quaternion into a 3x3 rotation matrix."""
-    w, x, y, z = q[0], q[1], q[2], q[3]
-    x2, y2, z2 = 2 * x, 2 * y, 2 * z
-    xx, yy, zz = x * x2, y * y2, z * z2
-    xy, xz, yz = x * y2, x * z2, y * z2
-    wx, wy, wz = w * x2, w * y2, w * z2
+    """Converts a quaternion into a 9-dimensional rotation matrix."""
+    q = torch.outer(q, q)
+
     return torch.stack(
         [
-            torch.stack([1 - yy - zz, xy - wz, xz + wy]),
-            torch.stack([xy + wz, 1 - xx - zz, yz - wx]),
-            torch.stack([xz - wy, yz + wx, 1 - xx - yy]),
+            torch.stack(
+                [
+                    q[0, 0] + q[1, 1] - q[2, 2] - q[3, 3],
+                    2 * (q[1, 2] - q[0, 3]),
+                    2 * (q[1, 3] + q[0, 2]),
+                ]
+            ),
+            torch.stack(
+                [
+                    2 * (q[1, 2] + q[0, 3]),
+                    q[0, 0] - q[1, 1] + q[2, 2] - q[3, 3],
+                    2 * (q[2, 3] - q[0, 1]),
+                ]
+            ),
+            torch.stack(
+                [
+                    2 * (q[1, 3] - q[0, 2]),
+                    2 * (q[2, 3] + q[0, 1]),
+                    q[0, 0] - q[1, 1] - q[2, 2] + q[3, 3],
+                ]
+            ),
         ]
     )
 
