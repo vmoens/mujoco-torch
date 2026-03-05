@@ -425,7 +425,7 @@ def _invert_segment_ids(segment_ids, num_segments):
 def _gather_segment_sum(data, inv_idx, inv_mask):
     """Segment sum via gather + masked reduction (no atomics)."""
     idx = inv_idx.to(data.device)
-    mask = inv_mask.to(device=data.device, dtype=data.dtype)
+    mask = inv_mask.to(data.device).to(data.dtype)
     gathered = data[idx]
     for _ in range(data.ndim - 1):
         mask = mask.unsqueeze(-1)
@@ -816,11 +816,13 @@ def _build_body_tree_cache(m, in_types, out_types, reverse):
                 parent_ids = m.body_parentid[key_body_ids[child_key]]
                 id_map = _index(body_ids, parent_ids)
                 inv_idx, inv_mask = _invert_segment_ids(id_map, body_ids.size)
-                child_info.append((
-                    child_key,
-                    _cached_long(inv_idx),
-                    _DeviceCachedTensor(inv_mask),
-                ))
+                child_info.append(
+                    (
+                        child_key,
+                        _cached_long(inv_idx),
+                        _DeviceCachedTensor(inv_mask),
+                    )
+                )
             carry_maps[key] = child_info
         elif key in key_parents:
             body_ids_all = [key_body_ids[p] for p in key_parents[key]]
