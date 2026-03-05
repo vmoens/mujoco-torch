@@ -813,8 +813,6 @@ class Model(MjTensorClass):
     tendon_adr_moment_jnt: UnbatchedTensor
     tendon_dofadr_moment_jnt: UnbatchedTensor
     tendon_ntendon_jnt: int
-    # Opt-in scan padding for torch.compile (set via device_put)
-    scan_padding: bool
 
 
 # Model.names collides with TensorDict.names property.  A __getattribute__
