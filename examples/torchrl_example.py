@@ -169,19 +169,16 @@ class MujocoTorchEnv(EnvBase):
 
     def _render_pixels(self):
         """Render pixel observations for every env in the batch."""
-        frames = []
-        for i in range(self.num_envs):
-            rgb, _, _ = mujoco_torch.render(
-                self.mx,
-                self._dx[i],
-                camera_id=self.camera_id,
-                width=self.render_width,
-                height=self.render_height,
-                precomp=self._render_precomp,
-                background=self.background,
-            )
-            frames.append((rgb * 255).clamp(0, 255).to(torch.uint8).permute(2, 0, 1))
-        return torch.stack(frames)
+        rgb_batch, _, _ = mujoco_torch.render_batch(
+            self.mx,
+            self._dx,
+            camera_id=self.camera_id,
+            width=self.render_width,
+            height=self.render_height,
+            precomp=self._render_precomp,
+            background=self.background,
+        )
+        return (rgb_batch * 255).clamp(0, 255).to(torch.uint8).permute(0, 3, 1, 2)
 
     def _obs_dict(self):
         """Build the observation dict from the current state."""

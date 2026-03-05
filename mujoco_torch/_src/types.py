@@ -657,7 +657,18 @@ class Model(MjTensorClass):
     hfield_ncol: np.ndarray
     hfield_adr: np.ndarray
     hfield_data: torch.Tensor
+    ntex: int
+    ntexdata: int
     mat_rgba: torch.Tensor
+    mat_texid: np.ndarray
+    mat_texrepeat: np.ndarray
+    mat_texuniform: np.ndarray
+    tex_type: np.ndarray
+    tex_height: np.ndarray
+    tex_width: np.ndarray
+    tex_nchannel: np.ndarray
+    tex_adr: np.ndarray
+    tex_data: np.ndarray
     pair_dim: np.ndarray
     pair_geom1: np.ndarray
     pair_geom2: np.ndarray
@@ -813,8 +824,15 @@ class Model(MjTensorClass):
     tendon_adr_moment_jnt: UnbatchedTensor
     tendon_dofadr_moment_jnt: UnbatchedTensor
     tendon_ntendon_jnt: int
-    # Opt-in scan padding for torch.compile (set via device_put)
-    scan_padding: bool
+    # Per-body joint counts for single-vmap scan (set via device_put)
+    n_joints_per_body: torch.Tensor
+    max_joints_per_body: int
+    n_dofs_per_body: torch.Tensor
+    n_qpos_per_body: torch.Tensor
+    # Joint type metadata for adaptive padding (set via device_put)
+    joint_types_present: frozenset
+    max_qpos_per_jnt: int
+    max_dof_per_jnt: int
 
 
 # Model.names collides with TensorDict.names property.  A __getattribute__
