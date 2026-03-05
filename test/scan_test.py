@@ -27,7 +27,6 @@ import mujoco_torch
 
 # pylint: disable=g-importing-member
 from mujoco_torch._src import scan
-from mujoco_torch._src.types import JointType
 
 
 class ScanTest(absltest.TestCase):
@@ -89,16 +88,6 @@ class ScanTest(absltest.TestCase):
         b_out = scan.flat(m, s_fn, "jb", "b", m.jnt_type, b_in)
         np.testing.assert_equal(np.array(b_out), np.array(b_expect))
 
-        # None should be omitted from the results
-        def no_free(jnt_types, val):
-            if tuple(jnt_types) == (JointType.FREE,):
-                return None
-            return val + sum(jnt_types)
-
-        b_expect = torch.tensor([[0, 0], [3, 3], [8, 8]])
-        b_out = scan.flat(m, no_free, "jb", "b", m.jnt_type, b_in)
-        np.testing.assert_equal(np.array(b_out), np.array(b_expect))
-
         # we should not call functions for which we know we will discard the results
         def no_world(jnt_types, val):
             if len(jnt_types) == 0:
@@ -133,23 +122,12 @@ class ScanTest(absltest.TestCase):
         b_out = scan.body_tree(m, s_fn, "jb", "b", m.jnt_type, b_in)
         np.testing.assert_equal(np.array(b_out), np.array(b_expect))
 
-        # and reverse too:
+        # reverse:
         b_expect = torch.tensor([[12, 12], [12, 12], [3, 3], [8, 8]])
         b_out = scan.body_tree(m, j_fn, "jb", "b", m.jnt_pos, b_in, reverse=True)
         np.testing.assert_equal(np.array(b_out), np.array(b_expect))
 
         b_out = scan.body_tree(m, s_fn, "jb", "b", m.jnt_type, b_in, reverse=True)
-        np.testing.assert_equal(np.array(b_out), np.array(b_expect))
-
-        # None should be omitted from the results
-        def no_free(carry, jnt_types, val):
-            if tuple(jnt_types) == (JointType.FREE,):
-                return None
-            carry = torch.zeros_like(val) if carry is None else carry
-            return carry + val + sum(jnt_types)
-
-        b_expect = torch.tensor([[0, 0], [3, 3], [8, 8]])
-        b_out = scan.body_tree(m, no_free, "jb", "b", m.jnt_type, b_in)
         np.testing.assert_equal(np.array(b_out), np.array(b_expect))
 
     _MULTI_ACT_XML = """

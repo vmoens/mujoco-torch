@@ -316,19 +316,7 @@ def _q_jointid(m: Model) -> np.ndarray:
 
 
 def _index(haystack, needle):
-    """Returns indexes in haystack for elements in needle.
-
-    Works with both numpy arrays and torch tensors.
-    """
-    if isinstance(haystack, torch.Tensor):
-        idx = torch.argsort(haystack)
-        sorted_haystack = haystack[idx]
-        sorted_idx = torch.searchsorted(sorted_haystack, needle)
-        sorted_idx = sorted_idx.clamp(max=idx.shape[0] - 1)
-        result = idx[sorted_idx]
-        result = torch.where(haystack[result] == needle, result, torch.full_like(result, -1))
-        return result
-    # numpy fallback
+    """Returns indexes in haystack for elements in needle."""
     idx = np.argsort(haystack)
     sorted_haystack = haystack[idx]
     sorted_idx = np.searchsorted(sorted_haystack, needle)
@@ -909,8 +897,6 @@ def _build_flat_cache(m, in_types, out_types, group_by):
         "key_typ_ids": key_typ_ids,
         "key_typ_ids_torch": key_typ_ids_torch,
         "group_has_output": group_has_output,
-        "order": order,
-        "all_types": all_types,
         "flat_": flat_,
         "reorder_indices": reorder_indices,
     }
@@ -1024,39 +1010,15 @@ def flat(
     ys = tree_map(lambda *x: concatenate(x), *ys)
 
     # Put concatenated results back in model order.
-    # The precomputed indices assume all has_output groups actually return
-    # values (which is always true in production physics callbacks).  When a
-    # callback returns None for a has_output group (only in tests) fall back
-    # to dynamically computing the reorder indices.
     n_expected = sum(cache["group_has_output"])
+    assert len(active_kti) == n_expected, (
+        f"scan.flat: {len(active_kti)} groups produced output but {n_expected} expected. "
+        "All has_output groups must return non-None values."
+    )
+    reorder_indices = cache["reorder_indices"]
     reordered_ys = []
-    if len(active_kti) == n_expected:
-        reorder_indices = cache["reorder_indices"]
-        for i, typ in enumerate(out_types):
-            reordered_ys.append(_take(ys[i], reorder_indices[typ]))
-    else:
-        order = cache["order"]
-        all_types = cache["all_types"]
-        ys_keys = set(k for k, _ in active_kti)
-        active_order = [typ_ids for key, typ_ids in order if key in ys_keys]
-        active_order_per_type = [[o[t] for o in active_order] for t in all_types]
-        active_order_per_type = [
-            np.concatenate(o) if isinstance(o[0], np.ndarray) else np.array(o) for o in active_order_per_type
-        ]
-        order_dict = dict(zip(all_types, active_order_per_type))
-        for i, typ in enumerate(out_types):
-
-            def _to_np(v):
-                if isinstance(v, _DeviceCachedTensor):
-                    return v._cpu.numpy()
-                if isinstance(v, torch.Tensor):
-                    return v.cpu().numpy()
-                return v
-
-            ids = np.concatenate([np.hstack(_to_np(v[typ])) for _, v in active_kti])
-            input_order = order_dict[typ][np.where(order_dict[typ] != -1)]
-            reorder_idx = _np_to_long(_index(ids, input_order))
-            reordered_ys.append(_take(ys[i], reorder_idx))
+    for i, typ in enumerate(out_types):
+        reordered_ys.append(_take(ys[i], reorder_indices[typ]))
 
     return reordered_ys if f_ret_is_seq else reordered_ys[0]
 
@@ -1211,7 +1173,6 @@ def body_tree(
 
     cache = _get_body_tree_cache(m, in_types, out_types, reverse)
     key_in_take_torch = cache["key_in_take_torch"]
-    key_y_take = cache["key_y_take"]
     keys = cache["keys"]
     carry_maps = cache["carry_maps"]
 
@@ -1279,7 +1240,10 @@ def body_tree(
     active_keys = [k for k in keys if key_y[k] is not None]
 
     # Concatenate results, drop grouping dimensions, put back in model order
-    use_precomputed = len(active_keys) == len(keys)
+    assert len(active_keys) == len(keys), (
+        f"scan.body_tree: {len(active_keys)} groups produced output but {len(keys)} expected. "
+        "All groups must return non-None values."
+    )
     y = []
     for i, typ in enumerate(out_types):
         y_typ = [key_y[key] for key in active_keys]
@@ -1295,11 +1259,7 @@ def body_tree(
         if typ != "b":
             y_typ = tree_map(lambda x: torch.flatten(x, 0, 1), y_typ)
         y_typ = tree_map(lambda *x: _cat_device_safe(x), *y_typ)
-        if use_precomputed:
-            y_take = cache["y_take_torch"][i]
-        else:
-            y_take = _np_to_long(np.argsort(np.concatenate([key_y_take[key][i] for key in active_keys])))
-        y.append(_take(y_typ, y_take))
+        y.append(_take(y_typ, cache["y_take_torch"][i]))
 
     y = y[0] if len(out_types) == 1 else y
 
