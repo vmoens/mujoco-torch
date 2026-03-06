@@ -168,7 +168,7 @@ def _make_solve_m_fn(m: Model, d: Data):
         qLD = d.qLD.clone()
 
         def solve_m_fn(x):
-            return torch.cholesky_solve(x.unsqueeze(-1), qLD).squeeze(-1)
+            return math.small_cholesky_solve(x, qLD)
 
         return solve_m_fn
 
@@ -290,7 +290,7 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     def _create_context(qacc, qfrc_con, grad_flag=True):
         """Create solver context from qacc without touching Model/Data."""
         jaref = efc_J @ qacc.to(efc_J.dtype) - efc_aref
-        ma = dense_M @ qacc if use_dense else mul_m_fn(qacc)
+        ma = (dense_M * qacc).sum(-1) if use_dense else mul_m_fn(qacc)
         dtype = qacc.dtype
         _dev = qacc.device
         ctx = _Context(
@@ -342,10 +342,10 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
             active = ctx.Jaref < 0
             eq_fric_mask = torch.arange(active.shape[0], device=active.device) < ne_nf
             active = active | eq_fric_mask
-            h = (efc_J_T * efc_D * active) @ efc_J
-            h = dense_M + h
-            L = torch.linalg.cholesky(h)
-            mgrad = torch.cholesky_solve(grad.unsqueeze(-1), L).squeeze(-1)
+            h = (efc_J_T * efc_D * active).unsqueeze(-1) * efc_J
+            h = dense_M + h.sum(-2)
+            L = math.small_cholesky(h)
+            mgrad = math.small_cholesky_solve(grad, L)
         else:
             raise NotImplementedError(f"unsupported solver type: {solver_type}")
 
@@ -356,7 +356,7 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
         smag = math.norm(ctx.search) * _inertia_scale
         gtol = tolerance * ls_tolerance * smag
 
-        mv = dense_M @ ctx.search if use_dense else mul_m_fn(ctx.search)
+        mv = (dense_M * ctx.search).sum(-1) if use_dense else mul_m_fn(ctx.search)
         jv = efc_J @ ctx.search
 
         quad_gauss = torch.stack(

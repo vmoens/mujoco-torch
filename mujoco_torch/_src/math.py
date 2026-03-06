@@ -81,6 +81,70 @@ def safe_div(num: float | torch.Tensor, den: float | torch.Tensor) -> float | to
     return num / (den + mujoco.mjMINVAL * (den == 0))
 
 
+def small_cholesky(A: torch.Tensor) -> torch.Tensor:
+    """Cholesky decomposition via explicit scalar ops for small matrices.
+
+    Under torch.compile, loops are unrolled at trace time for the known
+    matrix size, producing fusible pointwise ops instead of cuSOLVER dispatch.
+
+    Args:
+      A: (n, n) symmetric positive definite matrix
+
+    Returns:
+      (n, n) lower triangular Cholesky factor L such that A = L @ L^T
+    """
+    n = A.shape[-1]
+    L = [[torch.zeros_like(A[0, 0]) for _ in range(n)] for _ in range(n)]
+
+    for j in range(n):
+        s = A[j, j]
+        for k in range(j):
+            s = s - L[j][k] * L[j][k]
+        L[j][j] = torch.sqrt(s)
+
+        for i in range(j + 1, n):
+            s = A[i, j]
+            for k in range(j):
+                s = s - L[i][k] * L[j][k]
+            L[i][j] = s / L[j][j]
+
+    return torch.stack([torch.stack(row) for row in L])
+
+
+def small_cholesky_solve(x: torch.Tensor, L: torch.Tensor) -> torch.Tensor:
+    """Solve L @ L^T @ result = x via forward/backward substitution.
+
+    Matches the semantics of torch.cholesky_solve but operates on a 1-D
+    right-hand side and uses explicit scalar ops that Inductor can fuse.
+
+    Args:
+      x: (n,) right-hand side vector
+      L: (n, n) lower triangular Cholesky factor
+
+    Returns:
+      (n,) solution vector
+    """
+    n = L.shape[-1]
+
+    # Forward substitution: L @ y = x
+    y = []
+    for i in range(n):
+        s = x[i]
+        for k in range(i):
+            s = s - L[i, k] * y[k]
+        y.append(s / L[i, i])
+
+    # Backward substitution: L^T @ result = y
+    result = [None] * n
+    for i in range(n - 1, -1, -1):
+        s = y[i]
+        for k in range(i + 1, n):
+            s = s - L[k, i] * result[k]
+        result[i] = s / L[i, i]
+
+    return torch.stack(result)
+
+
 def matmul_unroll(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Calculates a @ b via explicit cell value operations.
 
