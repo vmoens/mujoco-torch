@@ -82,7 +82,9 @@ def safe_div(num: float | torch.Tensor, den: float | torch.Tensor) -> float | to
 
 
 def matmul_unroll(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """Calculates a @ b for small matrices (e.g. 3x3, 4x4).
+    """Calculates a @ b via explicit cell value operations.
+
+    This is faster than generic matmul for small matrices (e.g. 3x3, 4x4).
 
     Args:
       a: left hand of matmul operand
@@ -91,7 +93,17 @@ def matmul_unroll(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     Returns:
       the matrix product of the inputs.
     """
-    return torch.matmul(a, b)
+    c = []
+    for i in range(a.shape[0]):
+        row = []
+        for j in range(b.shape[1]):
+            s = 0.0
+            for k in range(a.shape[1]):
+                s += a[i, k] * b[k, j]
+            row.append(s)
+        c.append(row)
+
+    return torch.stack([torch.stack(row) for row in c])
 
 
 def norm(x: torch.Tensor, axis: tuple[int, ...] | int | None = None) -> torch.Tensor:
