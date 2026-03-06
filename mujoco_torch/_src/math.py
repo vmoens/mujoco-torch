@@ -308,7 +308,7 @@ def inert_mul(i: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     """
     tri_id = _TRI_ID.get(torch.long, i.device)
     inr, pos, mass = i[tri_id], i[6:9], i[9]
-    ang = torch.mv(inr, v[:3]) + cross(pos, v[3:])
+    ang = (inr * v[:3]).sum(-1) + cross(pos, v[3:])
     vel = mass * v[3:] - cross(pos, v[:3])
     return torch.cat((ang, vel))
 
@@ -331,8 +331,8 @@ def transform_motion(vel: torch.Tensor, offset: torch.Tensor, rotmat: torch.Tens
     """
     # TODO(robotics-simulation): are quaternions faster here
     ang, vel = vel[:3], vel[3:]
-    vel = rotmat.T @ (vel - cross(offset, ang))
-    ang = rotmat.T @ ang
+    vel = (rotmat.T * (vel - cross(offset, ang))).sum(-1)
+    ang = (rotmat.T * ang).sum(-1)
     return torch.cat([ang, vel])
 
 

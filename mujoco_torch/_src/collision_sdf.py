@@ -140,10 +140,10 @@ def _from_to(
     to_mat: torch.Tensor,
 ) -> SDFFn:
     relmat = math.matmul_unroll(to_mat.T, from_mat)
-    relpos = to_mat.T @ (from_pos - to_pos)
+    relpos = (to_mat.T * (from_pos - to_pos)).sum(-1)
 
     def wrapped(p: torch.Tensor) -> torch.Tensor:
-        return f(relmat @ p + relpos)
+        return f((relmat * p).sum(-1) + relpos)
 
     return wrapped
 
@@ -208,7 +208,7 @@ def _optim(
     d1 = functools.partial(d1, size=info1.geom_size)
     d1 = _from_to(d1, info2.pos, info2.mat, info1.pos, info1.mat)
     d2 = functools.partial(d2, size=info2.geom_size)
-    x0 = info2.mat.T @ (x0 - info2.pos)
+    x0 = (info2.mat.T * (x0 - info2.pos)).sum(-1)
     fn = _clearance(d1, d2)
     _, pos = _gradient_descent(fn, x0, 10)
     dist_val = d1(pos) + d2(pos)
@@ -216,8 +216,8 @@ def _optim(
     n = torch.autograd.grad(d1(pos_grad), pos_grad)[0]
     pos_grad2 = pos.detach().clone().requires_grad_(True)
     n = n - torch.autograd.grad(d2(pos_grad2), pos_grad2)[0]
-    pos = info2.mat @ pos + info2.pos
-    n = info2.mat @ n
+    pos = (info2.mat * pos).sum(-1) + info2.pos
+    n = (info2.mat * n).sum(-1)
     return dist_val, pos, math.make_frame(n)
 
 
