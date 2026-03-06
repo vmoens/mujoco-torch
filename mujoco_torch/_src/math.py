@@ -169,7 +169,7 @@ def rotate(vec: torch.Tensor, quat: torch.Tensor) -> torch.Tensor:
     if len(vec.shape) != 1:
         raise ValueError("vec must have no batch dimensions.")
     s, u = quat[0], quat[1:]
-    r = 2 * (torch.dot(u, vec) * u) + (s * s - torch.dot(u, u)) * vec
+    r = 2 * ((u * vec).sum(-1) * u) + (s * s - (u * u).sum(-1)) * vec
     r = r + 2 * s * cross(u, vec)
     return r
 
@@ -233,7 +233,6 @@ def quat_mul_axis(q: torch.Tensor, axis: torch.Tensor) -> torch.Tensor:
     )
 
 
-# TODO(erikfrey): benchmark this against brax's quat_to_3x3
 def quat_to_mat(q: torch.Tensor) -> torch.Tensor:
     """Converts a quaternion into a 9-dimensional rotation matrix."""
     q = torch.outer(q, q)
@@ -391,7 +390,7 @@ def make_frame(a: torch.Tensor) -> torch.Tensor:
 def closest_segment_point(a: torch.Tensor, b: torch.Tensor, pt: torch.Tensor) -> torch.Tensor:
     """Returns the closest point on the a-b line segment to a point pt."""
     ab = b - a
-    t = torch.dot(pt - a, ab) / (torch.dot(ab, ab) + 1e-6)
+    t = ((pt - a) * ab).sum(-1) / ((ab * ab).sum(-1) + 1e-6)
     return a + torch.clamp(t, 0.0, 1.0) * ab
 
 

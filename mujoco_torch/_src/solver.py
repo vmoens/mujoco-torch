@@ -321,7 +321,7 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
 
         efc_force = efc_D * -ctx.Jaref * active
         qfrc_con = efc_J_T @ efc_force
-        gauss = 0.5 * torch.dot(ctx.Ma - qfrc_smooth, ctx.qacc - qacc_smooth)
+        gauss = 0.5 * ((ctx.Ma - qfrc_smooth) * (ctx.qacc - qacc_smooth)).sum(-1)
         cost = 0.5 * torch.sum(efc_D * ctx.Jaref * ctx.Jaref * active) + gauss
 
         return ctx._replace(
@@ -362,8 +362,8 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
         quad_gauss = torch.stack(
             (
                 ctx.gauss,
-                torch.dot(ctx.search, ctx.Ma) - torch.dot(ctx.search, qfrc_smooth),
-                0.5 * torch.dot(ctx.search, mv),
+                (ctx.search * ctx.Ma).sum(-1) - (ctx.search * qfrc_smooth).sum(-1),
+                0.5 * (ctx.search * mv).sum(-1),
             )
         )
         quad = torch.stack((0.5 * ctx.Jaref * ctx.Jaref, jv * ctx.Jaref, 0.5 * jv * jv))
@@ -452,8 +452,8 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
         ctx = _update_gradient(ctx)
 
         # polak-ribiere:
-        beta = torch.dot(ctx.grad, ctx.Mgrad - prev_Mgrad)
-        beta = beta / torch.clamp_min(torch.dot(prev_grad, prev_Mgrad), mujoco.mjMINVAL)
+        beta = (ctx.grad * (ctx.Mgrad - prev_Mgrad)).sum(-1)
+        beta = beta / torch.clamp_min((prev_grad * prev_Mgrad).sum(-1), mujoco.mjMINVAL)
         beta = torch.clamp_min(beta, 0)
         search = -ctx.Mgrad + beta * ctx.search
         return (ctx._replace(search=search, solver_niter=ctx.solver_niter + 1),)

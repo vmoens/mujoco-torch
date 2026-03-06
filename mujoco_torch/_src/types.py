@@ -14,6 +14,7 @@
 # ==============================================================================
 """Base types used in MJX, ported to PyTorch."""
 
+import dataclasses
 import enum
 
 import mujoco
@@ -813,8 +814,6 @@ class Model(MjTensorClass):
     tendon_adr_moment_jnt: UnbatchedTensor
     tendon_dofadr_moment_jnt: UnbatchedTensor
     tendon_ntendon_jnt: int
-    # Opt-in scan padding for torch.compile (set via device_put)
-    scan_padding: bool
 
 
 # Model.names collides with TensorDict.names property.  A __getattribute__
@@ -868,6 +867,18 @@ def _build_device_precomp(model, device, _resolve_cached_tensors):
     object.__setattr__(model, "_device_precomp", precomp)
 
 
+def _mark_model_constants(model):
+    """Mark all Model tensor fields as having static addresses for torch.compile.
+
+    Tells the compiler that model parameter memory addresses are stable
+    across calls, enabling cudagraph reuse without extra allocations.
+    """
+    for f in dataclasses.fields(type(model)):
+        val = getattr(model, f.name, None)
+        if isinstance(val, torch.Tensor):
+            torch._dynamo.mark_static_address(val, guard=False)
+
+
 def _model_to(self, *args, **kwargs):
     """Move Model to a device, resolving all precomputed index tensors."""
     result = MjTensorClass.to(self, *args, **kwargs)
@@ -881,6 +892,7 @@ def _model_to(self, *args, **kwargs):
         warm_device_caches(result.cache_id, device)
 
     _build_device_precomp(result, device, _resolve_cached_tensors)
+    _mark_model_constants(result)
     return result
 
 

@@ -79,18 +79,21 @@ def _closest_triangle_point(p0: torch.Tensor, p1: torch.Tensor, p2: torch.Tensor
     # We analytically minimize the distance between the point pt and Q.
     e0 = p1 - p0
     e1 = p2 - p0
-    a = torch.dot(e0, e0)
-    b = torch.dot(e0, e1)
-    c = torch.dot(e1, e1)
+    a = (e0 * e0).sum(-1)
+    b = (e0 * e1).sum(-1)
+    c = (e1 * e1).sum(-1)
     d = pt - p0
     # The determinant is 0 only if the angle between e1 and e0 is 0
     # (i.e. the triangle has overlapping lines).
     det = a * c - b * b
-    u = (c * torch.dot(e0, d) - b * torch.dot(e1, d)) / det
-    v = (-b * torch.dot(e0, d) + a * torch.dot(e1, d)) / det
+    e0d = (e0 * d).sum(-1)
+    e1d = (e1 * d).sum(-1)
+    u = (c * e0d - b * e1d) / det
+    v = (-b * e0d + a * e1d) / det
     inside = (0 <= u) & (u <= 1) & (0 <= v) & (v <= 1) & (u + v <= 1)
     closest_p = p0 + u * e0 + v * e1
-    d0 = torch.dot(closest_p - pt, closest_p - pt)
+    diff = closest_p - pt
+    d0 = (diff * diff).sum(-1)
 
     # If the closest point is outside the triangle, it must be on an edge, so we
     # check each triangle edge for a closest point to the point pt.
@@ -133,18 +136,22 @@ def _closest_segment_triangle_points(
     # First check triangle edges for the closest point.
     # TODO(robotics-simulation): consider vmapping over closest point functions
     seg_pt1, tri_pt1 = math.closest_segment_to_segment_points(a, b, p0, p1)
-    d1 = torch.dot(seg_pt1 - tri_pt1, seg_pt1 - tri_pt1)
+    diff1 = seg_pt1 - tri_pt1
+    d1 = (diff1 * diff1).sum(-1)
     seg_pt2, tri_pt2 = math.closest_segment_to_segment_points(a, b, p1, p2)
-    d2 = torch.dot(seg_pt2 - tri_pt2, seg_pt2 - tri_pt2)
+    diff2 = seg_pt2 - tri_pt2
+    d2 = (diff2 * diff2).sum(-1)
     seg_pt3, tri_pt3 = math.closest_segment_to_segment_points(a, b, p0, p2)
-    d3 = torch.dot(seg_pt3 - tri_pt3, seg_pt3 - tri_pt3)
+    diff3 = seg_pt3 - tri_pt3
+    d3 = (diff3 * diff3).sum(-1)
 
     # Next, handle the case where the closest triangle point is inside the
     # triangle. Either the line segment intersects the triangle or a segment
     # endpoint is closest to a point inside the triangle.
     seg_pt4 = _closest_segment_point_plane(a, b, p0, triangle_normal)
     tri_pt4 = _closest_triangle_point(p0, p1, p2, seg_pt4)
-    d4 = torch.dot(seg_pt4 - tri_pt4, seg_pt4 - tri_pt4)
+    diff4 = seg_pt4 - tri_pt4
+    d4 = (diff4 * diff4).sum(-1)
 
     # Get the point with minimum distance from the line segment point to the
     # triangle point.
@@ -193,7 +200,7 @@ def _manifold_points(poly: torch.Tensor, poly_mask: torch.Tensor, poly_norm: tor
 
 def _project_pt_onto_plane(pt: torch.Tensor, plane_pt: torch.Tensor, plane_normal: torch.Tensor) -> torch.Tensor:
     """Projects a point onto a plane along the plane normal."""
-    dist = torch.dot(pt - plane_pt, plane_normal)
+    dist = ((pt - plane_pt) * plane_normal).sum(-1)
     return pt - dist * plane_normal
 
 
@@ -206,8 +213,8 @@ def _project_poly_onto_poly_plane(
     poly1: torch.Tensor, norm1: torch.Tensor, poly2: torch.Tensor, norm2: torch.Tensor
 ) -> torch.Tensor:
     """Projects poly1 onto the poly2 plane along poly1's normal."""
-    d = torch.dot(poly2[0], norm2)
-    denom = torch.dot(norm1, norm2)
+    d = (poly2[0] * norm2).sum(-1)
+    denom = (norm1 * norm2).sum(-1)
     t = (d - poly1 @ norm2) / (denom + 1e-6 * (denom == 0.0))
     new_poly = poly1 + t.reshape(-1, 1) * norm1
     return new_poly
@@ -240,8 +247,8 @@ def _clip_edge_to_planes(
       False otherwise
     """
     p0, p1 = edge_p0, edge_p1
-    p0_in_front = torch.vmap(torch.dot)(p0 - plane_pts, plane_normals) > 1e-6
-    p1_in_front = torch.vmap(torch.dot)(p1 - plane_pts, plane_normals) > 1e-6
+    p0_in_front = ((p0 - plane_pts) * plane_normals).sum(-1) > 1e-6
+    p1_in_front = ((p1 - plane_pts) * plane_normals).sum(-1) > 1e-6
 
     # Get candidate clipped points along line segment (p0, p1) by clipping against
     # all clipping planes.
@@ -278,7 +285,7 @@ def _clip_edge_to_planes(
     mask = ~torch.any(both_in_front)
     new_ps = torch.where(mask, clipped_pts, torch.stack([p0, p1]))
     # Mask out crossing clipped edge points.
-    mask = torch.where(torch.dot(p0 - p1, new_ps[0] - new_ps[1]) < 0, False, mask)
+    mask = torch.where(((p0 - p1) * (new_ps[0] - new_ps[1])).sum(-1) < 0, False, mask)
     return new_ps, torch.stack([mask, mask])
 
 
@@ -446,8 +453,8 @@ def _sat_hull_hull(
     # for each separating axis, get the support
     @torch.vmap
     def get_support(axis):
-        support_a = torch.vmap(torch.dot, (None, 0))(axis, vertices_a)
-        support_b = torch.vmap(torch.dot, (None, 0))(axis, vertices_b)
+        support_a = (axis * vertices_a).sum(-1)
+        support_b = (axis * vertices_b).sum(-1)
         dist1 = support_a.max() - support_b.min()
         dist2 = support_b.max() - support_a.min()
         sign = torch.where(dist1 > dist2, -1, 1)
@@ -466,8 +473,8 @@ def _sat_hull_hull(
     is_edge_contact = best_idx >= (normals_a.shape[0] + normals_b.shape[0])
 
     # get the (reference) face most aligned with the separating axis
-    dist_a = torch.vmap(torch.dot, (None, 0))(best_axis, normals_a)
-    dist_b = torch.vmap(torch.dot, (None, 0))(best_axis, normals_b)
+    dist_a = (best_axis * normals_a).sum(-1)
+    dist_b = (best_axis * normals_b).sum(-1)
     a_max = dist_a.argmax()
     b_max = dist_b.argmax()
     a_min = dist_a.argmin()
@@ -538,7 +545,7 @@ def sphere_convex(sphere: GeomInfo, convex: GeomInfo) -> Contact:
     @torch.vmap
     def get_support(faces, normal):
         pos = sphere_pos - normal * sphere.geom_size[0]
-        return torch.dot(pos - faces[0], normal)
+        return ((pos - faces[0]) * normal).sum(-1)
 
     support = get_support(faces, normals)
 
@@ -558,7 +565,7 @@ def sphere_convex(sphere: GeomInfo, convex: GeomInfo) -> Contact:
         edge_p1 - edge_p0,
         normal,
     )
-    edge_dist = torch.vmap(lambda plane_pt, plane_norm: torch.dot(pt - plane_pt, plane_norm))(edge_p0, edge_normals)
+    edge_dist = ((pt - edge_p0) * edge_normals).sum(-1)
     inside = torch.all(edge_dist <= 0)  # lte to handle degenerate edges
 
     # If the point is outside edge normals, project onto the closest edge plane
@@ -608,7 +615,7 @@ def capsule_convex(cap: GeomInfo, convex: GeomInfo) -> Contact:
     @torch.vmap
     def get_support(face, normal):
         pts = cap_pts - normal * cap.geom_size[0]
-        sup = torch.vmap(lambda x: torch.dot(x - face[0], normal))(pts)
+        sup = ((pts - face[0]) * normal).sum(-1)
         return sup.min()
 
     support = get_support(faces, normals)

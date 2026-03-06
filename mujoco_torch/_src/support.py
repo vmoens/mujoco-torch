@@ -70,7 +70,7 @@ def make_m(
 
     a_i = a[i]
     b_j = b[j]
-    qm = torch.vmap(torch.dot)(a_i, b_j)
+    qm = (a_i * b_j).sum(-1)
 
     if d is not None:
         qm = qm.clone()
