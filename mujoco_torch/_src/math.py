@@ -371,7 +371,7 @@ def orthogonals(a: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     y = torch.eye(3, dtype=a.dtype, device=a.device)[1]
     z = torch.eye(3, dtype=a.dtype, device=a.device)[2]
     b = torch.where((-0.5 < a[1]) & (a[1] < 0.5), y, z)
-    b = b - a * a.dot(b)
+    b = b - a * (a * b).sum(-1)
     # normalize b. however if a is a zero vector, zero b as well.
     b = normalize(b) * torch.any(a)
     return b, cross(a, b)
@@ -399,7 +399,8 @@ def closest_segment_point_and_dist(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Returns closest point on the line segment and the distance squared."""
     closest = closest_segment_point(a, b, pt)
-    dist = (pt - closest).dot(pt - closest)
+    diff = pt - closest
+    dist = (diff * diff).sum(-1)
     return closest, dist
 
 
@@ -426,9 +427,9 @@ def closest_segment_to_segment_points(
     #  point_on_a = a_mid + t_a * dir_a
     #  point_on_b = b_mid + t_b * dir_b
     # and analytically minimize the distance between the two points.
-    dira_dot_dirb = dir_a.dot(dir_b)
-    dira_dot_trans = dir_a.dot(trans)
-    dirb_dot_trans = dir_b.dot(trans)
+    dira_dot_dirb = (dir_a * dir_b).sum(-1)
+    dira_dot_trans = (dir_a * trans).sum(-1)
+    dirb_dot_trans = (dir_b * trans).sum(-1)
     denom = 1 - dira_dot_dirb * dira_dot_dirb
 
     orig_t_a = (-dira_dot_trans + dira_dot_dirb * dirb_dot_trans) / (denom + 1e-6)

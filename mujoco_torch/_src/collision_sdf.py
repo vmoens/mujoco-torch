@@ -53,9 +53,9 @@ def _capsule(pos: torch.Tensor, size: torch.Tensor) -> torch.Tensor:
     pb = size[1] * unit_z
     ab = pb - pa
     ap = pos - pa
-    denom = ab.dot(ab)
+    denom = (ab * ab).sum(-1)
     denom = torch.where(torch.abs(denom) < 1e-12, 1e-12 * math.sign(denom), denom)
-    t = ab.dot(ap) / denom
+    t = (ab * ap).sum(-1) / denom
     t = torch.clamp(t, 0, 1)
     c = pa + t * ab
     return math.norm(pos - c) - size[0]
