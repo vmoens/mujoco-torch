@@ -127,33 +127,33 @@ are measured at B=1 since they scale linearly.  All values are **steps/second**
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
 | MuJoCo C (CPU, sequential) | 38,768 | — | — | — | — |
-| mujoco-torch vmap (eager) | 14 | 1,700 | 13,494 | 53,027 | 334,058 |
-| mujoco-torch compile | 234 | 25,784 | 200,706 | 676,553 | 1,477,151 |
-| mujoco-torch compile (reduce-overhead) | 396 | 42,240 | 294,420 | 701,833 | 1,432,973 |
-| **mujoco-torch compile (tuned)** | **232** | **25,989** | **184,480** | **761,727** | **1,896,593** |
-| MJX (JAX jit+vmap) | 859 | 102,978 | 838,698 | 2,209,482 | 2,375,375 |
+| mujoco-torch vmap (eager) | 13 | 1,607 | 12,985 | 52,221 | 362,656 |
+| mujoco-torch compile | 226 | 26,326 | 207,014 | 724,663 | 1,792,347 |
+| mujoco-torch compile (reduce-overhead) | 409 | 44,802 | 311,465 | 900,286 | 1,804,435 |
+| **mujoco-torch compile (tuned)** | **232** | **26,001** | **204,207** | **665,163** | **2,443,398** |
+| MJX (JAX jit+vmap) | 848 | 108,150 | 868,122 | 2,213,545 | 2,374,941 |
 
 ### Ant
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
 | MuJoCo C (CPU, sequential) | 54,150 | — | — | — | — |
-| mujoco-torch vmap (eager) | 21 | 2,683 | 20,908 | 81,584 | 259,828 |
-| mujoco-torch compile | 280 | 33,580 | 259,898 | 517,094 | 431,315 |
-| mujoco-torch compile (reduce-overhead) | 525 | 66,201 | 356,275 | 484,570 | 573,536 |
-| **mujoco-torch compile (tuned)** | **304** | **35,880** | **272,681** | **900,759** | **1,647,590** |
-| MJX (JAX jit+vmap) | 886 | 85,786 | 617,852 | 884,782 | 922,100 |
+| mujoco-torch vmap (eager) | 19 | 2,525 | 19,692 | 79,340 | 321,886 |
+| mujoco-torch compile | 278 | 34,199 | 251,982 | 559,149 | 598,566 |
+| mujoco-torch compile (reduce-overhead) | 532 | 66,485 | 373,052 | 552,709 | 602,859 |
+| **mujoco-torch compile (tuned)** | **314** | **34,930** | **284,986** | **907,434** | **2,123,293** |
+| MJX (JAX jit+vmap) | 870 | 105,426 | 648,795 | 881,508 | 921,413 |
 
 ### Half-Cheetah
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
 | MuJoCo C (CPU, sequential) | 67,788 | — | — | — | — |
-| mujoco-torch vmap (eager) | 19 | 2,452 | 19,298 | 74,569 | 536,138 |
-| mujoco-torch compile | 290 | 35,632 | 267,630 | 1,091,756 | 2,699,855 |
-| mujoco-torch compile (reduce-overhead) | 333 | 49,132 | 345,490 | 1,096,945 | 2,675,193 |
-| **mujoco-torch compile (tuned)** | **247** | **34,163** | **274,016** | **926,797** | **2,740,635** |
-| MJX (JAX jit+vmap) | 522 | 55,009 | 412,155 | 1,354,950 | 2,605,561 |
+| mujoco-torch vmap (eager) | 18 | 2,325 | 18,202 | 72,760 | 552,424 |
+| mujoco-torch compile | 288 | 34,286 | 247,063 | 1,066,654 | 3,100,180 |
+| mujoco-torch compile (reduce-overhead) | 427 | 50,790 | 370,647 | 1,227,338 | 3,054,295 |
+| **mujoco-torch compile (tuned)** | **285** | **33,623** | **267,320** | **1,074,758** | **3,069,120** |
+| MJX (JAX jit+vmap) | 559 | 57,773 | 433,249 | 1,348,620 | 2,753,825 |
 
 ### Walker2d
 
@@ -163,11 +163,11 @@ than Euler.
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
 | MuJoCo C (CPU, sequential) | 32,426 | — | — | — | — |
-| mujoco-torch vmap (eager) | 5 | 516 | 3,796 | 14,769 | 104,954 |
-| mujoco-torch compile | 98 | 7,002 | 70,690 | 266,199 | 577,499 |
-| mujoco-torch compile (reduce-overhead) | 165 | 7,936 | 82,936 | 263,704 | 579,711 |
-| **mujoco-torch compile (tuned)** | **100** | **9,926** | **70,275** | **257,977** | **671,765** |
-| MJX (JAX jit+vmap) | 193 | 10,515 | 89,691 | 221,813 | 408,517 |
+| mujoco-torch vmap (eager) | 4 | 510 | 3,796 | 13,583 | 102,069 |
+| mujoco-torch compile | 100 | 9,613 | 68,941 | 262,058 | 656,796 |
+| mujoco-torch compile (reduce-overhead) | 170 | 14,992 | 97,277 | 308,591 | 661,354 |
+| **mujoco-torch compile (tuned)** | **100** | **9,806** | **70,020** | **258,043** | **795,087** |
+| MJX (JAX jit+vmap) | 190 | 12,644 | 89,340 | 263,464 | 404,107 |
 
 ### Hopper
 
@@ -176,11 +176,11 @@ Hopper uses the RK4 integrator (like Walker2d).
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
 | MuJoCo C (CPU, sequential) | 81,569 | — | — | — | — |
-| mujoco-torch vmap (eager) | 19 | 2,307 | 18,257 | 72,910 | 562,866 |
-| mujoco-torch compile | 279 | 33,411 | 206,603 | 973,214 | 3,318,016 |
-| mujoco-torch compile (reduce-overhead) | 376 | 49,411 | 361,234 | 1,133,846 | 3,253,214 |
-| **mujoco-torch compile (tuned)** | **221** | **33,568** | **268,589** | **1,020,036** | **2,862,786** |
-| MJX (JAX jit+vmap) | 921 | 119,865 | 854,200 | 1,128,406 | 8,097,292 |
+| mujoco-torch vmap (eager) | 17 | 2,200 | 17,565 | 71,260 | 557,476 |
+| mujoco-torch compile | 286 | 32,353 | 260,614 | 991,503 | 3,660,399 |
+| mujoco-torch compile (reduce-overhead) | 415 | 33,836 | 286,121 | 1,244,707 | 3,650,605 |
+| **mujoco-torch compile (tuned)** | **291** | **33,834** | **262,048** | **1,040,920** | **4,547,076** |
+| MJX (JAX jit+vmap) | 817 | 114,045 | 841,375 | 1,024,240 | 8,061,349 |
 
 **"reduce-overhead"** = `torch.compile(mode="reduce-overhead")`, which captures
 the compiled graph into CUDA graphs to eliminate kernel launch overhead.
