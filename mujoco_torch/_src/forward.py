@@ -375,9 +375,9 @@ def _implicit(m: Model, d: Data) -> Data:
     if qderiv is not None:
         qm = support.full_m(m, d) if support.is_sparse(m) else d.qM.clone()
         qm = qm - m.opt.timestep * qderiv
-        L = torch.linalg.cholesky(qm)
+        L = math.small_cholesky(qm)
         qfrc = d.qfrc_smooth + d.qfrc_constraint
-        qacc = torch.cholesky_solve(qfrc.unsqueeze(-1), L).squeeze(-1)
+        qacc = math.small_cholesky_solve(qfrc, L)
 
     return _advance(m, d, d.act_dot, qacc)
 

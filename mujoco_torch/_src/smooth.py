@@ -296,7 +296,7 @@ def factor_m(m: Model, d: Data) -> Data:
     """Gets sparse L'*D*L factorization of inertia-like matrix M, assumed spd."""
 
     if not support.is_sparse(m):
-        L = torch.linalg.cholesky(d.qM)
+        L = math.small_cholesky(d.qM)
         d.update_(qLD=L)
         return d
 
@@ -318,7 +318,7 @@ def solve_m(m: Model, d: Data, x: torch.Tensor) -> torch.Tensor:
     """Computes sparse backsubstitution:  x = inv(L'*D*L)*y ."""
 
     if not support.is_sparse(m):
-        return torch.cholesky_solve(x.unsqueeze(-1), d.qLD).squeeze(-1)
+        return math.small_cholesky_solve(x, d.qLD)
 
     # x <- inv(L') * x
     for j_t, madr_t, i_t in m._device_precomp["solve_m_updates_j"]:

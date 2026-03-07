@@ -81,6 +81,70 @@ def safe_div(num: float | torch.Tensor, den: float | torch.Tensor) -> float | to
     return num / (den + mujoco.mjMINVAL * (den == 0))
 
 
+def small_cholesky(A: torch.Tensor) -> torch.Tensor:
+    """Cholesky decomposition via explicit scalar ops for small matrices.
+
+    Under torch.compile, loops are unrolled at trace time for the known
+    matrix size, producing fusible pointwise ops instead of cuSOLVER dispatch.
+
+    Args:
+      A: (n, n) symmetric positive definite matrix
+
+    Returns:
+      (n, n) lower triangular Cholesky factor L such that A = L @ L^T
+    """
+    n = A.shape[-1]
+    L = [[torch.zeros_like(A[0, 0]) for _ in range(n)] for _ in range(n)]
+
+    for j in range(n):
+        s = A[j, j]
+        for k in range(j):
+            s = s - L[j][k] * L[j][k]
+        L[j][j] = torch.sqrt(s)
+
+        for i in range(j + 1, n):
+            s = A[i, j]
+            for k in range(j):
+                s = s - L[i][k] * L[j][k]
+            L[i][j] = s / L[j][j]
+
+    return torch.stack([torch.stack(row) for row in L])
+
+
+def small_cholesky_solve(x: torch.Tensor, L: torch.Tensor) -> torch.Tensor:
+    """Solve L @ L^T @ result = x via forward/backward substitution.
+
+    Matches the semantics of torch.cholesky_solve but operates on a 1-D
+    right-hand side and uses explicit scalar ops that Inductor can fuse.
+
+    Args:
+      x: (n,) right-hand side vector
+      L: (n, n) lower triangular Cholesky factor
+
+    Returns:
+      (n,) solution vector
+    """
+    n = L.shape[-1]
+
+    # Forward substitution: L @ y = x
+    y = []
+    for i in range(n):
+        s = x[i]
+        for k in range(i):
+            s = s - L[i, k] * y[k]
+        y.append(s / L[i, i])
+
+    # Backward substitution: L^T @ result = y
+    result = [None] * n
+    for i in range(n - 1, -1, -1):
+        s = y[i]
+        for k in range(i + 1, n):
+            s = s - L[k, i] * result[k]
+        result[i] = s / L[i, i]
+
+    return torch.stack(result)
+
+
 def matmul_unroll(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Calculates a @ b via explicit cell value operations.
 
@@ -308,7 +372,7 @@ def inert_mul(i: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     """
     tri_id = _TRI_ID.get(torch.long, i.device)
     inr, pos, mass = i[tri_id], i[6:9], i[9]
-    ang = torch.mv(inr, v[:3]) + cross(pos, v[3:])
+    ang = (inr * v[:3]).sum(-1) + cross(pos, v[3:])
     vel = mass * v[3:] - cross(pos, v[:3])
     return torch.cat((ang, vel))
 
@@ -331,8 +395,8 @@ def transform_motion(vel: torch.Tensor, offset: torch.Tensor, rotmat: torch.Tens
     """
     # TODO(robotics-simulation): are quaternions faster here
     ang, vel = vel[:3], vel[3:]
-    vel = rotmat.T @ (vel - cross(offset, ang))
-    ang = rotmat.T @ ang
+    vel = (rotmat.T * (vel - cross(offset, ang))).sum(-1)
+    ang = (rotmat.T * ang).sum(-1)
     return torch.cat([ang, vel])
 
 
@@ -371,7 +435,7 @@ def orthogonals(a: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     y = torch.eye(3, dtype=a.dtype, device=a.device)[1]
     z = torch.eye(3, dtype=a.dtype, device=a.device)[2]
     b = torch.where((-0.5 < a[1]) & (a[1] < 0.5), y, z)
-    b = b - a * a.dot(b)
+    b = b - a * (a * b).sum(-1)
     # normalize b. however if a is a zero vector, zero b as well.
     b = normalize(b) * torch.any(a)
     return b, cross(a, b)
@@ -399,7 +463,8 @@ def closest_segment_point_and_dist(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Returns closest point on the line segment and the distance squared."""
     closest = closest_segment_point(a, b, pt)
-    dist = (pt - closest).dot(pt - closest)
+    diff = pt - closest
+    dist = (diff * diff).sum(-1)
     return closest, dist
 
 
@@ -426,9 +491,9 @@ def closest_segment_to_segment_points(
     #  point_on_a = a_mid + t_a * dir_a
     #  point_on_b = b_mid + t_b * dir_b
     # and analytically minimize the distance between the two points.
-    dira_dot_dirb = dir_a.dot(dir_b)
-    dira_dot_trans = dir_a.dot(trans)
-    dirb_dot_trans = dir_b.dot(trans)
+    dira_dot_dirb = (dir_a * dir_b).sum(-1)
+    dira_dot_trans = (dir_a * trans).sum(-1)
+    dirb_dot_trans = (dir_b * trans).sum(-1)
     denom = 1 - dira_dot_dirb * dira_dot_dirb
 
     orig_t_a = (-dira_dot_trans + dira_dot_dirb * dirb_dot_trans) / (denom + 1e-6)

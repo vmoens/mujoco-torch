@@ -46,7 +46,7 @@ def _inertia_box_fluid_model(
     # transform to local coordinate frame
     offset = xipos - root_com
     lvel = math.transform_motion(cvel, offset, ximat)
-    lwind = ximat.T @ m.opt.wind
+    lwind = (ximat.T * m.opt.wind).sum(-1)
     lvel = lvel.clone()
     lvel[3:] = lvel[3:] + (-lwind)
 
@@ -70,7 +70,7 @@ def _inertia_box_fluid_model(
     lfrc_ang = lfrc_ang - (1.0 * m.opt.density * scale_ang * torch.abs(lvel[:3]) * lvel[:3] / 64.0)
 
     # rotate to global orientation: lfrc -> bfrc
-    force, torque = ximat @ lfrc_vel, ximat @ lfrc_ang
+    force, torque = (ximat * lfrc_vel).sum(-1), (ximat * lfrc_ang).sum(-1)
 
     return force, torque
 

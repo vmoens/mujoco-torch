@@ -46,7 +46,7 @@ def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, to
     faces = prism.face
     normals = prism.face_normal
 
-    sphere_pos = prism.mat.T @ (sphere.pos - prism.pos)
+    sphere_pos = (prism.mat.T * (sphere.pos - prism.pos)).sum(-1)
 
     @torch.vmap
     def get_support(face, normal):
@@ -86,8 +86,8 @@ def _sphere_prism(sphere: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, to
     dist = d - sphere.geom_size[0]
     pos = (pt + spt) * 0.5
 
-    n = prism.mat @ n
-    pos = prism.mat @ pos + prism.pos
+    n = (prism.mat * n).sum(-1)
+    pos = (prism.mat * pos).sum(-1) + prism.pos
     return dist, pos, n
 
 
@@ -96,9 +96,9 @@ def _capsule_prism(cap: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torc
     faces = prism.face
     normals = prism.face_normal
 
-    cap_pos = prism.mat.T @ (cap.pos - prism.pos)
+    cap_pos = (prism.mat.T * (cap.pos - prism.pos)).sum(-1)
     axis, length = cap.mat[:, 2], cap.geom_size[1]
-    axis = prism.mat.T @ axis
+    axis = (prism.mat.T * axis).sum(-1)
     seg = axis * length
     cap_pts = torch.stack([cap_pos - seg, cap_pos + seg])
 
@@ -132,7 +132,7 @@ def _capsule_prism(cap: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torc
     norm = normal.unsqueeze(0).expand(2, -1)
     penetration = torch.where(
         mask,
-        (face_pts - cap_pts_clipped) @ normal,
+        ((face_pts - cap_pts_clipped) * normal).sum(-1),
         torch.tensor(
             -1.0,
             dtype=face_pts.dtype,
@@ -159,8 +159,8 @@ def _capsule_prism(cap: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torc
     norm_updated[0] = edge_axis
     n = -torch.where(has_edge_contact, norm_updated, norm)
 
-    pos = prism.pos + pos @ prism.mat.T
-    n = n @ prism.mat.T
+    pos = prism.pos + (pos.unsqueeze(-1) * prism.mat.T).sum(-2)
+    n = (n.unsqueeze(-1) * prism.mat.T).sum(-2)
 
     penetration_updated = penetration.clone()
     penetration_updated[0] = edge_penetration
@@ -195,13 +195,13 @@ def _convex_prism(obj: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torch
         pos1, pos2 = obj.pos, prism.pos
         mat1, mat2 = obj.mat, prism.mat
 
-    to_local_pos = mat2.T @ (pos1 - pos2)
-    to_local_mat = mat2.T @ mat1
+    to_local_pos = (mat2.T * (pos1 - pos2)).sum(-1)
+    to_local_mat = math.matmul_unroll(mat2.T, mat1)
 
-    local_faces1 = to_local_pos + faces1 @ to_local_mat.T
-    local_normals1 = normals1 @ to_local_mat.T
+    local_faces1 = to_local_pos + (faces1.unsqueeze(-1) * to_local_mat.T).sum(-2)
+    local_normals1 = (normals1.unsqueeze(-1) * to_local_mat.T).sum(-2)
     local_normals2 = normals2
-    local_verts1 = to_local_pos + vert1 @ to_local_mat.T
+    local_verts1 = to_local_pos + (vert1.unsqueeze(-1) * to_local_mat.T).sum(-2)
     local_verts2 = vert2
     local_edges1 = local_verts1[edge1]
     local_edges2 = local_verts2[edge2]
@@ -217,8 +217,8 @@ def _convex_prism(obj: GeomInfo, prism: ConvexInfo) -> tuple[torch.Tensor, torch
         local_edges2,
     )
 
-    pos = pos2 + pos @ mat2.T
-    normal = normal @ mat2.T
+    pos = pos2 + (pos.unsqueeze(-1) * mat2.T).sum(-2)
+    normal = (normal.unsqueeze(-1) * mat2.T).sum(-2)
     if swapped:
         normal = -normal
     return dist, pos, normal
@@ -301,8 +301,8 @@ def _hfield_collision(
 
     Returns (dist, pos, n) in hfield local frame.
     """
-    obj_pos = h.mat.T @ (obj.pos - h.pos)
-    obj_mat = h.mat.T @ obj.mat
+    obj_pos = (h.mat.T * (obj.pos - h.pos)).sum(-1)
+    obj_mat = math.matmul_unroll(h.mat.T, obj.mat)
     obj_local = obj.replace(pos=obj_pos, mat=obj_mat)
 
     prisms = _build_prisms(h, obj_pos, obj_rbound, subgrid_size)
@@ -355,8 +355,8 @@ def hfield_sphere(h: HFieldInfo, s: GeomInfo, subgrid_size: tuple[int, int]) -> 
     dist, pos, n = _hfield_collision(_sphere_prism, h, s, rbound, subgrid_size)
     dist, pos, n = _select_manifold(dist, pos, n)
 
-    pos = torch.vmap(lambda p: h.mat @ p + h.pos)(pos)
-    n = torch.vmap(lambda nn: h.mat @ nn)(n)
+    pos = torch.vmap(lambda p: (h.mat * p).sum(-1) + h.pos)(pos)
+    n = torch.vmap(lambda nn: (h.mat * nn).sum(-1))(n)
     frame = torch.vmap(math.make_frame)(n)
     return dist, pos, frame
 
@@ -367,8 +367,8 @@ def hfield_capsule(h: HFieldInfo, c: GeomInfo, subgrid_size: tuple[int, int]) ->
     dist, pos, n = _hfield_collision(_capsule_prism, h, c, rbound, subgrid_size)
     dist, pos, n = _select_manifold(dist, pos, n)
 
-    pos = torch.vmap(lambda p: h.mat @ p + h.pos)(pos)
-    n = torch.vmap(lambda nn: h.mat @ nn)(n)
+    pos = torch.vmap(lambda p: (h.mat * p).sum(-1) + h.pos)(pos)
+    n = torch.vmap(lambda nn: (h.mat * nn).sum(-1))(n)
     frame = torch.vmap(math.make_frame)(n)
     return dist, pos, frame
 
@@ -379,8 +379,8 @@ def hfield_convex(h: HFieldInfo, c: GeomInfo, subgrid_size: tuple[int, int]) -> 
     dist, pos, n = _hfield_collision(_convex_prism, h, c, rbound, subgrid_size)
     dist, pos, n = _select_manifold(dist, pos, n)
 
-    pos = torch.vmap(lambda p: h.mat @ p + h.pos)(pos)
-    n = torch.vmap(lambda nn: h.mat @ nn)(n)
+    pos = torch.vmap(lambda p: (h.mat * p).sum(-1) + h.pos)(pos)
+    n = torch.vmap(lambda nn: (h.mat * nn).sum(-1))(n)
     frame = torch.vmap(math.make_frame)(n)
     return dist, pos, frame
 
