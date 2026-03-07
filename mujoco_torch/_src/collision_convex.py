@@ -18,11 +18,11 @@ import torch
 import torch.nn.functional as F
 
 from mujoco_torch._src import math
-from mujoco_torch._src.math import matmul_unroll
 
 # pylint: disable=g-importing-member
 from mujoco_torch._src.collision_types import Collision as Contact
 from mujoco_torch._src.collision_types import GeomInfo
+from mujoco_torch._src.math import matmul_unroll
 
 # pylint: enable=g-importing-member
 
