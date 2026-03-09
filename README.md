@@ -127,10 +127,10 @@ are measured at B=1 since they scale linearly.  All values are **steps/second**
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
 | MuJoCo C (CPU, sequential) | 44,831 | — | — | — | — |
-| mujoco-torch vmap (eager) | 3 | 498 | 3,973 | 15,850 | 125,929 |
-| mujoco-torch compile | 78 | 9,716 | 74,103 | 288,643 | 1,312,815 |
-| mujoco-torch compile (reduce-overhead) | 246 | 27,560 | 148,412 | 436,876 | 1,363,390 |
-| **mujoco-torch compile (tuned)** | **76** | **9,420** | **62,952** | **270,751** | **1,480,464** |
+| mujoco-torch vmap (eager) | 13 | 1,431 | 11,414 | 52,093 | 363,246 |
+| mujoco-torch compile | 231 | 26,189 | 202,333 | 738,185 | 1,999,896 |
+| mujoco-torch compile (reduce-overhead) | 391 | 41,827 | 300,162 | 920,102 | 2,002,804 |
+| **mujoco-torch compile (tuned)** | **235** | **25,338** | **207,305** | **776,742** | **2,438,301** |
 | MJX (JAX jit+vmap) | 880 | 112,841 | 856,331 | 2,214,655 | 2,376,552 |
 
 ### Ant
