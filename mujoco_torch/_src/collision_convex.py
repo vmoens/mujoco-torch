@@ -22,6 +22,7 @@ from mujoco_torch._src import math
 # pylint: disable=g-importing-member
 from mujoco_torch._src.collision_types import Collision as Contact
 from mujoco_torch._src.collision_types import GeomInfo
+from mujoco_torch._src.math import matmul_unroll
 
 # pylint: enable=g-importing-member
 
@@ -186,14 +187,14 @@ def _manifold_points(poly: torch.Tensor, poly_mask: torch.Tensor, poly_norm: tor
     # choose point c furthest along the axis orthogonal to (a-b)
     ab = math.cross(poly_norm, a - b)
     ap = a - poly
-    c_idx = (torch.abs(ap @ ab) + dist_mask).argmax()
+    c_idx = (torch.abs((ap * ab).sum(-1)) + dist_mask).argmax()
     c = _gather_idx(poly, c_idx)
     # choose point d furthest from the other two triangle edges
     ac = math.cross(poly_norm, a - c)
     bc = math.cross(poly_norm, b - c)
     bp = b - poly
-    dist_bp = torch.abs(bp @ bc) + dist_mask
-    dist_ap = torch.abs(ap @ ac) + dist_mask
+    dist_bp = torch.abs((bp * bc).sum(-1)) + dist_mask
+    dist_ap = torch.abs((ap * ac).sum(-1)) + dist_mask
     d_idx = torch.cat([dist_bp, dist_ap]).argmax() % poly.shape[0]
     return torch.stack([a_idx, b_idx, c_idx, d_idx])
 
@@ -215,14 +216,14 @@ def _project_poly_onto_poly_plane(
     """Projects poly1 onto the poly2 plane along poly1's normal."""
     d = (poly2[0] * norm2).sum(-1)
     denom = (norm1 * norm2).sum(-1)
-    t = (d - poly1 @ norm2) / (denom + 1e-6 * (denom == 0.0))
+    t = (d - (poly1 * norm2).sum(-1)) / (denom + 1e-6 * (denom == 0.0))
     new_poly = poly1 + t.reshape(-1, 1) * norm1
     return new_poly
 
 
 def _point_in_front_of_plane(plane_pt: torch.Tensor, plane_normal: torch.Tensor, pt: torch.Tensor) -> torch.Tensor:
     """Checks if a point is strictly in front of a plane."""
-    return (pt - plane_pt) @ plane_normal > 1e-6
+    return ((pt - plane_pt) * plane_normal).sum(-1) > 1e-6
 
 
 def _clip_edge_to_planes(
@@ -268,7 +269,7 @@ def _clip_edge_to_planes(
         # Pick the clipped point that is most along the edge direction.
         # This degenerates to picking the original point p0 if p0 is *not* in front
         # of any clipping planes.
-        dists = (new_edge_ps - p0) @ (p1 - p0)
+        dists = ((new_edge_ps - p0) * (p1 - p0)).sum(-1)
         new_edge_p = _vmap_select(new_edge_ps, torch.argmax(dists))
         return new_edge_p
 
@@ -389,7 +390,7 @@ def _create_contact_manifold(
     contact_pts = _vmap_take(poly_ref, best)
     mask_pts = _vmap_take_1d(mask, best)
     penetration_dir = _vmap_take(poly_incident, best) - contact_pts
-    penetration = penetration_dir @ (-clipping_norm)
+    penetration = (penetration_dir * (-clipping_norm)).sum(-1)
 
     dist = torch.where(mask_pts, -penetration, torch.ones_like(penetration))
     pos = contact_pts
@@ -516,14 +517,14 @@ def plane_convex(plane: GeomInfo, convex: GeomInfo) -> Contact:
     vert = convex.vert
 
     # get points in the convex frame
-    plane_pos = convex.mat.T @ (plane.pos - convex.pos)
-    n = convex.mat.T @ plane.mat[:, 2]
-    support = (plane_pos - vert) @ n
+    plane_pos = (convex.mat.T * (plane.pos - convex.pos)).sum(-1)
+    n = (convex.mat.T * plane.mat[:, 2]).sum(-1)
+    support = ((plane_pos - vert) * n).sum(-1)
     idx = _manifold_points(vert, support > 0, n)
     pos = _vmap_take(vert, idx)
 
     # convert to world frame
-    pos = convex.pos + pos @ convex.mat.T
+    pos = convex.pos + (pos.unsqueeze(-1) * convex.mat.T).sum(-2)
     n = plane.mat[:, 2]
 
     frame = torch.vmap(math.make_frame)(n.unsqueeze(0).expand(4, -1))
@@ -539,7 +540,7 @@ def sphere_convex(sphere: GeomInfo, convex: GeomInfo) -> Contact:
     normals = convex.facenorm
 
     # Put sphere in convex frame.
-    sphere_pos = convex.mat.T @ (sphere.pos - convex.pos)
+    sphere_pos = (convex.mat.T * (sphere.pos - convex.pos)).sum(-1)
 
     # Get support from face normals.
     @torch.vmap
@@ -587,8 +588,8 @@ def sphere_convex(sphere: GeomInfo, convex: GeomInfo) -> Contact:
     pos = (pt + spt) * 0.5
 
     # Go back to world frame.
-    n = convex.mat @ n
-    pos = convex.mat @ pos + convex.pos
+    n = (convex.mat * n).sum(-1)
+    pos = (convex.mat * pos).sum(-1) + convex.pos
 
     return torch.utils._pytree.tree_map(lambda x: torch.unsqueeze(x, 0), (dist, pos, math.make_frame(n)))
 
@@ -600,9 +601,9 @@ def capsule_convex(cap: GeomInfo, convex: GeomInfo) -> Contact:
     normals = convex.facenorm
 
     # Put capsule in convex frame.
-    cap_pos = convex.mat.T @ (cap.pos - convex.pos)
+    cap_pos = (convex.mat.T * (cap.pos - convex.pos)).sum(-1)
     axis, length = cap.mat[:, 2], cap.geom_size[1]
-    axis = convex.mat.T @ axis
+    axis = (convex.mat.T * axis).sum(-1)
     seg = axis * length
     cap_pts = torch.stack(
         [
@@ -643,7 +644,7 @@ def capsule_convex(cap: GeomInfo, convex: GeomInfo) -> Contact:
     norm = normal.unsqueeze(0).expand(2, -1)
     penetration = torch.where(
         mask & has_support,
-        (face_pts - cap_pts_clipped) @ normal,
+        ((face_pts - cap_pts_clipped) * normal).sum(-1),
         torch.full((), -1.0, dtype=face_pts.dtype, device=face_pts.device),
     )
 
@@ -670,8 +671,8 @@ def capsule_convex(cap: GeomInfo, convex: GeomInfo) -> Contact:
     n = -torch.where(has_edge_contact, norm_updated, norm)
 
     # Go back to world frame.
-    pos = convex.pos + pos @ convex.mat.T
-    n = n @ convex.mat.T
+    pos = convex.pos + (pos.unsqueeze(-1) * convex.mat.T).sum(-2)
+    n = (n.unsqueeze(-1) * convex.mat.T).sum(-2)
 
     penetration_updated = penetration.clone()
     penetration_updated[0] = edge_penetration
@@ -701,14 +702,14 @@ def convex_convex(c1: GeomInfo, c2: GeomInfo) -> Contact:
     faces1 = c1.vert[c1.face]
     faces2 = c2.vert[c2.face]
 
-    to_local_pos = c2.mat.T @ (c1.pos - c2.pos)
-    to_local_mat = c2.mat.T @ c1.mat
+    to_local_pos = (c2.mat.T * (c1.pos - c2.pos)).sum(-1)
+    to_local_mat = matmul_unroll(c2.mat.T, c1.mat)
 
-    faces1 = to_local_pos + faces1 @ to_local_mat.T
-    normals1 = c1.facenorm @ to_local_mat.T
+    faces1 = to_local_pos + (faces1.unsqueeze(-1) * to_local_mat.T).sum(-2)
+    normals1 = (c1.facenorm.unsqueeze(-1) * to_local_mat.T).sum(-2)
     normals2 = c2.facenorm
 
-    vertices1 = to_local_pos + c1.vert @ to_local_mat.T
+    vertices1 = to_local_pos + (c1.vert.unsqueeze(-1) * to_local_mat.T).sum(-2)
     vertices2 = c2.vert
 
     unique_edges1 = vertices1[c1.edge]
@@ -726,8 +727,8 @@ def convex_convex(c1: GeomInfo, c2: GeomInfo) -> Contact:
     )
 
     # Go back to world frame.
-    pos = c2.pos + pos @ c2.mat.T
-    normal = normal @ c2.mat.T
+    pos = c2.pos + (pos.unsqueeze(-1) * c2.mat.T).sum(-2)
+    normal = (normal.unsqueeze(-1) * c2.mat.T).sum(-2)
     normal = -normal if swapped else normal
 
     frame = torch.vmap(math.make_frame)(normal)

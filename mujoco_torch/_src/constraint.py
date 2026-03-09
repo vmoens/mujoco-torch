@@ -115,8 +115,8 @@ def _instantiate_equality_connect(m: Model, d: Data, precomp: dict) -> _Efc:
     @torch.vmap
     def fn(data, id1, id2, active):
         anchor1, anchor2 = data[0:3], data[3:6]
-        pos1 = _vmap_index(d.xmat, id1) @ anchor1 + _vmap_index(d.xpos, id1)
-        pos2 = _vmap_index(d.xmat, id2) @ anchor2 + _vmap_index(d.xpos, id2)
+        pos1 = (_vmap_index(d.xmat, id1) * anchor1).sum(-1) + _vmap_index(d.xpos, id1)
+        pos2 = (_vmap_index(d.xmat, id2) * anchor2).sum(-1) + _vmap_index(d.xpos, id2)
 
         cpos = pos1 - pos2
 
@@ -160,8 +160,8 @@ def _instantiate_equality_weld(m: Model, d: Data, precomp: dict) -> _Efc:
         anchor1, anchor2 = data[0:3], data[3:6]
         relpose, torquescale = data[6:10], data[10]
 
-        pos1 = _vmap_index(d.xmat, id1) @ anchor2 + _vmap_index(d.xpos, id1)
-        pos2 = _vmap_index(d.xmat, id2) @ anchor1 + _vmap_index(d.xpos, id2)
+        pos1 = (_vmap_index(d.xmat, id1) * anchor2).sum(-1) + _vmap_index(d.xpos, id1)
+        pos2 = (_vmap_index(d.xmat, id2) * anchor1).sum(-1) + _vmap_index(d.xpos, id2)
 
         cpos = pos1 - pos2
 

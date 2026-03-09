@@ -69,8 +69,8 @@ def plane_ellipsoid(plane: GeomInfo, ellipsoid: GeomInfo) -> Contact:
     """Calculates one contact between an ellipsoid and a plane."""
     n = plane.mat[:, 2]
     size = ellipsoid.geom_size
-    sphere_support = -math.normalize((ellipsoid.mat.T @ n) * size)
-    pos = ellipsoid.pos + ellipsoid.mat @ (sphere_support * size)
+    sphere_support = -math.normalize((ellipsoid.mat.T * n).sum(-1) * size)
+    pos = ellipsoid.pos + (ellipsoid.mat * (sphere_support * size)).sum(-1)
     dist = (n * (pos - plane.pos)).sum(-1)
     pos = pos - n * dist * 0.5
     return torch.utils._pytree.tree_map(lambda x: torch.unsqueeze(x, 0), (dist, pos, math.make_frame(n)))
