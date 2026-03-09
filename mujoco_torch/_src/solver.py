@@ -342,8 +342,11 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
             active = ctx.Jaref < 0
             eq_fric_mask = torch.arange(active.shape[0], device=active.device) < ne_nf
             active = active | eq_fric_mask
-            h = (efc_J_T * efc_D * active).unsqueeze(-1) * efc_J
-            h = dense_M + h.sum(-2)
+            weighted_J_T = efc_J_T * efc_D * active
+            if nv <= math._INLINE_CHOLESKY_MAX_SIZE:
+                h = dense_M + (weighted_J_T.unsqueeze(-1) * efc_J).sum(-2)
+            else:
+                h = dense_M + weighted_J_T @ efc_J
             L = math.small_cholesky(h)
             mgrad = math.small_cholesky_solve(grad, L)
         else:

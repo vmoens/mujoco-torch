@@ -81,11 +81,16 @@ def safe_div(num: float | torch.Tensor, den: float | torch.Tensor) -> float | to
     return num / (den + mujoco.mjMINVAL * (den == 0))
 
 
+_INLINE_CHOLESKY_MAX_SIZE = 16
+
+
 def small_cholesky(A: torch.Tensor) -> torch.Tensor:
     """Cholesky decomposition via explicit scalar ops for small matrices.
 
     Under torch.compile, loops are unrolled at trace time for the known
     matrix size, producing fusible pointwise ops instead of cuSOLVER dispatch.
+    Falls back to torch.linalg.cholesky for matrices larger than
+    ``_INLINE_CHOLESKY_MAX_SIZE`` where cuSOLVER is more efficient.
 
     Args:
       A: (n, n) symmetric positive definite matrix
@@ -94,6 +99,10 @@ def small_cholesky(A: torch.Tensor) -> torch.Tensor:
       (n, n) lower triangular Cholesky factor L such that A = L @ L^T
     """
     n = A.shape[-1]
+
+    if n > _INLINE_CHOLESKY_MAX_SIZE:
+        return torch.linalg.cholesky(A)
+
     L = [[torch.zeros_like(A[0, 0]) for _ in range(n)] for _ in range(n)]
 
     for j in range(n):
@@ -116,6 +125,8 @@ def small_cholesky_solve(x: torch.Tensor, L: torch.Tensor) -> torch.Tensor:
 
     Matches the semantics of torch.cholesky_solve but operates on a 1-D
     right-hand side and uses explicit scalar ops that Inductor can fuse.
+    Falls back to torch.cholesky_solve for matrices larger than
+    ``_INLINE_CHOLESKY_MAX_SIZE``.
 
     Args:
       x: (n,) right-hand side vector
@@ -125,6 +136,9 @@ def small_cholesky_solve(x: torch.Tensor, L: torch.Tensor) -> torch.Tensor:
       (n,) solution vector
     """
     n = L.shape[-1]
+
+    if n > _INLINE_CHOLESKY_MAX_SIZE:
+        return torch.cholesky_solve(x.unsqueeze(-1), L).squeeze(-1)
 
     # Forward substitution: L @ y = x
     y = []
