@@ -59,7 +59,10 @@ Multiplied across hundreds of vmap calls per step, the overhead adds up.
 
 ## Status
 
-Investigating.  The regression is moderate (4-15% depending on batch size) and
-the PR's correctness benefits (removing numpy from hot path, precomputing
-constants) are worth keeping.  The question is whether to store the data on the
-Model as `UnbatchedTensor` vs in `_device_precomp`.
+Filed as a tensordict bug (`UNBATCHED_TF_BUG.md` in the tensordict repo).  The
+fix belongs in `UnbatchedTensor.__torch_function__` — the tendon data should
+stay as `UnbatchedTensor` on Model since that's architecturally correct.
+
+Blocked on the tensordict fix.  The regression is moderate (4-15% depending on
+batch size) and the PR's correctness benefits (removing numpy from hot path,
+precomputing constants) are worth keeping.

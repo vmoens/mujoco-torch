@@ -11,8 +11,7 @@ bringing GPU-accelerated physics simulation to the PyTorch ecosystem with full
 - **`torch.vmap`** -- batch thousands of environments in a single call with
   automatic vectorisation.
 - **`torch.compile`** -- fuse the entire step into optimised GPU kernels; no
-  Python overhead at runtime.  Supports `mode="reduce-overhead"` (CUDA graphs)
-  for further launch-overhead elimination.
+  Python overhead at runtime.
 - **Numerically equivalent to MJX** -- verified at float64 precision for every
   step (see `test/mjx_correctness_test.py`).
 
@@ -52,10 +51,7 @@ pip install git+https://github.com/pytorch/tensordict.git
 ```
 
 Without this custom PyTorch build, eager mode and `torch.vmap` work fine; only
-`torch.compile(fullgraph=True)` requires the fork.  For
-`mode="reduce-overhead"` (CUDA graphs), use the
-[`vmoens/nomerg-sum-prs`](https://github.com/vmoens/pytorch/tree/vmoens/nomerg-sum-prs)
-branch which includes additional CUDA graph partitioning fixes.
+`torch.compile(fullgraph=True)` requires the fork.
 
 ## Quick start
 
@@ -126,33 +122,30 @@ are measured at B=1 since they scale linearly.  All values are **steps/second**
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 44,831 | — | — | — | — |
-| mujoco-torch vmap (eager) | 13 | 1,431 | 11,414 | 52,093 | 363,246 |
-| mujoco-torch compile | 231 | 26,189 | 202,333 | 738,185 | 1,999,896 |
-| mujoco-torch compile (reduce-overhead) | 391 | 41,827 | 300,162 | 920,102 | 2,002,804 |
-| **mujoco-torch compile (tuned)** | **235** | **25,338** | **207,305** | **776,742** | **2,438,301** |
+| MuJoCo C (CPU, sequential) | 45,622 | — | — | — | — |
+| mujoco-torch vmap (eager) | 14 | 1,698 | 13,522 | 53,373 | 376,740 |
+| mujoco-torch compile | 239 | 26,588 | 208,210 | 729,306 | 2,018,703 |
+| **mujoco-torch compile (tuned)** | **216** | **25,064** | **191,248** | **738,973** | **2,461,347** |
 | MJX (JAX jit+vmap) | 880 | 112,841 | 856,331 | 2,214,655 | 2,376,552 |
 
 ### Ant
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 67,640 | — | — | — | — |
-| mujoco-torch vmap (eager) | 16 | 2,127 | 16,482 | 66,939 | 325,254 |
-| mujoco-torch compile | 301 | 35,379 | 268,247 | 662,696 | 751,673 |
-| mujoco-torch compile (reduce-overhead) | 534 | 67,500 | 427,404 | 655,730 | 758,120 |
-| **mujoco-torch compile (tuned)** | **307** | **35,292** | **288,701** | **939,155** | **2,246,599** |
+| MuJoCo C (CPU, sequential) | 68,369 | — | — | — | — |
+| mujoco-torch vmap (eager) | 17 | 2,195 | 17,312 | 69,316 | 331,964 |
+| mujoco-torch compile | 318 | 35,224 | 280,284 | 664,325 | 753,962 |
+| **mujoco-torch compile (tuned)** | **296** | **34,391** | **270,840** | **914,892** | **2,203,204** |
 | MJX (JAX jit+vmap) | 852 | 103,651 | 652,280 | 880,360 | 923,870 |
 
 ### Half-Cheetah
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 91,580 | — | — | — | — |
-| mujoco-torch vmap (eager) | 13 | 1,747 | 13,730 | 56,036 | 444,710 |
-| mujoco-torch compile | 227 | 23,096 | 194,794 | 717,623 | 3,325,032 |
-| mujoco-torch compile (reduce-overhead) | 15 | 38,993 | 306,344 | 1,096,316 | 3,413,237 |
-| **mujoco-torch compile (tuned)** | **220** | **24,757** | **167,829** | **650,264** | **3,811,698** |
+| MuJoCo C (CPU, sequential) | 90,617 | — | — | — | — |
+| mujoco-torch vmap (eager) | 14 | 1,838 | 14,479 | 58,947 | 461,065 |
+| mujoco-torch compile | 228 | 26,062 | 196,898 | 812,800 | 3,402,872 |
+| **mujoco-torch compile (tuned)** | **205** | **23,247** | **177,522** | **714,743** | **3,577,821** |
 | MJX (JAX jit+vmap) | 570 | 57,199 | 432,451 | 1,360,843 | 2,767,736 |
 
 ### Walker2d
@@ -162,11 +155,10 @@ than Euler.
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 37,466 | — | — | — | — |
-| mujoco-torch vmap (eager) | 3 | 396 | 2,859 | 11,350 | 83,566 |
-| mujoco-torch compile | 76 | 5,777 | 47,453 | 167,563 | 726,801 |
-| mujoco-torch compile (reduce-overhead) | 149 | 10,970 | 59,244 | 236,116 | 741,581 |
-| **mujoco-torch compile (tuned)** | **77** | **6,703** | **46,774** | **178,882** | **805,304** |
+| MuJoCo C (CPU, sequential) | 37,081 | — | — | — | — |
+| mujoco-torch vmap (eager) | 4 | 413 | 3,024 | 11,631 | 85,794 |
+| mujoco-torch compile | 80 | 6,682 | 48,246 | 185,602 | 730,468 |
+| **mujoco-torch compile (tuned)** | **71** | **6,235** | **44,274** | **165,182** | **817,718** |
 | MJX (JAX jit+vmap) | 188 | 12,753 | 90,246 | 264,193 | 402,604 |
 
 ### Hopper
@@ -175,17 +167,11 @@ Hopper uses the RK4 integrator (like Walker2d).
 
 | Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
 |---|--:|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 117,643 | — | — | — | — |
-| mujoco-torch vmap (eager) | 15 | 1,943 | 15,906 | 62,498 | 500,400 |
-| mujoco-torch compile | 300 | 36,006 | 272,703 | 887,319 | 4,465,498 |
-| mujoco-torch compile (reduce-overhead) | 413 | 52,371 | 376,009 | 1,291,346 | 4,576,383 |
-| **mujoco-torch compile (tuned)** | **315** | **35,105** | **273,201** | **1,038,663** | **5,024,413** |
+| MuJoCo C (CPU, sequential) | 119,976 | — | — | — | — |
+| mujoco-torch vmap (eager) | 17 | 2,074 | 16,584 | 65,921 | 524,852 |
+| mujoco-torch compile | 313 | 35,441 | 269,661 | 1,059,939 | 4,557,454 |
+| **mujoco-torch compile (tuned)** | **286** | **33,658** | **257,049** | **1,035,760** | **3,474,654** |
 | MJX (JAX jit+vmap) | 945 | 115,509 | 836,522 | 977,780 | 7,762,885 |
-
-**"reduce-overhead"** = `torch.compile(mode="reduce-overhead")`, which captures
-the compiled graph into CUDA graphs to eliminate kernel launch overhead.
-Requires upstream fixes not yet in a released PyTorch version (see
-[PyTorch build](#pytorch-build)).
 
 **"tuned"** = Inductor coordinate-descent tile-size tuning + aggressive fusion
 enabled (`torch._inductor.config.coordinate_descent_tuning`,
