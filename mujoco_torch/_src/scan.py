@@ -997,7 +997,9 @@ def segment_sum(
     elif not isinstance(segment_ids, torch.Tensor):
         segment_ids = torch.tensor(segment_ids, device=data.device, dtype=torch.long)
     else:
-        segment_ids = segment_ids.to(device=data.device, dtype=torch.long)
+        segment_ids = segment_ids.long()
+        if segment_ids.device != data.device:
+            segment_ids = segment_ids.to(data.device)
 
     data = data.clone().contiguous()
     shape = (num_segments,) + data.shape[1:]

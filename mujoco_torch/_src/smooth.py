@@ -134,26 +134,27 @@ def kinematics(m: Model, d: Data) -> Data:
         )
 
         # Apply camera modes (Phase 7)
+        # Camera modes / body-ids are precomputed as plain Python ints in
+        # _device_precomp to avoid data-dependent guards under torch.compile.
+        cam_modes = m._device_precomp["_cam_modes"]
+        cam_bodyids = m._device_precomp["_cam_bodyids"]
+        cam_targetbodyids = m._device_precomp["_cam_targetbodyids"]
         for ci in range(m.ncam):
-            mode = int(m.cam_mode[ci])
+            mode = cam_modes[ci]
             if mode == int(CamLightType.FIXED):
                 pass
             elif mode == int(CamLightType.TRACK):
-                # pos tracks body, rot fixed in global (use cam_mat0)
                 cam_xpos = cam_xpos.clone()
-                cam_xpos[ci] = xpos[int(m.cam_bodyid[ci])] + m.cam_pos0[ci]
+                cam_xpos[ci] = xpos[cam_bodyids[ci]] + m.cam_pos0[ci]
                 cam_xmat = cam_xmat.clone()
                 cam_xmat[ci] = m.cam_mat0[ci].reshape(3, 3)
             elif mode == int(CamLightType.TRACKCOM):
-                # pos tracks subtree com, rot fixed in body
                 cam_xpos = cam_xpos.clone()
                 if hasattr(d, "subtree_com") and d.subtree_com is not None:
-                    cam_xpos[ci] = d.subtree_com[int(m.cam_bodyid[ci])] + math.rotate(
-                        m.cam_pos[ci], xquat[int(m.cam_bodyid[ci])]
-                    )
+                    bid = cam_bodyids[ci]
+                    cam_xpos[ci] = d.subtree_com[bid] + math.rotate(m.cam_pos[ci], xquat[bid])
             elif mode == int(CamLightType.TARGETBODY):
-                # pos fixed in body, rot looks at target body
-                target_id = int(m.cam_targetbodyid[ci])
+                target_id = cam_targetbodyids[ci]
                 if target_id >= 0:
                     target_pos = xpos[target_id]
                     forward = math.normalize(target_pos - cam_xpos[ci])
@@ -164,13 +165,11 @@ def kinematics(m: Model, d: Data) -> Data:
                     )
                     right = math.normalize(math.cross(forward, up_hint))
                     up = math.cross(right, forward)
-                    # MuJoCo: -z forward, +x right, +y up
                     look_mat = torch.stack([right, up, -forward], dim=-1)
                     cam_xmat = cam_xmat.clone()
                     cam_xmat[ci] = look_mat
             elif mode == int(CamLightType.TARGETBODYCOM):
-                # pos fixed in body, rot looks at target subtree com
-                target_id = int(m.cam_targetbodyid[ci])
+                target_id = cam_targetbodyids[ci]
                 if target_id >= 0 and hasattr(d, "subtree_com") and d.subtree_com is not None:
                     target_pos = d.subtree_com[target_id]
                     forward = math.normalize(target_pos - cam_xpos[ci])

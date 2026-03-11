@@ -875,6 +875,13 @@ def _build_device_precomp(model, device, _resolve_cached_tensors):
         val = getattr(model, attr, None)
         if val is not None:
             precomp[attr] = _resolve_cached_tensors(val, device)
+    # Camera mode / body-id data as plain Python so torch.compile never
+    # creates data-dependent guards on model-constant tensor elements.
+    if model.ncam:
+        precomp["_cam_modes"] = [int(model.cam_mode[i]) for i in range(model.ncam)]
+        precomp["_cam_bodyids"] = [int(model.cam_bodyid[i]) for i in range(model.ncam)]
+        precomp["_cam_targetbodyids"] = [int(model.cam_targetbodyid[i]) for i in range(model.ncam)]
+
     object.__setattr__(model, "_device_precomp", precomp)
 
 
