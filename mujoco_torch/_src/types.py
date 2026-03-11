@@ -880,9 +880,7 @@ def _build_device_precomp(model, device, _resolve_cached_tensors):
     if model.ncam:
         precomp["_cam_modes"] = [int(model.cam_mode[i]) for i in range(model.ncam)]
         precomp["_cam_bodyids"] = [int(model.cam_bodyid[i]) for i in range(model.ncam)]
-        precomp["_cam_targetbodyids"] = [
-            int(model.cam_targetbodyid[i]) for i in range(model.ncam)
-        ]
+        precomp["_cam_targetbodyids"] = [int(model.cam_targetbodyid[i]) for i in range(model.ncam)]
 
     object.__setattr__(model, "_device_precomp", precomp)
 

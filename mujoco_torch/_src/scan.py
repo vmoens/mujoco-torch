@@ -424,9 +424,8 @@ def _invert_segment_ids(segment_ids, num_segments):
 
 def _gather_segment_sum(data, inv_idx, inv_mask):
     """Segment sum via gather + masked reduction (no atomics)."""
-    idx = inv_idx if inv_idx.device == data.device else inv_idx.to(data.device)
-    mask = inv_mask if inv_mask.device == data.device else inv_mask.to(data.device)
-    mask = mask.to(data.dtype)
+    idx = inv_idx.to(data.device)
+    mask = inv_mask.to(data.device).to(data.dtype)
     gathered = data[idx]
     for _ in range(data.ndim - 1):
         mask = mask.unsqueeze(-1)

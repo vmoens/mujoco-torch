@@ -152,9 +152,7 @@ def kinematics(m: Model, d: Data) -> Data:
                 cam_xpos = cam_xpos.clone()
                 if hasattr(d, "subtree_com") and d.subtree_com is not None:
                     bid = cam_bodyids[ci]
-                    cam_xpos[ci] = d.subtree_com[bid] + math.rotate(
-                        m.cam_pos[ci], xquat[bid]
-                    )
+                    cam_xpos[ci] = d.subtree_com[bid] + math.rotate(m.cam_pos[ci], xquat[bid])
             elif mode == int(CamLightType.TARGETBODY):
                 target_id = cam_targetbodyids[ci]
                 if target_id >= 0:
