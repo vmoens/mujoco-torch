@@ -53,6 +53,18 @@ pip install git+https://github.com/pytorch/tensordict.git
 Without this custom PyTorch build, eager mode and `torch.vmap` work fine; only
 `torch.compile(fullgraph=True)` requires the fork.
 
+#### Upstream PR tracker
+
+The following PRs must land in PyTorch before mujoco-torch can drop its custom
+fork.  Status is updated automatically by CI.
+
+<!-- UPSTREAM_PR_TRACKER_START -->
+- [ ] [#175526 — while_loop vmap batching rule](https://github.com/pytorch/pytorch/pull/175526)
+- [ ] [#176977 — Skip storage memo for wrapper subclasses in MetaConverter](https://github.com/pytorch/pytorch/pull/176977)
+- [ ] [#175525 — vmap compatibility with non-tensor leaves](https://github.com/pytorch/pytorch/pull/175525)
+- [ ] [#175852 — vmap extension points for custom container types](https://github.com/pytorch/pytorch/pull/175852)
+<!-- UPSTREAM_PR_TRACKER_END -->
+
 ## Quick start
 
 ```python
