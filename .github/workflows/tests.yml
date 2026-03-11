@@ -18,7 +18,7 @@ jobs:
       - name: Install CPU-only PyTorch
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Install JAX (CPU) and MJX
-        run: pip install "jax[cpu]" mujoco mujoco-mjx
+        run: pip install "jax[cpu]" "mujoco>=3.0,<3.6" "mujoco-mjx>=3.0,<3.6"
       - name: Install tensordict from main
         run: pip install git+https://github.com/pytorch/tensordict.git@main
       - name: Install mujoco-torch with test deps
