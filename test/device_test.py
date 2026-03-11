@@ -56,6 +56,8 @@ def _assert_eq(testcase, a, b, attr=None, name=None):
         return
 
     a, b = np.array(a), np.array(b)
+    if a.size == 0 and b.size == 0:
+        return
     np.testing.assert_allclose(a, b, err_msg=err_msg, atol=1e-8)
 
 
