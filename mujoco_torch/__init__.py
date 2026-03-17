@@ -16,6 +16,9 @@
 
 # Apply monkey-patches for upstream PyTorch PRs that haven't landed yet.
 # Safe to call unconditionally: each patch is a no-op when the fix is present.
+# Patches MUST run before tensordict is imported (the _src imports below
+# trigger tensordict loading) so that tensordict's runtime guard sees the
+# patched MetaConverter and selects the right UnbatchedTensor implementation.
 from mujoco_torch.patches import apply as _apply_patches
 
 _apply_patches()
