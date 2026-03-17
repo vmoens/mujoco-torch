@@ -34,9 +34,7 @@ def apply() -> bool:
     # must be wrapped with ``if not t.is_traceable_wrapper_subclass:``.
     # A simple substring check is too broad because nightly may already
     # contain is_traceable_wrapper_subclass in *other* code paths.
-    if re.search(
-        r"not\s+t\.is_traceable_wrapper_subclass.*\n\s+s = t\.storage", src
-    ):
+    if re.search(r"not\s+t\.is_traceable_wrapper_subclass.*\n\s+s = t\.storage", src):
         return False
 
     # Find the ``r.set_()`` call and dynamically compute its indentation so we

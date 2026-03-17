@@ -58,23 +58,17 @@ def apply() -> bool:
             t.movedim(bdim, 0) if bdim is not None and bdim != 0 else t
             for t, bdim in zip(flat_carried, flat_carried_bdims, strict=True)
         ]
-        flat_carried_bdims = [
-            0 if bdim is not None else None for bdim in flat_carried_bdims
-        ]
+        flat_carried_bdims = [0 if bdim is not None else None for bdim in flat_carried_bdims]
 
         flat_additional = [
             t.movedim(bdim, 0) if bdim is not None and bdim != 0 else t
             for t, bdim in zip(flat_additional, flat_additional_bdims, strict=True)
         ]
-        flat_additional_bdims = [
-            0 if bdim is not None else None for bdim in flat_additional_bdims
-        ]
+        flat_additional_bdims = [0 if bdim is not None else None for bdim in flat_additional_bdims]
         additional_in_dims = tuple(flat_additional_bdims)
 
         flat_carried = [
-            t.unsqueeze(0).expand(batch_size, *t.shape).contiguous()
-            if bdim is None
-            else t
+            t.unsqueeze(0).expand(batch_size, *t.shape).contiguous() if bdim is None else t
             for t, bdim in zip(flat_carried, flat_carried_bdims, strict=True)
         ]
         flat_carried_bdims = [0] * len(flat_carried)
@@ -122,9 +116,7 @@ def apply() -> bool:
                     for t, bdim in zip(flat_new, flat_new_bdims, strict=True)
                 ]
                 flat_new = [
-                    t.unsqueeze(0).expand(batch_size, *t.shape)
-                    if bdim is None
-                    else t
+                    t.unsqueeze(0).expand(batch_size, *t.shape) if bdim is None else t
                     for t, bdim in zip(flat_new, flat_new_bdims, strict=True)
                 ]
 

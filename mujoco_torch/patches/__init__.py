@@ -75,16 +75,11 @@ def fix_tensordict_unbatched() -> None:
     exec(compile(patched_src, src_path, "exec"), ns)  # noqa: S102
 
     if not ns.get("_HAS_WRAPPER_SUBCLASS_FIX"):
-        log.warning(
-            "Failed to activate wrapper-subclass UnbatchedTensor"
-        )
+        log.warning("Failed to activate wrapper-subclass UnbatchedTensor")
         return
 
     new_cls = ns["UnbatchedTensor"]
     _ub.UnbatchedTensor = new_cls
     _ub._HAS_WRAPPER_SUBCLASS_FIX = True
     tensordict.UnbatchedTensor = new_cls
-    log.info(
-        "Activated wrapper-subclass UnbatchedTensor "
-        "(tensordict._unbatched guard overridden)"
-    )
+    log.info("Activated wrapper-subclass UnbatchedTensor (tensordict._unbatched guard overridden)")
