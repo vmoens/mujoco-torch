@@ -44,7 +44,7 @@ class AntEnv(MujocoTorchEnv):
             count=1,
         )
         xml = re.sub(
-            r'(<compiler\b[^/]*/>\s*)',
+            r"(<compiler\b[^/]*/>\s*)",
             r'\1<option timestep="0.01"/>\n  ',
             xml,
             count=1,
@@ -56,9 +56,7 @@ class AntEnv(MujocoTorchEnv):
         # nq=15 (free:7 + 8 hinge), nv=14 (free:6 + 8 hinge)
         # obs = qpos[2:] (13) + qvel (14) = 27
         return {
-            "observation": Unbounded(
-                shape=(num_envs, 27), dtype=dtype, device=device
-            ),
+            "observation": Unbounded(shape=(num_envs, 27), dtype=dtype, device=device),
         }
 
     def _make_obs(self):
@@ -67,13 +65,9 @@ class AntEnv(MujocoTorchEnv):
         return {"observation": torch.cat([qpos[..., 2:], qvel], dim=-1)}
 
     def _compute_reward(self, qpos_before, action):
-        forward_vel = (
-            (self._dx.qpos[..., 0] - qpos_before[..., 0]) / self._dt
-        )
+        forward_vel = (self._dx.qpos[..., 0] - qpos_before[..., 0]) / self._dt
         ctrl_cost = self.CTRL_COST_WEIGHT * (action**2).sum(dim=-1)
-        healthy_reward = torch.where(
-            self._is_healthy(), self.HEALTHY_REWARD, 0.0
-        )
+        healthy_reward = torch.where(self._is_healthy(), self.HEALTHY_REWARD, 0.0)
         reward = forward_vel + healthy_reward - ctrl_cost
         return reward.unsqueeze(-1).to(self.dtype)
 

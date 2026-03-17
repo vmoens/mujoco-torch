@@ -32,9 +32,7 @@ class SwimmerEnv(MujocoTorchEnv):
         # Actually gymnasium skips first 2 qpos for swimmer (x, y position)
         # qpos[2:] = 7, qvel = 8 => 15
         return {
-            "observation": Unbounded(
-                shape=(num_envs, 13), dtype=dtype, device=device
-            ),
+            "observation": Unbounded(shape=(num_envs, 13), dtype=dtype, device=device),
         }
 
     def _make_obs(self):
@@ -49,14 +47,10 @@ class SwimmerEnv(MujocoTorchEnv):
         return {"observation": obs}
 
     def _compute_reward(self, qpos_before, action):
-        forward_vel = (
-            (self._dx.qpos[..., 0] - qpos_before[..., 0]) / self._dt
-        )
+        forward_vel = (self._dx.qpos[..., 0] - qpos_before[..., 0]) / self._dt
         ctrl_cost = self.CTRL_COST_WEIGHT * (action**2).sum(dim=-1)
         reward = forward_vel - ctrl_cost
         return reward.unsqueeze(-1).to(self.dtype)
 
     def _compute_terminated(self):
-        return torch.zeros(
-            *self.batch_size, 1, dtype=torch.bool, device=self.device
-        )
+        return torch.zeros(*self.batch_size, 1, dtype=torch.bool, device=self.device)

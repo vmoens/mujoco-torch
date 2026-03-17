@@ -130,10 +130,12 @@ def train_sac(env, args, logger, eval_env=None):
     target_updater = SoftUpdate(loss_module, tau=0.005)
 
     optimizer_actor = torch.optim.Adam(
-        loss_module.actor_network_params.flatten_keys().values(), lr=3e-4,
+        loss_module.actor_network_params.flatten_keys().values(),
+        lr=3e-4,
     )
     optimizer_critic = torch.optim.Adam(
-        loss_module.qvalue_network_params.flatten_keys().values(), lr=3e-4,
+        loss_module.qvalue_network_params.flatten_keys().values(),
+        lr=3e-4,
     )
     optimizer_alpha = torch.optim.Adam([loss_module.log_alpha], lr=3e-4)
     optimizer = group_optimizers(optimizer_actor, optimizer_critic, optimizer_alpha)
@@ -175,11 +177,7 @@ def train_sac(env, args, logger, eval_env=None):
                 sample = replay_buffer.sample()
                 loss_td = loss_module(sample)
 
-                total_loss = (
-                    loss_td["loss_actor"]
-                    + loss_td["loss_qvalue"]
-                    + loss_td["loss_alpha"]
-                )
+                total_loss = loss_td["loss_actor"] + loss_td["loss_qvalue"] + loss_td["loss_alpha"]
                 total_loss.backward()
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -209,12 +207,7 @@ def train_sac(env, args, logger, eval_env=None):
         if (step_idx + 1) % args.log_interval == 0 or step_idx == 0:
             recent = reward_log[-args.log_interval :]
             mean_r = sum(recent) / len(recent)
-            print(
-                f"  step {step_idx + 1} | "
-                f"frames={total_frames} | "
-                f"fps={fps:.0f} | "
-                f"mean_reward={mean_r:.4f}"
-            )
+            print(f"  step {step_idx + 1} | frames={total_frames} | fps={fps:.0f} | mean_reward={mean_r:.4f}")
 
     collector.shutdown()
     print(f"SAC training done. {total_frames} total frames.")
@@ -238,8 +231,9 @@ def main():
     parser.add_argument("--buffer_size", type=int, default=1_000_000)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--warmup", type=int, default=10_000)
-    parser.add_argument("--utd_ratio", type=float, default=0.25,
-                        help="Update-to-data ratio (gradient updates per env step)")
+    parser.add_argument(
+        "--utd_ratio", type=float, default=0.25, help="Update-to-data ratio (gradient updates per env step)"
+    )
 
     parser.add_argument("--wandb_project", type=str, default="mujoco-torch-zoo")
     parser.add_argument("--record_video", action="store_true", help="Record eval videos to wandb")

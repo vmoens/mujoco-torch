@@ -71,9 +71,7 @@ class MujocoTorchEnv(EnvBase):
             dtype=dtype,
             device=self.device,
         )
-        self.reward_spec = Unbounded(
-            shape=(num_envs, 1), dtype=dtype, device=self.device
-        )
+        self.reward_spec = Unbounded(shape=(num_envs, 1), dtype=dtype, device=self.device)
 
         d_mj = mujoco.MjData(m_mj)
         mujoco.mj_forward(m_mj, d_mj)
@@ -102,9 +100,7 @@ class MujocoTorchEnv(EnvBase):
 
     @staticmethod
     @abstractmethod
-    def _obs_spec_dict(
-        num_envs: int, dtype: torch.dtype, device: torch.device
-    ) -> dict:
+    def _obs_spec_dict(num_envs: int, dtype: torch.dtype, device: torch.device) -> dict:
         """Return a dict of TorchRL specs for the observation space."""
         ...
 
@@ -114,9 +110,7 @@ class MujocoTorchEnv(EnvBase):
         ...
 
     @abstractmethod
-    def _compute_reward(
-        self, qpos_before: torch.Tensor, action: torch.Tensor
-    ) -> torch.Tensor:
+    def _compute_reward(self, qpos_before: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         """Compute per-env reward.  Shape: ``(num_envs, 1)``."""
         ...
 
@@ -136,10 +130,7 @@ class MujocoTorchEnv(EnvBase):
 
         Subclasses can override for environment-specific framing.
         """
-        return (
-            '<camera name="side" pos="0 -4 3" '
-            'xyaxes="1 0 0 0 0.45 1" fovy="60"/>'
-        )
+        return '<camera name="side" pos="0 -4 3" xyaxes="1 0 0 0 0.45 1" fovy="60"/>'
 
     @classmethod
     def _patch_xml(cls, xml: str) -> str:
@@ -187,9 +178,7 @@ class MujocoTorchEnv(EnvBase):
 
         if reset_mask is None or not hasattr(self, "_dx"):
             self._dx = self._make_batch(self.num_envs)
-            self._step_count = torch.zeros(
-                self.num_envs, dtype=torch.long, device=self.device
-            )
+            self._step_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         else:
             n_reset = int(reset_mask.sum())
             if n_reset > 0:
@@ -199,12 +188,8 @@ class MujocoTorchEnv(EnvBase):
         return TensorDict(
             {
                 **self._make_obs(),
-                "done": torch.zeros(
-                    *self.batch_size, 1, dtype=torch.bool, device=self.device
-                ),
-                "terminated": torch.zeros(
-                    *self.batch_size, 1, dtype=torch.bool, device=self.device
-                ),
+                "done": torch.zeros(*self.batch_size, 1, dtype=torch.bool, device=self.device),
+                "terminated": torch.zeros(*self.batch_size, 1, dtype=torch.bool, device=self.device),
             },
             batch_size=self.batch_size,
             device=self.device,
@@ -218,11 +203,7 @@ class MujocoTorchEnv(EnvBase):
         self._dx = self._dx.replace(ctrl=action)
         step_fn = self._physics_step
         for _ in range(self.FRAME_SKIP):
-            self._dx = (
-                step_fn(self._dx[0]).unsqueeze(0)
-                if self.num_envs == 1
-                else torch.vmap(step_fn)(self._dx)
-            )
+            self._dx = step_fn(self._dx[0]).unsqueeze(0) if self.num_envs == 1 else torch.vmap(step_fn)(self._dx)
         self._step_count += 1
 
         reward = self._compute_reward(qpos_before, action)

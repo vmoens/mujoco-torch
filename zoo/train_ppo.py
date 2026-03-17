@@ -149,11 +149,7 @@ def train_ppo(env, args, logger, eval_env=None):
 
     num_batches = len(collector)
     print(f"PPO | obs_dim={obs_dim} act_dim={act_dim} device={device}")
-    print(
-        f"  frames_per_batch={frames_per_batch} "
-        f"num_batches={num_batches} "
-        f"mini_batch_size={mini_batch_size}"
-    )
+    print(f"  frames_per_batch={frames_per_batch} num_batches={num_batches} mini_batch_size={mini_batch_size}")
 
     total_frames = 0
     t0 = time.perf_counter()
@@ -167,11 +163,7 @@ def train_ppo(env, args, logger, eval_env=None):
             data_buffer.extend(batch.reshape(-1))
             for mb in data_buffer:
                 loss_vals = loss_module(mb)
-                loss = (
-                    loss_vals["loss_objective"]
-                    + loss_vals["loss_critic"]
-                    + loss_vals["loss_entropy"]
-                )
+                loss = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
                 optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(loss_module.parameters(), 0.5)
@@ -185,11 +177,13 @@ def train_ppo(env, args, logger, eval_env=None):
             ep_reward = batch["next", "episode_reward"].squeeze(-1)[done_mask].mean().item()
         else:
             ep_reward = batch["next", "episode_reward"][:, -1].mean().item()
-        logger.experiment.log({
-            "reward/episode_reward": ep_reward,
-            "perf/fps": fps,
-            "global_step": total_frames,
-        })
+        logger.experiment.log(
+            {
+                "reward/episode_reward": ep_reward,
+                "perf/fps": fps,
+                "global_step": total_frames,
+            }
+        )
 
         if eval_env is not None and (batch_idx == 0 or (batch_idx + 1) % args.eval_interval == 0):
             _run_eval(eval_env, actor, total_frames, logger, max_steps=args.eval_steps)

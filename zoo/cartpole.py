@@ -22,18 +22,13 @@ class CartPoleEnv(MujocoTorchEnv):
 
     @classmethod
     def _camera_xml(cls) -> str:
-        return (
-            '<camera name="side" pos="0 -2 1.5" '
-            'xyaxes="1 0 0 0 0.45 1" fovy="60"/>'
-        )
+        return '<camera name="side" pos="0 -2 1.5" xyaxes="1 0 0 0 0.45 1" fovy="60"/>'
 
     @staticmethod
     def _obs_spec_dict(num_envs, dtype, device):
         # nq=2 (slider + hinge), nv=2 => obs dim = 4
         return {
-            "observation": Unbounded(
-                shape=(num_envs, 4), dtype=dtype, device=device
-            ),
+            "observation": Unbounded(shape=(num_envs, 4), dtype=dtype, device=device),
         }
 
     def _make_obs(self):
@@ -42,9 +37,7 @@ class CartPoleEnv(MujocoTorchEnv):
         return {"observation": torch.cat([qpos, qvel], dim=-1)}
 
     def _compute_reward(self, qpos_before, action):
-        return torch.ones(
-            *self.batch_size, 1, dtype=self.dtype, device=self.device
-        )
+        return torch.ones(*self.batch_size, 1, dtype=self.dtype, device=self.device)
 
     def _compute_terminated(self):
         angle = self._dx.qpos[..., 1]  # hinge joint = pole angle

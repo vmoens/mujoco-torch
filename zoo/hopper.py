@@ -28,9 +28,7 @@ class HopperEnv(MujocoTorchEnv):
         # nq=6 (rootx, rootz, rooty + 3 hinge), nv=6
         # obs = qpos[1:] (5) + clipped qvel (6) = 11
         return {
-            "observation": Unbounded(
-                shape=(num_envs, 11), dtype=dtype, device=device
-            ),
+            "observation": Unbounded(shape=(num_envs, 11), dtype=dtype, device=device),
         }
 
     def _make_obs(self):
@@ -39,13 +37,9 @@ class HopperEnv(MujocoTorchEnv):
         return {"observation": torch.cat([qpos[..., 1:], qvel], dim=-1)}
 
     def _compute_reward(self, qpos_before, action):
-        forward_vel = (
-            (self._dx.qpos[..., 0] - qpos_before[..., 0]) / self._dt
-        )
+        forward_vel = (self._dx.qpos[..., 0] - qpos_before[..., 0]) / self._dt
         ctrl_cost = self.CTRL_COST_WEIGHT * (action**2).sum(dim=-1)
-        healthy_reward = torch.where(
-            self._is_healthy(), self.HEALTHY_REWARD, 0.0
-        )
+        healthy_reward = torch.where(self._is_healthy(), self.HEALTHY_REWARD, 0.0)
         reward = forward_vel + healthy_reward - ctrl_cost
         return reward.unsqueeze(-1).to(self.dtype)
 
