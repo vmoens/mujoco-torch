@@ -382,6 +382,7 @@ def main():
     parser.add_argument("--num_envs", type=int, default=64)
     parser.add_argument("--total_steps", type=int, default=1_000_000)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--compile", action="store_true", help="torch.compile the physics step")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log_interval", type=int, default=10)
 
@@ -417,8 +418,9 @@ def main():
     transforms = [RewardSum()]
     if args.algo == "sac":
         transforms.insert(0, InitTracker())
+    env_kwargs = {"device": args.device, "compile_step": args.compile}
     env = TransformedEnv(
-        env_cls(num_envs=args.num_envs, device=args.device),
+        env_cls(num_envs=args.num_envs, **env_kwargs),
         Compose(*transforms),
     )
     print(f"Env: {args.env} | batch_size={env.batch_size} | device={env.device}")
@@ -430,7 +432,7 @@ def main():
             VideoRecorder(logger=logger, tag="eval_video", skip=1, make_grid=False),
         ] + eval_transforms
     eval_env = TransformedEnv(
-        env_cls(num_envs=1, device=args.device),
+        env_cls(num_envs=1, **env_kwargs),
         Compose(*eval_transforms),
     )
 

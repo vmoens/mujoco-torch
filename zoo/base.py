@@ -34,6 +34,7 @@ class MujocoTorchEnv(EnvBase):
     """
 
     RESET_NOISE_SCALE = 0.01
+    FRAME_SKIP = 1
 
     def __init__(
         self,
@@ -41,6 +42,7 @@ class MujocoTorchEnv(EnvBase):
         max_episode_steps: int = 1000,
         device=None,
         dtype=torch.float64,
+        compile_step: bool = False,
     ):
         super().__init__(device=device, batch_size=torch.Size([num_envs]))
         self.dtype = dtype
@@ -51,7 +53,7 @@ class MujocoTorchEnv(EnvBase):
         xml_string = self._patch_xml(xml_string)
         m_mj = mujoco.MjModel.from_xml_string(xml_string)
         self._m_mj = m_mj
-        self._dt = m_mj.opt.timestep
+        self._dt = m_mj.opt.timestep * self.FRAME_SKIP
         self.mx = mujoco_torch.device_put(m_mj)
         if device is not None:
             self.mx = self.mx.to(device)
@@ -82,6 +84,11 @@ class MujocoTorchEnv(EnvBase):
         dx0 = mujoco_torch.step(self.mx, dx0)
         self._dx0 = dx0
         self._render_precomp = mujoco_torch.precompute_render_data(self.mx)
+
+        _step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
+        if compile_step:
+            _step_fn = torch.compile(_step_fn)
+        self._physics_step = _step_fn
 
     # ------------------------------------------------------------------
     # Subclass interface
@@ -209,12 +216,13 @@ class MujocoTorchEnv(EnvBase):
         qpos_before = self._dx.qpos.clone()
 
         self._dx = self._dx.replace(ctrl=action)
-        step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
-        self._dx = (
-            step_fn(self._dx[0]).unsqueeze(0)
-            if self.num_envs == 1
-            else torch.vmap(step_fn)(self._dx)
-        )
+        step_fn = self._physics_step
+        for _ in range(self.FRAME_SKIP):
+            self._dx = (
+                step_fn(self._dx[0]).unsqueeze(0)
+                if self.num_envs == 1
+                else torch.vmap(step_fn)(self._dx)
+            )
         self._step_count += 1
 
         reward = self._compute_reward(qpos_before, action)

@@ -23,6 +23,7 @@ class AntEnv(MujocoTorchEnv):
     """Ant: quadruped locomotion."""
 
     RESET_NOISE_SCALE = 0.1
+    FRAME_SKIP = 5
     HEALTHY_Z_LOW = 0.2
     HEALTHY_Z_HIGH = 1.0
     HEALTHY_REWARD = 1.0
@@ -34,14 +35,21 @@ class AntEnv(MujocoTorchEnv):
 
     @classmethod
     def _patch_xml(cls, xml: str) -> str:
-        """Insert a freejoint on the torso so the ant can translate/rotate."""
+        """Insert a freejoint and set timestep=0.01 (matching Gymnasium Ant-v4)."""
         xml = super()._patch_xml(xml)
-        return re.sub(
+        xml = re.sub(
             r'(<body\s+name="torso"[^>]*>)',
             r"\1\n      <freejoint name='root'/>",
             xml,
             count=1,
         )
+        xml = re.sub(
+            r'(<compiler\b[^/]*/>\s*)',
+            r'\1<option timestep="0.01"/>\n  ',
+            xml,
+            count=1,
+        )
+        return xml
 
     @staticmethod
     def _obs_spec_dict(num_envs, dtype, device):
