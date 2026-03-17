@@ -28,7 +28,15 @@ def apply() -> bool:
     marker = "                    s = t.storage\n"
     if marker not in src:
         return False
-    if "is_traceable_wrapper_subclass" in src:
+    # Check for the specific guard pattern from PR #176977: the storage block
+    # must be wrapped with ``if not t.is_traceable_wrapper_subclass:``.
+    # A simple substring check is too broad because nightly may already
+    # contain is_traceable_wrapper_subclass in *other* code paths.
+    import re
+
+    if re.search(
+        r"not\s+t\.is_traceable_wrapper_subclass.*\n\s+s = t\.storage", src
+    ):
         return False
 
     src = textwrap.dedent(src)
