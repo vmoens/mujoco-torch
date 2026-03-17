@@ -13,13 +13,11 @@ https://github.com/pytorch/pytorch/pull/175852
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, NoReturn
+from typing import Any, Callable, NoReturn
 
 import torch
 from torch import Tensor
 from torch._functorch.vmap import (
-    TreeSpec,
     _add_batch_dim,
     _broadcast_to_and_flatten,
     _get_name,
@@ -30,6 +28,7 @@ from torch._functorch.vmap import (
     out_dims_t,
     tree_flatten,
     tree_unflatten,
+    TreeSpec,
     vmap_increment_nesting,
 )
 
@@ -101,7 +100,11 @@ def _patched_process_batched_inputs(
                 f"Got in_dim={in_dim} for an input but in_dim must be either "
                 f"an integer dimension or None."
             )
-        if isinstance(in_dim, int) and not isinstance(arg, Tensor) and not _is_vmappable(arg):
+        if (
+            isinstance(in_dim, int)
+            and not isinstance(arg, Tensor)
+            and not _is_vmappable(arg)
+        ):
             raise ValueError(
                 f"vmap({_get_name(func)}, in_dims={in_dims}, ...): "
                 f"Got in_dim={in_dim} for an input but the input is of type "
@@ -161,8 +164,13 @@ def _patched_maybe_remove_batch_dim(
         )
 
     if out_dim is None:
-        if isinstance(batched_output, torch.Tensor) and is_batchedtensor(batched_output):
-            raise ValueError(f"vmap({name}, ...): `{name}` can not return a BatchedTensor when out_dim is None")
+        if isinstance(batched_output, torch.Tensor) and is_batchedtensor(
+            batched_output
+        ):
+            raise ValueError(
+                f"vmap({name}, ...): `{name}` can not return a "
+                f"BatchedTensor when out_dim is None"
+            )
         return batched_output
 
     if isinstance(batched_output, torch.Tensor):
@@ -188,7 +196,9 @@ def _patched_unwrap_batched(
     batch_size: int,
     func: Callable[..., Any],
 ) -> tuple[Any, ...]:
-    flat_batched_outputs, output_spec = tree_flatten(batched_outputs, is_leaf=_is_vmappable)
+    flat_batched_outputs, output_spec = tree_flatten(
+        batched_outputs, is_leaf=_is_vmappable
+    )
 
     def incompatible_error() -> NoReturn:
         raise ValueError(
@@ -216,7 +226,9 @@ def _patched_unwrap_batched(
             flat_out_dims = broadcast_result
 
     flat_outputs = [
-        _patched_maybe_remove_batch_dim(_get_name(func), batched_output, vmap_level, batch_size, out_dim)
+        _patched_maybe_remove_batch_dim(
+            _get_name(func), batched_output, vmap_level, batch_size, out_dim
+        )
         for batched_output, out_dim in zip(flat_batched_outputs, flat_out_dims)
     ]
     return tree_unflatten(flat_outputs, output_spec)
@@ -233,9 +245,13 @@ def _patched_flat_vmap(
     **kwargs: Any,
 ) -> Any:
     with vmap_increment_nesting(batch_size, randomness) as vmap_level:
-        batched_inputs = _patched_create_batched_inputs(flat_in_dims, flat_args, vmap_level, args_spec)
+        batched_inputs = _patched_create_batched_inputs(
+            flat_in_dims, flat_args, vmap_level, args_spec
+        )
         batched_outputs = func(*batched_inputs, **kwargs)
-        return _patched_unwrap_batched(batched_outputs, out_dims, vmap_level, batch_size, func)
+        return _patched_unwrap_batched(
+            batched_outputs, out_dims, vmap_level, batch_size, func
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -245,9 +261,6 @@ def _patched_flat_vmap(
 
 def apply() -> bool:
     import torch._functorch.vmap as _vmap
-
-    if hasattr(_vmap, "_is_vmappable"):
-        return False
 
     _vmap._vmappable_cls_cache = _vmappable_cls_cache
     _vmap.register_vmappable_cls = register_vmappable_cls

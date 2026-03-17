@@ -11,7 +11,7 @@ https://github.com/pytorch/pytorch/pull/175526
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import Callable
 
 import torch
 import torch.utils._pytree as pytree
@@ -21,9 +21,8 @@ def apply() -> bool:
     from torch._higher_order_ops.while_loop import while_loop_op
 
     transform_type = torch._C._functorch.TransformType.Vmap
-    for table_attr in ("py_impls", "functorch_table"):
-        if transform_type in getattr(while_loop_op, table_attr, {}):
-            return False
+    if transform_type in while_loop_op.py_impls:
+        return False
 
     @while_loop_op.py_impl(transform_type)
     def while_loop_vmap(
@@ -58,17 +57,23 @@ def apply() -> bool:
             t.movedim(bdim, 0) if bdim is not None and bdim != 0 else t
             for t, bdim in zip(flat_carried, flat_carried_bdims, strict=True)
         ]
-        flat_carried_bdims = [0 if bdim is not None else None for bdim in flat_carried_bdims]
+        flat_carried_bdims = [
+            0 if bdim is not None else None for bdim in flat_carried_bdims
+        ]
 
         flat_additional = [
             t.movedim(bdim, 0) if bdim is not None and bdim != 0 else t
             for t, bdim in zip(flat_additional, flat_additional_bdims, strict=True)
         ]
-        flat_additional_bdims = [0 if bdim is not None else None for bdim in flat_additional_bdims]
+        flat_additional_bdims = [
+            0 if bdim is not None else None for bdim in flat_additional_bdims
+        ]
         additional_in_dims = tuple(flat_additional_bdims)
 
         flat_carried = [
-            t.unsqueeze(0).expand(batch_size, *t.shape).contiguous() if bdim is None else t
+            t.unsqueeze(0).expand(batch_size, *t.shape).contiguous()
+            if bdim is None
+            else t
             for t, bdim in zip(flat_carried, flat_carried_bdims, strict=True)
         ]
         flat_carried_bdims = [0] * len(flat_carried)
@@ -116,7 +121,9 @@ def apply() -> bool:
                     for t, bdim in zip(flat_new, flat_new_bdims, strict=True)
                 ]
                 flat_new = [
-                    t.unsqueeze(0).expand(batch_size, *t.shape) if bdim is None else t
+                    t.unsqueeze(0).expand(batch_size, *t.shape)
+                    if bdim is None
+                    else t
                     for t, bdim in zip(flat_new, flat_new_bdims, strict=True)
                 ]
 
