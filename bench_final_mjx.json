@@ -1,0 +1,1421 @@
+{
+    "machine_info": {
+        "node": "slurm-h200-206-167",
+        "processor": "x86_64",
+        "machine": "x86_64",
+        "python_compiler": "GCC 13.3.0",
+        "python_implementation": "CPython",
+        "python_implementation_version": "3.12.3",
+        "python_version": "3.12.3",
+        "python_build": [
+            "main",
+            "Jan  8 2026 11:30:50"
+        ],
+        "release": "6.8.12-680-6063-coreweave-amd64-f81899c8",
+        "system": "Linux",
+        "cpu": {
+            "python_version": "3.12.3.final.0 (64 bit)",
+            "cpuinfo_version": [
+                9,
+                0,
+                0
+            ],
+            "cpuinfo_version_string": "9.0.0",
+            "arch": "X86_64",
+            "bits": 64,
+            "count": 128,
+            "arch_string_raw": "x86_64",
+            "vendor_id_raw": "GenuineIntel",
+            "brand_raw": "INTEL(R) XEON(R) PLATINUM 8562Y+",
+            "hz_advertised_friendly": "3.7911 GHz",
+            "hz_actual_friendly": "3.7911 GHz",
+            "hz_advertised": [
+                3791107000,
+                0
+            ],
+            "hz_actual": [
+                3791107000,
+                0
+            ],
+            "stepping": 2,
+            "model": 207,
+            "family": 6,
+            "flags": [
+                "3dnowprefetch",
+                "abm",
+                "acpi",
+                "adx",
+                "aes",
+                "amx_bf16",
+                "amx_int8",
+                "amx_tile",
+                "aperfmperf",
+                "apic",
+                "arat",
+                "arch_capabilities",
+                "arch_lbr",
+                "arch_perfmon",
+                "art",
+                "avx",
+                "avx2",
+                "avx512_bf16",
+                "avx512_bitalg",
+                "avx512_fp16",
+                "avx512_vbmi2",
+                "avx512_vnni",
+                "avx512_vpopcntdq",
+                "avx512bitalg",
+                "avx512bw",
+                "avx512cd",
+                "avx512dq",
+                "avx512f",
+                "avx512ifma",
+                "avx512vbmi",
+                "avx512vbmi2",
+                "avx512vl",
+                "avx512vnni",
+                "avx512vpopcntdq",
+                "avx_vnni",
+                "bmi1",
+                "bmi2",
+                "bts",
+                "bus_lock_detect",
+                "cat_l2",
+                "cat_l3",
+                "cdp_l2",
+                "cdp_l3",
+                "cldemote",
+                "clflush",
+                "clflushopt",
+                "clwb",
+                "cmov",
+                "constant_tsc",
+                "cpuid",
+                "cpuid_fault",
+                "cqm",
+                "cqm_llc",
+                "cqm_mbm_local",
+                "cqm_mbm_total",
+                "cqm_occup_llc",
+                "cx16",
+                "cx8",
+                "dca",
+                "de",
+                "ds_cpl",
+                "dtes64",
+                "dtherm",
+                "dts",
+                "enqcmd",
+                "epb",
+                "ept",
+                "ept_ad",
+                "erms",
+                "est",
+                "f16c",
+                "flexpriority",
+                "flush_l1d",
+                "fma",
+                "fpu",
+                "fsgsbase",
+                "fsrm",
+                "fxsr",
+                "gfni",
+                "hfi",
+                "ht",
+                "ibpb",
+                "ibrs",
+                "ibrs_enhanced",
+                "ibt",
+                "ida",
+                "intel_pt",
+                "invpcid",
+                "la57",
+                "lahf_lm",
+                "lm",
+                "mba",
+                "mca",
+                "mce",
+                "md_clear",
+                "mmx",
+                "monitor",
+                "movbe",
+                "movdir64b",
+                "movdiri",
+                "msr",
+                "mtrr",
+                "nonstop_tsc",
+                "nopl",
+                "nx",
+                "ospke",
+                "osxsave",
+                "pae",
+                "pat",
+                "pbe",
+                "pcid",
+                "pclmulqdq",
+                "pconfig",
+                "pdcm",
+                "pdpe1gb",
+                "pebs",
+                "pge",
+                "pku",
+                "pln",
+                "pni",
+                "popcnt",
+                "pqe",
+                "pqm",
+                "pse",
+                "pse36",
+                "pts",
+                "rdpid",
+                "rdrand",
+                "rdrnd",
+                "rdseed",
+                "rdt_a",
+                "rdtscp",
+                "rep_good",
+                "sdbg",
+                "sep",
+                "serialize",
+                "sgx",
+                "sgx_lc",
+                "sha",
+                "sha_ni",
+                "smap",
+                "smep",
+                "smx",
+                "split_lock_detect",
+                "ss",
+                "ssbd",
+                "sse",
+                "sse2",
+                "sse4_1",
+                "sse4_2",
+                "ssse3",
+                "stibp",
+                "syscall",
+                "tm",
+                "tm2",
+                "tme",
+                "tpr_shadow",
+                "tsc",
+                "tsc_adjust",
+                "tsc_deadline_timer",
+                "tsc_known_freq",
+                "tscdeadline",
+                "tsxldtrk",
+                "umip",
+                "user_shstk",
+                "vaes",
+                "vme",
+                "vmx",
+                "vnmi",
+                "vpclmulqdq",
+                "vpid",
+                "waitpkg",
+                "wbnoinvd",
+                "x2apic",
+                "xgetbv1",
+                "xsave",
+                "xsavec",
+                "xsaveopt",
+                "xsaves",
+                "xtopology",
+                "xtpr"
+            ],
+            "l3_cache_size": 62914560,
+            "l2_cache_size": 134217728,
+            "l1_data_cache_size": 3145728,
+            "l1_instruction_cache_size": 2097152,
+            "l2_cache_line_size": 2048,
+            "l2_cache_associativity": 7
+        }
+    },
+    "commit_info": {
+        "id": "d9998d5ebaa6a22447e0cd5adca1dca22b13b652",
+        "time": "2026-03-07T07:43:36+01:00",
+        "author_time": "2026-03-06T15:29:14+00:00",
+        "dirty": false,
+        "project": "mujoco-torch",
+        "branch": "compile-ablation"
+    },
+    "benchmarks": [
+        {
+            "group": null,
+            "name": "test_mjx_vmap[humanoid-32768]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[humanoid-32768]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 32768
+            },
+            "param": "humanoid-32768",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 32768,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 2374166.3470183723
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 1.3782982409466058,
+                "max": 1.382081211078912,
+                "mean": 1.380189726012759,
+                "stddev": 0.0026749638335798976,
+                "rounds": 2,
+                "median": 1.380189726012759,
+                "iqr": 0.003782970132306218,
+                "q1": 1.3782982409466058,
+                "q3": 1.382081211078912,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 1.3782982409466058,
+                "hd15iqr": 1.382081211078912,
+                "ops": 0.7245380697687904,
+                "total": 2.760379452025518,
+                "data": [
+                    1.382081211078912,
+                    1.3782982409466058
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[humanoid-4096]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[humanoid-4096]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 4096
+            },
+            "param": "humanoid-4096",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 4096,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 2205810.4515936617
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.18438694393262267,
+                "max": 0.18699582805857062,
+                "mean": 0.18569138599559665,
+                "stddev": 0.001844759656787736,
+                "rounds": 2,
+                "median": 0.18569138599559665,
+                "iqr": 0.0026088841259479523,
+                "q1": 0.18438694393262267,
+                "q3": 0.18699582805857062,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.18438694393262267,
+                "hd15iqr": 0.18699582805857062,
+                "ops": 5.3852794228360885,
+                "total": 0.3713827719911933,
+                "data": [
+                    0.18699582805857062,
+                    0.18438694393262267
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[humanoid-1024]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[humanoid-1024]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 1024
+            },
+            "param": "humanoid-1024",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 1024,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 795243.8115398093
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.12866937997750938,
+                "max": 0.128861702978611,
+                "mean": 0.12876554147806019,
+                "stddev": 0.00013599289825709843,
+                "rounds": 2,
+                "median": 0.12876554147806019,
+                "iqr": 0.00019232300110161304,
+                "q1": 0.12866937997750938,
+                "q3": 0.128861702978611,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.12866937997750938,
+                "hd15iqr": 0.128861702978611,
+                "ops": 7.766052847068451,
+                "total": 0.25753108295612037,
+                "data": [
+                    0.128861702978611,
+                    0.12866937997750938
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[humanoid-128]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[humanoid-128]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 128
+            },
+            "param": "humanoid-128",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 128,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 108802.65780697759
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.11619400000199676,
+                "max": 0.11909436993300915,
+                "mean": 0.11764418496750295,
+                "stddev": 0.0020508712461684213,
+                "rounds": 2,
+                "median": 0.11764418496750295,
+                "iqr": 0.002900369931012392,
+                "q1": 0.11619400000199676,
+                "q3": 0.11909436993300915,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.11619400000199676,
+                "hd15iqr": 0.11909436993300915,
+                "ops": 8.500207641170125,
+                "total": 0.2352883699350059,
+                "data": [
+                    0.11909436993300915,
+                    0.11619400000199676
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[humanoid-1]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[humanoid-1]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 1
+            },
+            "param": "humanoid-1",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 1,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 829.41947278244
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.11929127387702465,
+                "max": 0.12184123694896698,
+                "mean": 0.12056625541299582,
+                "stddev": 0.0018030961799457013,
+                "rounds": 2,
+                "median": 0.12056625541299582,
+                "iqr": 0.0025499630719423294,
+                "q1": 0.11929127387702465,
+                "q3": 0.12184123694896698,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.11929127387702465,
+                "hd15iqr": 0.12184123694896698,
+                "ops": 8.2941947278244,
+                "total": 0.24113251082599163,
+                "data": [
+                    0.12184123694896698,
+                    0.11929127387702465
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[ant-32768]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[ant-32768]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 32768
+            },
+            "param": "ant-32768",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 32768,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 923870.863143144
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 3.544295554049313,
+                "max": 3.5493365339934826,
+                "mean": 3.546816044021398,
+                "stddev": 0.0035645111023476523,
+                "rounds": 2,
+                "median": 3.546816044021398,
+                "iqr": 0.005040979944169521,
+                "q1": 3.544295554049313,
+                "q3": 3.5493365339934826,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 3.544295554049313,
+                "hd15iqr": 3.5493365339934826,
+                "ops": 0.2819430124338208,
+                "total": 7.093632088042796,
+                "data": [
+                    3.5493365339934826,
+                    3.544295554049313
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[ant-4096]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[ant-4096]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 4096
+            },
+            "param": "ant-4096",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 4096,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 880360.8176108592
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.46524041797965765,
+                "max": 0.4652871380094439,
+                "mean": 0.46526377799455076,
+                "stddev": 3.303604987908011e-05,
+                "rounds": 2,
+                "median": 0.46526377799455076,
+                "iqr": 4.6720029786229134e-05,
+                "q1": 0.46524041797965765,
+                "q3": 0.4652871380094439,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.46524041797965765,
+                "hd15iqr": 0.4652871380094439,
+                "ops": 2.1493184023702616,
+                "total": 0.9305275559891015,
+                "data": [
+                    0.4652871380094439,
+                    0.46524041797965765
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[ant-1024]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[ant-1024]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 1024
+            },
+            "param": "ant-1024",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 1024,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 652280.6234837454
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.1557586370036006,
+                "max": 0.1582166561856866,
+                "mean": 0.1569876465946436,
+                "stddev": 0.0017380820319396152,
+                "rounds": 2,
+                "median": 0.1569876465946436,
+                "iqr": 0.002458019182085991,
+                "q1": 0.1557586370036006,
+                "q3": 0.1582166561856866,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.1557586370036006,
+                "hd15iqr": 0.1582166561856866,
+                "ops": 6.369927963708451,
+                "total": 0.3139752931892872,
+                "data": [
+                    0.1582166561856866,
+                    0.1557586370036006
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[ant-128]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[ant-128]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 128
+            },
+            "param": "ant-128",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 128,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 103651.20902125031
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.12234837911091745,
+                "max": 0.12463378580287099,
+                "mean": 0.12349108245689422,
+                "stddev": 0.001616026569649463,
+                "rounds": 2,
+                "median": 0.12349108245689422,
+                "iqr": 0.00228540669195354,
+                "q1": 0.12234837911091745,
+                "q3": 0.12463378580287099,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.12234837911091745,
+                "hd15iqr": 0.12463378580287099,
+                "ops": 8.09775070478518,
+                "total": 0.24698216491378844,
+                "data": [
+                    0.12463378580287099,
+                    0.12234837911091745
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[ant-1]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[ant-1]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 1
+            },
+            "param": "ant-1",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 1,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 852.9380544820982
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.11562256491743028,
+                "max": 0.11886105197481811,
+                "mean": 0.1172418084461242,
+                "stddev": 0.0022899561590638017,
+                "rounds": 2,
+                "median": 0.1172418084461242,
+                "iqr": 0.003238487057387829,
+                "q1": 0.11562256491743028,
+                "q3": 0.11886105197481811,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.11562256491743028,
+                "hd15iqr": 0.11886105197481811,
+                "ops": 8.529380544820983,
+                "total": 0.2344836168922484,
+                "data": [
+                    0.11886105197481811,
+                    0.11562256491743028
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[halfcheetah-32768]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[halfcheetah-32768]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 32768
+            },
+            "param": "halfcheetah-32768",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 32768,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 2767736.8505758364
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 1.18350740801543,
+                "max": 1.1843477580696344,
+                "mean": 1.1839275830425322,
+                "stddev": 0.0005942172218984592,
+                "rounds": 2,
+                "median": 1.1839275830425322,
+                "iqr": 0.000840350054204464,
+                "q1": 1.18350740801543,
+                "q3": 1.1843477580696344,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 1.18350740801543,
+                "hd15iqr": 1.1843477580696344,
+                "ops": 0.8446462556688954,
+                "total": 2.3678551660850644,
+                "data": [
+                    1.1843477580696344,
+                    1.18350740801543
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[halfcheetah-4096]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[halfcheetah-4096]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 4096
+            },
+            "param": "halfcheetah-4096",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 4096,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 1360843.2607547054
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.2995809118729085,
+                "max": 0.3023987750057131,
+                "mean": 0.3009898434393108,
+                "stddev": 0.0019925301296617242,
+                "rounds": 2,
+                "median": 0.3009898434393108,
+                "iqr": 0.002817863132804632,
+                "q1": 0.2995809118729085,
+                "q3": 0.3023987750057131,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.2995809118729085,
+                "hd15iqr": 0.3023987750057131,
+                "ops": 3.3223712420769176,
+                "total": 0.6019796868786216,
+                "data": [
+                    0.3023987750057131,
+                    0.2995809118729085
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[halfcheetah-1024]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[halfcheetah-1024]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 1024
+            },
+            "param": "halfcheetah-1024",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 1024,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 432451.8542940686
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.23628692794591188,
+                "max": 0.2372918021865189,
+                "mean": 0.2367893650662154,
+                "stddev": 0.0007105533897729084,
+                "rounds": 2,
+                "median": 0.2367893650662154,
+                "iqr": 0.0010048742406070232,
+                "q1": 0.23628692794591188,
+                "q3": 0.2372918021865189,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.23628692794591188,
+                "hd15iqr": 0.2372918021865189,
+                "ops": 4.223162639590514,
+                "total": 0.4735787301324308,
+                "data": [
+                    0.2372918021865189,
+                    0.23628692794591188
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[halfcheetah-128]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[halfcheetah-128]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 128
+            },
+            "param": "halfcheetah-128",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 128,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 57199.34979692203
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.22276891698129475,
+                "max": 0.22478861804120243,
+                "mean": 0.2237787675112486,
+                "stddev": 0.0014281443154303742,
+                "rounds": 2,
+                "median": 0.2237787675112486,
+                "iqr": 0.002019701059907675,
+                "q1": 0.22276891698129475,
+                "q3": 0.22478861804120243,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.22276891698129475,
+                "hd15iqr": 0.22478861804120243,
+                "ops": 4.468699202884534,
+                "total": 0.4475575350224972,
+                "data": [
+                    0.22276891698129475,
+                    0.22478861804120243
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[halfcheetah-1]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[halfcheetah-1]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 1
+            },
+            "param": "halfcheetah-1",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 1,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 570.3465883374452
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.17475269897840917,
+                "max": 0.17591127287596464,
+                "mean": 0.1753319859271869,
+                "stddev": 0.0008192354594672016,
+                "rounds": 2,
+                "median": 0.1753319859271869,
+                "iqr": 0.0011585738975554705,
+                "q1": 0.17475269897840917,
+                "q3": 0.17591127287596464,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.17475269897840917,
+                "hd15iqr": 0.17591127287596464,
+                "ops": 5.703465883374451,
+                "total": 0.3506639718543738,
+                "data": [
+                    0.17591127287596464,
+                    0.17475269897840917
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[walker2d-32768]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[walker2d-32768]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 32768
+            },
+            "param": "walker2d-32768",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 32768,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 402604.17170810635
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 8.114850464044139,
+                "max": 8.163172618020326,
+                "mean": 8.139011541032232,
+                "stddev": 0.0341689227581024,
+                "rounds": 2,
+                "median": 8.139011541032232,
+                "iqr": 0.04832215397618711,
+                "q1": 8.114850464044139,
+                "q3": 8.163172618020326,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 8.114850464044139,
+                "hd15iqr": 8.163172618020326,
+                "ops": 0.1228650426355305,
+                "total": 16.278023082064465,
+                "data": [
+                    8.163172618020326,
+                    8.114850464044139
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[walker2d-4096]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[walker2d-4096]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 4096
+            },
+            "param": "walker2d-4096",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 4096,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 264193.65989557793
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 1.5445939728524536,
+                "max": 1.5561617391649634,
+                "mean": 1.5503778560087085,
+                "stddev": 0.008179646002756965,
+                "rounds": 2,
+                "median": 1.5503778560087085,
+                "iqr": 0.011567766312509775,
+                "q1": 1.5445939728524536,
+                "q3": 1.5561617391649634,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 1.5445939728524536,
+                "hd15iqr": 1.5561617391649634,
+                "ops": 0.6450040524794383,
+                "total": 3.100755712017417,
+                "data": [
+                    1.5561617391649634,
+                    1.5445939728524536
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[walker2d-1024]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[walker2d-1024]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 1024
+            },
+            "param": "walker2d-1024",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 1024,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 90246.78005746797
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 1.1284490569960326,
+                "max": 1.1408839859068394,
+                "mean": 1.134666521451436,
+                "stddev": 0.00879282255640412,
+                "rounds": 2,
+                "median": 1.134666521451436,
+                "iqr": 0.012434928910806775,
+                "q1": 1.1284490569960326,
+                "q3": 1.1408839859068394,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 1.1284490569960326,
+                "hd15iqr": 1.1408839859068394,
+                "ops": 0.8813162114987106,
+                "total": 2.269333042902872,
+                "data": [
+                    1.1408839859068394,
+                    1.1284490569960326
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[walker2d-128]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[walker2d-128]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 128
+            },
+            "param": "walker2d-128",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 128,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 12753.516360093216
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.9970762568991631,
+                "max": 1.010213284054771,
+                "mean": 1.003644770476967,
+                "stddev": 0.009289280986362195,
+                "rounds": 2,
+                "median": 1.003644770476967,
+                "iqr": 0.013137027155607939,
+                "q1": 0.9970762568991631,
+                "q3": 1.010213284054771,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.9970762568991631,
+                "hd15iqr": 1.010213284054771,
+                "ops": 0.9963684656322824,
+                "total": 2.007289540953934,
+                "data": [
+                    0.9970762568991631,
+                    1.010213284054771
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[walker2d-1]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[walker2d-1]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 1
+            },
+            "param": "walker2d-1",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 1,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 188.06729647329732
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.5204970680642873,
+                "max": 0.5429520469624549,
+                "mean": 0.5317245575133711,
+                "stddev": 0.015878067850295146,
+                "rounds": 2,
+                "median": 0.5317245575133711,
+                "iqr": 0.02245497889816761,
+                "q1": 0.5204970680642873,
+                "q3": 0.5429520469624549,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.5204970680642873,
+                "hd15iqr": 0.5429520469624549,
+                "ops": 1.8806729647329732,
+                "total": 1.0634491150267422,
+                "data": [
+                    0.5429520469624549,
+                    0.5204970680642873
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[hopper-32768]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[hopper-32768]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 32768
+            },
+            "param": "hopper-32768",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 32768,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 7762885.8989031585
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.4213294780347496,
+                "max": 0.4228926431387663,
+                "mean": 0.42211106058675796,
+                "stddev": 0.0011053246451643564,
+                "rounds": 2,
+                "median": 0.42211106058675796,
+                "iqr": 0.0015631651040166616,
+                "q1": 0.4213294780347496,
+                "q3": 0.4228926431387663,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.4213294780347496,
+                "hd15iqr": 0.4228926431387663,
+                "ops": 2.3690447689523797,
+                "total": 0.8442221211735159,
+                "data": [
+                    0.4228926431387663,
+                    0.4213294780347496
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[hopper-4096]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[hopper-4096]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 4096
+            },
+            "param": "hopper-4096",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 4096,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 977780.914561625
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.15103778499178588,
+                "max": 0.6867777090519667,
+                "mean": 0.4189077470218763,
+                "stddev": 0.37882533325531986,
+                "rounds": 2,
+                "median": 0.4189077470218763,
+                "iqr": 0.5357399240601808,
+                "q1": 0.15103778499178588,
+                "q3": 0.6867777090519667,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.15103778499178588,
+                "hd15iqr": 0.6867777090519667,
+                "ops": 2.387160435941467,
+                "total": 0.8378154940437526,
+                "data": [
+                    0.6867777090519667,
+                    0.15103778499178588
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[hopper-1024]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[hopper-1024]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 1024
+            },
+            "param": "hopper-1024",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 1024,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 836522.8836149451
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.12113804696127772,
+                "max": 0.12368490290828049,
+                "mean": 0.12241147493477911,
+                "stddev": 0.001800899110830944,
+                "rounds": 2,
+                "median": 0.12241147493477911,
+                "iqr": 0.0025468559470027685,
+                "q1": 0.12113804696127772,
+                "q3": 0.12368490290828049,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.12113804696127772,
+                "hd15iqr": 0.12368490290828049,
+                "ops": 8.1691687853022,
+                "total": 0.24482294986955822,
+                "data": [
+                    0.12368490290828049,
+                    0.12113804696127772
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[hopper-128]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[hopper-128]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 128
+            },
+            "param": "hopper-128",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 128,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 115509.30185478064
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.10947879892773926,
+                "max": 0.11214837385341525,
+                "mean": 0.11081358639057726,
+                "stddev": 0.0018876745328310649,
+                "rounds": 2,
+                "median": 0.11081358639057726,
+                "iqr": 0.002669574925675988,
+                "q1": 0.10947879892773926,
+                "q3": 0.11214837385341525,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.10947879892773926,
+                "hd15iqr": 0.11214837385341525,
+                "ops": 9.024164207404738,
+                "total": 0.2216271727811545,
+                "data": [
+                    0.11214837385341525,
+                    0.10947879892773926
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_mjx_vmap[hopper-1]",
+            "fullname": "bench_mjx.py::test_mjx_vmap[hopper-1]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 1
+            },
+            "param": "hopper-1",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 1,
+                "backend": "MJX jit(vmap)",
+                "steps_per_s": 945.7199225908147
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.10517228697426617,
+                "max": 0.10630681505426764,
+                "mean": 0.10573955101426691,
+                "stddev": 0.0008022324988155958,
+                "rounds": 2,
+                "median": 0.10573955101426691,
+                "iqr": 0.0011345280800014734,
+                "q1": 0.10517228697426617,
+                "q3": 0.10630681505426764,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.10517228697426617,
+                "hd15iqr": 0.10630681505426764,
+                "ops": 9.457199225908147,
+                "total": 0.21147910202853382,
+                "data": [
+                    0.10630681505426764,
+                    0.10517228697426617
+                ],
+                "iterations": 1
+            }
+        }
+    ],
+    "datetime": "2026-03-07T07:00:26.224386+00:00",
+    "version": "5.2.3"
+}
