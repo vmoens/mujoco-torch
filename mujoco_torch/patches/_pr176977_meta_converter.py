@@ -18,57 +18,71 @@ https://github.com/pytorch/pytorch/pull/176977
 from __future__ import annotations
 
 import inspect
-import textwrap
+import re
 
 
 def apply() -> bool:
     import torch._subclasses.meta_utils as _mu
 
     src = inspect.getsource(_mu.MetaConverter.meta_tensor)
-    marker = "                    s = t.storage\n"
+
+    # The marker identifies the storage block we need to guard.
+    marker = "s = t.storage\n"
     if marker not in src:
         return False
     # Check for the specific guard pattern from PR #176977: the storage block
     # must be wrapped with ``if not t.is_traceable_wrapper_subclass:``.
     # A simple substring check is too broad because nightly may already
     # contain is_traceable_wrapper_subclass in *other* code paths.
-    import re
-
     if re.search(
         r"not\s+t\.is_traceable_wrapper_subclass.*\n\s+s = t\.storage", src
     ):
         return False
 
-    src = textwrap.dedent(src)
-    # After dedent the marker loses its leading whitespace relative to the
-    # class body (4 spaces removed).  Recompute it.
-    dedented_marker = marker.lstrip()
-    # The storage block lives inside an ``else:`` branch that is indented 20
-    # spaces in the original source.  After dedenting by 4 (class body) the
-    # block starts at 16 spaces.  We need to wrap lines 16-deep and deeper
-    # in a ``if not t.is_traceable_wrapper_subclass:`` guard and indent them
-    # by 4.
-    #
-    # Rather than reindenting dozens of lines (brittle across torch versions),
-    # we apply a surgical fix: catch the specific ``RuntimeError`` from the
-    # ``r.set_()`` call that triggers the cross-device crash and silently
-    # skip the storage update for wrapper subclasses.
-    old = "r.set_(r_s, storage_offset, sizes, strides)"
-    if old not in src:
+    # Find the ``r.set_()`` call and dynamically compute its indentation so we
+    # can wrap it in a ``try``/``except`` regardless of surrounding indent level.
+    set_call = "r.set_(r_s, storage_offset, sizes, strides)"
+    if set_call not in src:
         return False
 
+    # Determine the exact leading whitespace for the r.set_() line.
+    for line in src.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(set_call):
+            indent = len(line) - len(stripped)
+            break
+    else:
+        return False
+
+    # Determine the indentation of the ``def meta_tensor`` line to know how
+    # much to strip when compiling the function as standalone code.
+    first_line = src.splitlines()[0]
+    def_indent = len(first_line) - len(first_line.lstrip())
+
+    # Build replacement: wrap ``r.set_()`` in try/except to swallow the
+    # cross-device storage error that occurs for wrapper subclasses.
+    i0 = " " * indent  # indentation of the original r.set_ line
+    i1 = " " * (indent + 4)
+    i2 = " " * (indent + 8)
+    old = i0 + set_call
     new = (
-        "try:\n"
-        + " " * 40
-        + "r.set_(r_s, storage_offset, sizes, strides)\n"
-        + " " * 36
-        + "except RuntimeError as __e:\n"
-        + " " * 40
-        + 'if "storage" not in str(__e) or "device" not in str(__e):\n'
-        + " " * 44
-        + "raise"
+        f"{i0}try:\n"
+        f"{i1}{set_call}\n"
+        f"{i0}except RuntimeError as __e:\n"
+        f'{i1}if "storage" not in str(__e) or "device" not in str(__e):\n'
+        f"{i2}raise"
     )
     patched_src = src.replace(old, new, 1)
+
+    # Strip the class-body indentation so the ``def`` starts at column 0.
+    if def_indent > 0:
+        stripped_lines = []
+        for line in patched_src.splitlines(True):
+            if line.strip():
+                stripped_lines.append(line[def_indent:])
+            else:
+                stripped_lines.append(line)
+        patched_src = "".join(stripped_lines)
 
     ns: dict = {}
     code = compile(patched_src, _mu.__file__, "exec")
