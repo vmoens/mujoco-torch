@@ -1,0 +1,27 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install CPU-only PyTorch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install JAX (CPU) and MJX
+        run: pip install "jax[cpu]" "mujoco>=3.0,<3.6" "mujoco-mjx>=3.0,<3.6"
+      - name: Install tensordict from main
+        run: pip install git+https://github.com/pytorch/tensordict.git@main
+      - name: Install mujoco-torch with test deps
+        run: pip install -e ".[test]"
+      - name: Run tests (including MJX correctness)
+        run: pytest test/ -x -v

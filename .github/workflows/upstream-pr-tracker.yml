@@ -1,0 +1,51 @@
+name: Upstream PR Tracker
+
+on:
+  schedule:
+    - cron: "0 8 * * *"  # daily at 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-tracker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check upstream PR status and update README
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # PR numbers to track (between the marker comments in README.md)
+          prs=$(grep -oP '#\K[0-9]+' README.md \
+                  | awk '/^175526$/{found=1} found; /^175852$/{exit}')
+
+          # Extract all PR numbers from the tracker block
+          prs=$(sed -n '/UPSTREAM_PR_TRACKER_START/,/UPSTREAM_PR_TRACKER_END/p' README.md \
+                  | grep -oP '#\K[0-9]+')
+
+          changed=false
+          for pr in $prs; do
+            state=$(gh pr view "$pr" --repo pytorch/pytorch --json state -q .state 2>/dev/null || echo "UNKNOWN")
+            if [ "$state" = "CLOSED" ] || [ "$state" = "MERGED" ]; then
+              # Replace "- [ ]" with "- [x]" on the line containing this PR
+              if grep -q "\- \[ \] \[#${pr}" README.md; then
+                sed -i "s/- \[ \] \[#${pr}/- [x] [#${pr}/" README.md
+                changed=true
+                echo "PR #$pr is $state — checked off"
+              fi
+            else
+              echo "PR #$pr is $state — still open"
+            fi
+          done
+
+          if [ "$changed" = true ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add README.md
+            git commit -m "[ci] Update upstream PR tracker in README"
+            git push
+          else
+            echo "No changes needed"
+          fi
