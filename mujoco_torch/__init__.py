@@ -14,6 +14,13 @@
 # ==============================================================================
 """Public API for mujoco-torch (MJX ported to PyTorch)."""
 
+# Apply monkey-patches for upstream PyTorch PRs that haven't landed yet.
+# Safe to call unconditionally: each patch is a no-op when the fix is present.
+from mujoco_torch.patches import apply as _apply_patches
+
+_apply_patches()
+del _apply_patches
+
 # pylint:disable=g-importing-member
 
 # Collision
