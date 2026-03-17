@@ -1,0 +1,1421 @@
+{
+    "machine_info": {
+        "node": "slurm-h200-206-167",
+        "processor": "x86_64",
+        "machine": "x86_64",
+        "python_compiler": "GCC 13.3.0",
+        "python_implementation": "CPython",
+        "python_implementation_version": "3.12.3",
+        "python_version": "3.12.3",
+        "python_build": [
+            "main",
+            "Jan  8 2026 11:30:50"
+        ],
+        "release": "6.8.12-680-6063-coreweave-amd64-f81899c8",
+        "system": "Linux",
+        "cpu": {
+            "python_version": "3.12.3.final.0 (64 bit)",
+            "cpuinfo_version": [
+                9,
+                0,
+                0
+            ],
+            "cpuinfo_version_string": "9.0.0",
+            "arch": "X86_64",
+            "bits": 64,
+            "count": 128,
+            "arch_string_raw": "x86_64",
+            "vendor_id_raw": "GenuineIntel",
+            "brand_raw": "INTEL(R) XEON(R) PLATINUM 8562Y+",
+            "hz_advertised_friendly": "3.8000 GHz",
+            "hz_actual_friendly": "3.8000 GHz",
+            "hz_advertised": [
+                3800000000,
+                0
+            ],
+            "hz_actual": [
+                3800000000,
+                0
+            ],
+            "stepping": 2,
+            "model": 207,
+            "family": 6,
+            "flags": [
+                "3dnowprefetch",
+                "abm",
+                "acpi",
+                "adx",
+                "aes",
+                "amx_bf16",
+                "amx_int8",
+                "amx_tile",
+                "aperfmperf",
+                "apic",
+                "arat",
+                "arch_capabilities",
+                "arch_lbr",
+                "arch_perfmon",
+                "art",
+                "avx",
+                "avx2",
+                "avx512_bf16",
+                "avx512_bitalg",
+                "avx512_fp16",
+                "avx512_vbmi2",
+                "avx512_vnni",
+                "avx512_vpopcntdq",
+                "avx512bitalg",
+                "avx512bw",
+                "avx512cd",
+                "avx512dq",
+                "avx512f",
+                "avx512ifma",
+                "avx512vbmi",
+                "avx512vbmi2",
+                "avx512vl",
+                "avx512vnni",
+                "avx512vpopcntdq",
+                "avx_vnni",
+                "bmi1",
+                "bmi2",
+                "bts",
+                "bus_lock_detect",
+                "cat_l2",
+                "cat_l3",
+                "cdp_l2",
+                "cdp_l3",
+                "cldemote",
+                "clflush",
+                "clflushopt",
+                "clwb",
+                "cmov",
+                "constant_tsc",
+                "cpuid",
+                "cpuid_fault",
+                "cqm",
+                "cqm_llc",
+                "cqm_mbm_local",
+                "cqm_mbm_total",
+                "cqm_occup_llc",
+                "cx16",
+                "cx8",
+                "dca",
+                "de",
+                "ds_cpl",
+                "dtes64",
+                "dtherm",
+                "dts",
+                "enqcmd",
+                "epb",
+                "ept",
+                "ept_ad",
+                "erms",
+                "est",
+                "f16c",
+                "flexpriority",
+                "flush_l1d",
+                "fma",
+                "fpu",
+                "fsgsbase",
+                "fsrm",
+                "fxsr",
+                "gfni",
+                "hfi",
+                "ht",
+                "ibpb",
+                "ibrs",
+                "ibrs_enhanced",
+                "ibt",
+                "ida",
+                "intel_pt",
+                "invpcid",
+                "la57",
+                "lahf_lm",
+                "lm",
+                "mba",
+                "mca",
+                "mce",
+                "md_clear",
+                "mmx",
+                "monitor",
+                "movbe",
+                "movdir64b",
+                "movdiri",
+                "msr",
+                "mtrr",
+                "nonstop_tsc",
+                "nopl",
+                "nx",
+                "ospke",
+                "osxsave",
+                "pae",
+                "pat",
+                "pbe",
+                "pcid",
+                "pclmulqdq",
+                "pconfig",
+                "pdcm",
+                "pdpe1gb",
+                "pebs",
+                "pge",
+                "pku",
+                "pln",
+                "pni",
+                "popcnt",
+                "pqe",
+                "pqm",
+                "pse",
+                "pse36",
+                "pts",
+                "rdpid",
+                "rdrand",
+                "rdrnd",
+                "rdseed",
+                "rdt_a",
+                "rdtscp",
+                "rep_good",
+                "sdbg",
+                "sep",
+                "serialize",
+                "sgx",
+                "sgx_lc",
+                "sha",
+                "sha_ni",
+                "smap",
+                "smep",
+                "smx",
+                "split_lock_detect",
+                "ss",
+                "ssbd",
+                "sse",
+                "sse2",
+                "sse4_1",
+                "sse4_2",
+                "ssse3",
+                "stibp",
+                "syscall",
+                "tm",
+                "tm2",
+                "tme",
+                "tpr_shadow",
+                "tsc",
+                "tsc_adjust",
+                "tsc_deadline_timer",
+                "tsc_known_freq",
+                "tscdeadline",
+                "tsxldtrk",
+                "umip",
+                "user_shstk",
+                "vaes",
+                "vme",
+                "vmx",
+                "vnmi",
+                "vpclmulqdq",
+                "vpid",
+                "waitpkg",
+                "wbnoinvd",
+                "x2apic",
+                "xgetbv1",
+                "xsave",
+                "xsavec",
+                "xsaveopt",
+                "xsaves",
+                "xtopology",
+                "xtpr"
+            ],
+            "l3_cache_size": 62914560,
+            "l2_cache_size": 134217728,
+            "l1_data_cache_size": 3145728,
+            "l1_instruction_cache_size": 2097152,
+            "l2_cache_line_size": 2048,
+            "l2_cache_associativity": 7
+        }
+    },
+    "commit_info": {
+        "id": "d9998d5ebaa6a22447e0cd5adca1dca22b13b652",
+        "time": "2026-03-07T07:43:36+01:00",
+        "author_time": "2026-03-06T15:29:14+00:00",
+        "dirty": false,
+        "project": "mujoco-torch",
+        "branch": "compile-ablation"
+    },
+    "benchmarks": [
+        {
+            "group": null,
+            "name": "test_compile[humanoid-32768]",
+            "fullname": "bench_compile.py::test_compile[humanoid-32768]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 32768
+            },
+            "param": "humanoid-32768",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 32768,
+                "backend": "torch compile",
+                "steps_per_s": 1278195.243296786
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 2.5495061359833926,
+                "max": 2.5777230837848037,
+                "mean": 2.563614609884098,
+                "stddev": 0.01995239513476467,
+                "rounds": 2,
+                "median": 2.563614609884098,
+                "iqr": 0.028216947801411152,
+                "q1": 2.5495061359833926,
+                "q3": 2.5777230837848037,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 2.5495061359833926,
+                "hd15iqr": 2.5777230837848037,
+                "ops": 0.3900742319631305,
+                "total": 5.127229219768196,
+                "data": [
+                    2.5495061359833926,
+                    2.5777230837848037
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[humanoid-4096]",
+            "fullname": "bench_compile.py::test_compile[humanoid-4096]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 4096
+            },
+            "param": "humanoid-4096",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 4096,
+                "backend": "torch compile",
+                "steps_per_s": 281114.9777216978
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 1.4531506528146565,
+                "max": 1.4609594619832933,
+                "mean": 1.457055057398975,
+                "stddev": 0.005521661916134767,
+                "rounds": 2,
+                "median": 1.457055057398975,
+                "iqr": 0.007808809168636799,
+                "q1": 1.4531506528146565,
+                "q3": 1.4609594619832933,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 1.4531506528146565,
+                "hd15iqr": 1.4609594619832933,
+                "ops": 0.6863158635783638,
+                "total": 2.91411011479795,
+                "data": [
+                    1.4531506528146565,
+                    1.4609594619832933
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[humanoid-1024]",
+            "fullname": "bench_compile.py::test_compile[humanoid-1024]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 1024
+            },
+            "param": "humanoid-1024",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 1024,
+                "backend": "torch compile",
+                "steps_per_s": 69803.8749433587
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 1.453769258921966,
+                "max": 1.4801652850583196,
+                "mean": 1.4669672719901428,
+                "stddev": 0.018664809077392982,
+                "rounds": 2,
+                "median": 1.4669672719901428,
+                "iqr": 0.026396026136353612,
+                "q1": 1.453769258921966,
+                "q3": 1.4801652850583196,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 1.453769258921966,
+                "hd15iqr": 1.4801652850583196,
+                "ops": 0.6816784662437374,
+                "total": 2.9339345439802855,
+                "data": [
+                    1.453769258921966,
+                    1.4801652850583196
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[humanoid-128]",
+            "fullname": "bench_compile.py::test_compile[humanoid-128]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 128
+            },
+            "param": "humanoid-128",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 128,
+                "backend": "torch compile",
+                "steps_per_s": 9471.271380702896
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 1.3474049610085785,
+                "max": 1.355505659012124,
+                "mean": 1.3514553100103512,
+                "stddev": 0.005728058490651282,
+                "rounds": 2,
+                "median": 1.3514553100103512,
+                "iqr": 0.008100698003545403,
+                "q1": 1.3474049610085785,
+                "q3": 1.355505659012124,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 1.3474049610085785,
+                "hd15iqr": 1.355505659012124,
+                "ops": 0.7399430766174138,
+                "total": 2.7029106200207025,
+                "data": [
+                    1.355505659012124,
+                    1.3474049610085785
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[humanoid-1]",
+            "fullname": "bench_compile.py::test_compile[humanoid-1]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 1
+            },
+            "param": "humanoid-1",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 1,
+                "backend": "torch compile",
+                "steps_per_s": 69.84263003816982
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 1.4266846748068929,
+                "max": 1.4368959190323949,
+                "mean": 1.4317902969196439,
+                "stddev": 0.00722044003620445,
+                "rounds": 2,
+                "median": 1.4317902969196439,
+                "iqr": 0.010211244225502014,
+                "q1": 1.4266846748068929,
+                "q3": 1.4368959190323949,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 1.4266846748068929,
+                "hd15iqr": 1.4368959190323949,
+                "ops": 0.6984263003816982,
+                "total": 2.8635805938392878,
+                "data": [
+                    1.4266846748068929,
+                    1.4368959190323949
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[ant-32768]",
+            "fullname": "bench_compile.py::test_compile[ant-32768]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 32768
+            },
+            "param": "ant-32768",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 32768,
+                "backend": "torch compile",
+                "steps_per_s": 751673.2441426353
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 4.359158674953505,
+                "max": 4.359523346880451,
+                "mean": 4.359341010916978,
+                "stddev": 0.0002578619924514915,
+                "rounds": 2,
+                "median": 4.359341010916978,
+                "iqr": 0.0003646719269454479,
+                "q1": 4.359158674953505,
+                "q3": 4.359523346880451,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 4.359158674953505,
+                "hd15iqr": 4.359523346880451,
+                "ops": 0.2293924695259507,
+                "total": 8.718682021833956,
+                "data": [
+                    4.359158674953505,
+                    4.359523346880451
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[ant-4096]",
+            "fullname": "bench_compile.py::test_compile[ant-4096]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 4096
+            },
+            "param": "ant-4096",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 4096,
+                "backend": "torch compile",
+                "steps_per_s": 662696.6574610836
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.6177820209413767,
+                "max": 0.6183793370146304,
+                "mean": 0.6180806789780036,
+                "stddev": 0.0004223662459094478,
+                "rounds": 2,
+                "median": 0.6180806789780036,
+                "iqr": 0.0005973160732537508,
+                "q1": 0.6177820209413767,
+                "q3": 0.6183793370146304,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.6177820209413767,
+                "hd15iqr": 0.6183793370146304,
+                "ops": 1.6179117613795986,
+                "total": 1.2361613579560071,
+                "data": [
+                    0.6177820209413767,
+                    0.6183793370146304
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[ant-1024]",
+            "fullname": "bench_compile.py::test_compile[ant-1024]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 1024
+            },
+            "param": "ant-1024",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 1024,
+                "backend": "torch compile",
+                "steps_per_s": 268247.7623006792
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.3808544520288706,
+                "max": 0.38261883193627,
+                "mean": 0.3817366419825703,
+                "stddev": 0.0012476049971114197,
+                "rounds": 2,
+                "median": 0.3817366419825703,
+                "iqr": 0.001764379907399416,
+                "q1": 0.3808544520288706,
+                "q3": 0.38261883193627,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.3808544520288706,
+                "hd15iqr": 0.38261883193627,
+                "ops": 2.6196070537175706,
+                "total": 0.7634732839651406,
+                "data": [
+                    0.38261883193627,
+                    0.3808544520288706
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[ant-128]",
+            "fullname": "bench_compile.py::test_compile[ant-128]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 128
+            },
+            "param": "ant-128",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 128,
+                "backend": "torch compile",
+                "steps_per_s": 35379.627509355676
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.3615350709296763,
+                "max": 0.36204518703743815,
+                "mean": 0.3617901289835572,
+                "stddev": 0.0003607065589908988,
+                "rounds": 2,
+                "median": 0.3617901289835572,
+                "iqr": 0.0005101161077618599,
+                "q1": 0.3615350709296763,
+                "q3": 0.36204518703743815,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.3615350709296763,
+                "hd15iqr": 0.36204518703743815,
+                "ops": 2.7640333991684125,
+                "total": 0.7235802579671144,
+                "data": [
+                    0.36204518703743815,
+                    0.3615350709296763
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[ant-1]",
+            "fullname": "bench_compile.py::test_compile[ant-1]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 1
+            },
+            "param": "ant-1",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 1,
+                "backend": "torch compile",
+                "steps_per_s": 301.00663313639825
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.3321073050610721,
+                "max": 0.3323298799805343,
+                "mean": 0.3322185925208032,
+                "stddev": 0.0001573842348737741,
+                "rounds": 2,
+                "median": 0.3322185925208032,
+                "iqr": 0.00022257491946220398,
+                "q1": 0.3321073050610721,
+                "q3": 0.3323298799805343,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.3321073050610721,
+                "hd15iqr": 0.3323298799805343,
+                "ops": 3.0100663313639826,
+                "total": 0.6644371850416064,
+                "data": [
+                    0.3323298799805343,
+                    0.3321073050610721
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[halfcheetah-32768]",
+            "fullname": "bench_compile.py::test_compile[halfcheetah-32768]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 32768
+            },
+            "param": "halfcheetah-32768",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 32768,
+                "backend": "torch compile",
+                "steps_per_s": 3325032.032029415
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.9827388520352542,
+                "max": 0.9882496788632125,
+                "mean": 0.9854942654492334,
+                "stddev": 0.003896743019994013,
+                "rounds": 2,
+                "median": 0.9854942654492334,
+                "iqr": 0.005510826827958226,
+                "q1": 0.9827388520352542,
+                "q3": 0.9882496788632125,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.9827388520352542,
+                "hd15iqr": 0.9882496788632125,
+                "ops": 1.0147192480558518,
+                "total": 1.9709885308984667,
+                "data": [
+                    0.9882496788632125,
+                    0.9827388520352542
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[halfcheetah-4096]",
+            "fullname": "bench_compile.py::test_compile[halfcheetah-4096]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 4096
+            },
+            "param": "halfcheetah-4096",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 4096,
+                "backend": "torch compile",
+                "steps_per_s": 717623.4027881972
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.570017792051658,
+                "max": 0.5715280338190496,
+                "mean": 0.5707729129353538,
+                "stddev": 0.0010679021949537304,
+                "rounds": 2,
+                "median": 0.5707729129353538,
+                "iqr": 0.0015102417673915625,
+                "q1": 0.570017792051658,
+                "q3": 0.5715280338190496,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.570017792051658,
+                "hd15iqr": 0.5715280338190496,
+                "ops": 1.752010260713372,
+                "total": 1.1415458258707076,
+                "data": [
+                    0.5715280338190496,
+                    0.570017792051658
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[halfcheetah-1024]",
+            "fullname": "bench_compile.py::test_compile[halfcheetah-1024]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 1024
+            },
+            "param": "halfcheetah-1024",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 1024,
+                "backend": "torch compile",
+                "steps_per_s": 194794.0330501667
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.523975201882422,
+                "max": 0.5273917049635202,
+                "mean": 0.5256834534229711,
+                "stddev": 0.0024158324965892694,
+                "rounds": 2,
+                "median": 0.5256834534229711,
+                "iqr": 0.003416503081098199,
+                "q1": 0.523975201882422,
+                "q3": 0.5273917049635202,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.523975201882422,
+                "hd15iqr": 0.5273917049635202,
+                "ops": 1.9022854790055344,
+                "total": 1.0513669068459421,
+                "data": [
+                    0.5273917049635202,
+                    0.523975201882422
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[halfcheetah-128]",
+            "fullname": "bench_compile.py::test_compile[halfcheetah-128]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 128
+            },
+            "param": "halfcheetah-128",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 128,
+                "backend": "torch compile",
+                "steps_per_s": 23096.733102063277
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.5528295950498432,
+                "max": 0.5555522651411593,
+                "mean": 0.5541909300955012,
+                "stddev": 0.0019252184845034138,
+                "rounds": 2,
+                "median": 0.5541909300955012,
+                "iqr": 0.002722670091316104,
+                "q1": 0.5528295950498432,
+                "q3": 0.5555522651411593,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.5528295950498432,
+                "hd15iqr": 0.5555522651411593,
+                "ops": 1.8044322735986937,
+                "total": 1.1083818601910025,
+                "data": [
+                    0.5528295950498432,
+                    0.5555522651411593
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[halfcheetah-1]",
+            "fullname": "bench_compile.py::test_compile[halfcheetah-1]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 1
+            },
+            "param": "halfcheetah-1",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 1,
+                "backend": "torch compile",
+                "steps_per_s": 227.30658202291494
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.438524073921144,
+                "max": 0.44134486000984907,
+                "mean": 0.43993446696549654,
+                "stddev": 0.0019945969716000283,
+                "rounds": 2,
+                "median": 0.43993446696549654,
+                "iqr": 0.002820786088705063,
+                "q1": 0.438524073921144,
+                "q3": 0.44134486000984907,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.438524073921144,
+                "hd15iqr": 0.44134486000984907,
+                "ops": 2.2730658202291494,
+                "total": 0.8798689339309931,
+                "data": [
+                    0.438524073921144,
+                    0.44134486000984907
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[walker2d-32768]",
+            "fullname": "bench_compile.py::test_compile[walker2d-32768]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 32768
+            },
+            "param": "walker2d-32768",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 32768,
+                "backend": "torch compile",
+                "steps_per_s": 726801.4155318106
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 4.327036231057718,
+                "max": 4.690007296856493,
+                "mean": 4.508521763957106,
+                "stddev": 0.2566593020008219,
+                "rounds": 2,
+                "median": 4.508521763957106,
+                "iqr": 0.36297106579877436,
+                "q1": 4.327036231057718,
+                "q3": 4.690007296856493,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 4.327036231057718,
+                "hd15iqr": 4.690007296856493,
+                "ops": 0.22180218979852617,
+                "total": 9.017043527914211,
+                "data": [
+                    4.327036231057718,
+                    4.690007296856493
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[walker2d-4096]",
+            "fullname": "bench_compile.py::test_compile[walker2d-4096]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 4096
+            },
+            "param": "walker2d-4096",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 4096,
+                "backend": "torch compile",
+                "steps_per_s": 167563.2609837839
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 2.371409031096846,
+                "max": 2.51749081001617,
+                "mean": 2.444449920556508,
+                "stddev": 0.10329541648164825,
+                "rounds": 2,
+                "median": 2.444449920556508,
+                "iqr": 0.14608177891932428,
+                "q1": 2.371409031096846,
+                "q3": 2.51749081001617,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 2.371409031096846,
+                "hd15iqr": 2.51749081001617,
+                "ops": 0.40908999263619117,
+                "total": 4.888899841113016,
+                "data": [
+                    2.371409031096846,
+                    2.51749081001617
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[walker2d-1024]",
+            "fullname": "bench_compile.py::test_compile[walker2d-1024]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 1024
+            },
+            "param": "walker2d-1024",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 1024,
+                "backend": "torch compile",
+                "steps_per_s": 47453.32084419662
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 2.0682350031565875,
+                "max": 2.2475851830095053,
+                "mean": 2.1579100930830464,
+                "stddev": 0.1268197283810251,
+                "rounds": 2,
+                "median": 2.1579100930830464,
+                "iqr": 0.1793501798529178,
+                "q1": 2.0682350031565875,
+                "q3": 2.2475851830095053,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 2.0682350031565875,
+                "hd15iqr": 2.2475851830095053,
+                "ops": 0.46341133636910764,
+                "total": 4.315820186166093,
+                "data": [
+                    2.0682350031565875,
+                    2.2475851830095053
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[walker2d-128]",
+            "fullname": "bench_compile.py::test_compile[walker2d-128]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 128
+            },
+            "param": "walker2d-128",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 128,
+                "backend": "torch compile",
+                "steps_per_s": 5777.042656966783
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 2.083856803132221,
+                "max": 2.347476236987859,
+                "mean": 2.21566652006004,
+                "stddev": 0.1864070893318801,
+                "rounds": 2,
+                "median": 2.21566652006004,
+                "iqr": 0.2636194338556379,
+                "q1": 2.083856803132221,
+                "q3": 2.347476236987859,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 2.083856803132221,
+                "hd15iqr": 2.347476236987859,
+                "ops": 0.45133145757552995,
+                "total": 4.43133304012008,
+                "data": [
+                    2.083856803132221,
+                    2.347476236987859
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[walker2d-1]",
+            "fullname": "bench_compile.py::test_compile[walker2d-1]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 1
+            },
+            "param": "walker2d-1",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 1,
+                "backend": "torch compile",
+                "steps_per_s": 76.8008438325136
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 1.2892983539495617,
+                "max": 1.314839700004086,
+                "mean": 1.3020690269768238,
+                "stddev": 0.01806045899578632,
+                "rounds": 2,
+                "median": 1.3020690269768238,
+                "iqr": 0.025541346054524183,
+                "q1": 1.2892983539495617,
+                "q3": 1.314839700004086,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 1.2892983539495617,
+                "hd15iqr": 1.314839700004086,
+                "ops": 0.7680084383251361,
+                "total": 2.6041380539536476,
+                "data": [
+                    1.2892983539495617,
+                    1.314839700004086
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[hopper-32768]",
+            "fullname": "bench_compile.py::test_compile[hopper-32768]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 32768
+            },
+            "param": "hopper-32768",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 32768,
+                "backend": "torch compile",
+                "steps_per_s": 4465498.718387738
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.7226293820422143,
+                "max": 0.7449782500043511,
+                "mean": 0.7338038160232827,
+                "stddev": 0.015803036087869753,
+                "rounds": 2,
+                "median": 0.7338038160232827,
+                "iqr": 0.022348867962136865,
+                "q1": 0.7226293820422143,
+                "q3": 0.7449782500043511,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.7226293820422143,
+                "hd15iqr": 0.7449782500043511,
+                "ops": 1.3627620600548516,
+                "total": 1.4676076320465654,
+                "data": [
+                    0.7449782500043511,
+                    0.7226293820422143
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[hopper-4096]",
+            "fullname": "bench_compile.py::test_compile[hopper-4096]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 4096
+            },
+            "param": "hopper-4096",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 4096,
+                "backend": "torch compile",
+                "steps_per_s": 887319.0157270356
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.457267708145082,
+                "max": 0.46596281602978706,
+                "mean": 0.46161526208743453,
+                "stddev": 0.0061483697484235695,
+                "rounds": 2,
+                "median": 0.46161526208743453,
+                "iqr": 0.008695107884705067,
+                "q1": 0.457267708145082,
+                "q3": 0.46596281602978706,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.457267708145082,
+                "hd15iqr": 0.46596281602978706,
+                "ops": 2.1663061907398333,
+                "total": 0.9232305241748691,
+                "data": [
+                    0.46596281602978706,
+                    0.457267708145082
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[hopper-1024]",
+            "fullname": "bench_compile.py::test_compile[hopper-1024]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 1024
+            },
+            "param": "hopper-1024",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 1024,
+                "backend": "torch compile",
+                "steps_per_s": 272703.59482286614
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.36871902318671346,
+                "max": 0.38227951107546687,
+                "mean": 0.37549926713109016,
+                "stddev": 0.009588712942335589,
+                "rounds": 2,
+                "median": 0.37549926713109016,
+                "iqr": 0.013560487888753414,
+                "q1": 0.36871902318671346,
+                "q3": 0.38227951107546687,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.36871902318671346,
+                "hd15iqr": 0.38227951107546687,
+                "ops": 2.6631210431920525,
+                "total": 0.7509985342621803,
+                "data": [
+                    0.38227951107546687,
+                    0.36871902318671346
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[hopper-128]",
+            "fullname": "bench_compile.py::test_compile[hopper-128]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 128
+            },
+            "param": "hopper-128",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 128,
+                "backend": "torch compile",
+                "steps_per_s": 36006.37695815769
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.3493692728225142,
+                "max": 0.36161589599214494,
+                "mean": 0.35549258440732956,
+                "stddev": 0.008659670289882205,
+                "rounds": 2,
+                "median": 0.35549258440732956,
+                "iqr": 0.012246623169630766,
+                "q1": 0.3493692728225142,
+                "q3": 0.36161589599214494,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.3493692728225142,
+                "hd15iqr": 0.36161589599214494,
+                "ops": 2.81299819985607,
+                "total": 0.7109851688146591,
+                "data": [
+                    0.36161589599214494,
+                    0.3493692728225142
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_compile[hopper-1]",
+            "fullname": "bench_compile.py::test_compile[hopper-1]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 1
+            },
+            "param": "hopper-1",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 1,
+                "backend": "torch compile",
+                "steps_per_s": 300.8405386148246
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 0.32849801192060113,
+                "max": 0.33630600990727544,
+                "mean": 0.3324020109139383,
+                "stddev": 0.0055210883238683145,
+                "rounds": 2,
+                "median": 0.3324020109139383,
+                "iqr": 0.007807997986674309,
+                "q1": 0.32849801192060113,
+                "q3": 0.33630600990727544,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 0.32849801192060113,
+                "hd15iqr": 0.33630600990727544,
+                "ops": 3.008405386148246,
+                "total": 0.6648040218278766,
+                "data": [
+                    0.33630600990727544,
+                    0.32849801192060113
+                ],
+                "iterations": 1
+            }
+        }
+    ],
+    "datetime": "2026-03-07T09:15:39.940938+00:00",
+    "version": "5.2.3"
+}

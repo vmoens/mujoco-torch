@@ -1,0 +1,1421 @@
+{
+    "machine_info": {
+        "node": "slurm-h200-206-167",
+        "processor": "x86_64",
+        "machine": "x86_64",
+        "python_compiler": "GCC 13.3.0",
+        "python_implementation": "CPython",
+        "python_implementation_version": "3.12.3",
+        "python_version": "3.12.3",
+        "python_build": [
+            "main",
+            "Jan  8 2026 11:30:50"
+        ],
+        "release": "6.8.12-680-6063-coreweave-amd64-f81899c8",
+        "system": "Linux",
+        "cpu": {
+            "python_version": "3.12.3.final.0 (64 bit)",
+            "cpuinfo_version": [
+                9,
+                0,
+                0
+            ],
+            "cpuinfo_version_string": "9.0.0",
+            "arch": "X86_64",
+            "bits": 64,
+            "count": 128,
+            "arch_string_raw": "x86_64",
+            "vendor_id_raw": "GenuineIntel",
+            "brand_raw": "INTEL(R) XEON(R) PLATINUM 8562Y+",
+            "hz_advertised_friendly": "3.7913 GHz",
+            "hz_actual_friendly": "3.7913 GHz",
+            "hz_advertised": [
+                3791307000,
+                0
+            ],
+            "hz_actual": [
+                3791307000,
+                0
+            ],
+            "stepping": 2,
+            "model": 207,
+            "family": 6,
+            "flags": [
+                "3dnowprefetch",
+                "abm",
+                "acpi",
+                "adx",
+                "aes",
+                "amx_bf16",
+                "amx_int8",
+                "amx_tile",
+                "aperfmperf",
+                "apic",
+                "arat",
+                "arch_capabilities",
+                "arch_lbr",
+                "arch_perfmon",
+                "art",
+                "avx",
+                "avx2",
+                "avx512_bf16",
+                "avx512_bitalg",
+                "avx512_fp16",
+                "avx512_vbmi2",
+                "avx512_vnni",
+                "avx512_vpopcntdq",
+                "avx512bitalg",
+                "avx512bw",
+                "avx512cd",
+                "avx512dq",
+                "avx512f",
+                "avx512ifma",
+                "avx512vbmi",
+                "avx512vbmi2",
+                "avx512vl",
+                "avx512vnni",
+                "avx512vpopcntdq",
+                "avx_vnni",
+                "bmi1",
+                "bmi2",
+                "bts",
+                "bus_lock_detect",
+                "cat_l2",
+                "cat_l3",
+                "cdp_l2",
+                "cdp_l3",
+                "cldemote",
+                "clflush",
+                "clflushopt",
+                "clwb",
+                "cmov",
+                "constant_tsc",
+                "cpuid",
+                "cpuid_fault",
+                "cqm",
+                "cqm_llc",
+                "cqm_mbm_local",
+                "cqm_mbm_total",
+                "cqm_occup_llc",
+                "cx16",
+                "cx8",
+                "dca",
+                "de",
+                "ds_cpl",
+                "dtes64",
+                "dtherm",
+                "dts",
+                "enqcmd",
+                "epb",
+                "ept",
+                "ept_ad",
+                "erms",
+                "est",
+                "f16c",
+                "flexpriority",
+                "flush_l1d",
+                "fma",
+                "fpu",
+                "fsgsbase",
+                "fsrm",
+                "fxsr",
+                "gfni",
+                "hfi",
+                "ht",
+                "ibpb",
+                "ibrs",
+                "ibrs_enhanced",
+                "ibt",
+                "ida",
+                "intel_pt",
+                "invpcid",
+                "la57",
+                "lahf_lm",
+                "lm",
+                "mba",
+                "mca",
+                "mce",
+                "md_clear",
+                "mmx",
+                "monitor",
+                "movbe",
+                "movdir64b",
+                "movdiri",
+                "msr",
+                "mtrr",
+                "nonstop_tsc",
+                "nopl",
+                "nx",
+                "ospke",
+                "osxsave",
+                "pae",
+                "pat",
+                "pbe",
+                "pcid",
+                "pclmulqdq",
+                "pconfig",
+                "pdcm",
+                "pdpe1gb",
+                "pebs",
+                "pge",
+                "pku",
+                "pln",
+                "pni",
+                "popcnt",
+                "pqe",
+                "pqm",
+                "pse",
+                "pse36",
+                "pts",
+                "rdpid",
+                "rdrand",
+                "rdrnd",
+                "rdseed",
+                "rdt_a",
+                "rdtscp",
+                "rep_good",
+                "sdbg",
+                "sep",
+                "serialize",
+                "sgx",
+                "sgx_lc",
+                "sha",
+                "sha_ni",
+                "smap",
+                "smep",
+                "smx",
+                "split_lock_detect",
+                "ss",
+                "ssbd",
+                "sse",
+                "sse2",
+                "sse4_1",
+                "sse4_2",
+                "ssse3",
+                "stibp",
+                "syscall",
+                "tm",
+                "tm2",
+                "tme",
+                "tpr_shadow",
+                "tsc",
+                "tsc_adjust",
+                "tsc_deadline_timer",
+                "tsc_known_freq",
+                "tscdeadline",
+                "tsxldtrk",
+                "umip",
+                "user_shstk",
+                "vaes",
+                "vme",
+                "vmx",
+                "vnmi",
+                "vpclmulqdq",
+                "vpid",
+                "waitpkg",
+                "wbnoinvd",
+                "x2apic",
+                "xgetbv1",
+                "xsave",
+                "xsavec",
+                "xsaveopt",
+                "xsaves",
+                "xtopology",
+                "xtpr"
+            ],
+            "l3_cache_size": 62914560,
+            "l2_cache_size": 134217728,
+            "l1_data_cache_size": 3145728,
+            "l1_instruction_cache_size": 2097152,
+            "l2_cache_line_size": 2048,
+            "l2_cache_associativity": 7
+        }
+    },
+    "commit_info": {
+        "id": "d9998d5ebaa6a22447e0cd5adca1dca22b13b652",
+        "time": "2026-03-07T07:43:36+01:00",
+        "author_time": "2026-03-06T15:29:14+00:00",
+        "dirty": false,
+        "project": "mujoco-torch",
+        "branch": "compile-ablation"
+    },
+    "benchmarks": [
+        {
+            "group": null,
+            "name": "test_vmap[humanoid-32768]",
+            "fullname": "bench_vmap.py::test_vmap[humanoid-32768]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 32768
+            },
+            "param": "humanoid-32768",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 32768,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 126052.92365795895
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 25.694135807920247,
+                "max": 26.296724933898076,
+                "mean": 25.995430370909162,
+                "stddev": 0.42609485724819773,
+                "rounds": 2,
+                "median": 25.995430370909162,
+                "iqr": 0.6025891259778291,
+                "q1": 25.694135807920247,
+                "q3": 26.296724933898076,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 25.694135807920247,
+                "hd15iqr": 26.296724933898076,
+                "ops": 0.03846829945616423,
+                "total": 51.990860741818324,
+                "data": [
+                    26.296724933898076,
+                    25.694135807920247
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[humanoid-4096]",
+            "fullname": "bench_vmap.py::test_vmap[humanoid-4096]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 4096
+            },
+            "param": "humanoid-4096",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 4096,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 16087.994354392906
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 25.435808676062152,
+                "max": 25.48414952098392,
+                "mean": 25.459979098523036,
+                "stddev": 0.034182139252469226,
+                "rounds": 2,
+                "median": 25.459979098523036,
+                "iqr": 0.04834084492176771,
+                "q1": 25.435808676062152,
+                "q3": 25.48414952098392,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 25.435808676062152,
+                "hd15iqr": 25.48414952098392,
+                "ops": 0.03927732996677956,
+                "total": 50.91995819704607,
+                "data": [
+                    25.48414952098392,
+                    25.435808676062152
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[humanoid-1024]",
+            "fullname": "bench_vmap.py::test_vmap[humanoid-1024]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 1024
+            },
+            "param": "humanoid-1024",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 1024,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 4008.4418286659916
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 25.47674116399139,
+                "max": 25.61543099512346,
+                "mean": 25.546086079557426,
+                "stddev": 0.0980685200751033,
+                "rounds": 2,
+                "median": 25.546086079557426,
+                "iqr": 0.13868983113206923,
+                "q1": 25.47674116399139,
+                "q3": 25.61543099512346,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 25.47674116399139,
+                "hd15iqr": 25.61543099512346,
+                "ops": 0.039144939733066327,
+                "total": 51.09217215911485,
+                "data": [
+                    25.61543099512346,
+                    25.47674116399139
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[humanoid-128]",
+            "fullname": "bench_vmap.py::test_vmap[humanoid-128]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 128
+            },
+            "param": "humanoid-128",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 128,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 502.55263748003387
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 25.44658764405176,
+                "max": 25.49334996799007,
+                "mean": 25.469968806020916,
+                "stddev": 0.033065956360821123,
+                "rounds": 2,
+                "median": 25.469968806020916,
+                "iqr": 0.046762323938310146,
+                "q1": 25.44658764405176,
+                "q3": 25.49334996799007,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 25.44658764405176,
+                "hd15iqr": 25.49334996799007,
+                "ops": 0.039261924803127644,
+                "total": 50.93993761204183,
+                "data": [
+                    25.44658764405176,
+                    25.49334996799007
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[humanoid-1]",
+            "fullname": "bench_vmap.py::test_vmap[humanoid-1]",
+            "params": {
+                "model_name": "humanoid",
+                "batch_size": 1
+            },
+            "param": "humanoid-1",
+            "extra_info": {
+                "model": "humanoid",
+                "batch_size": 1,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 4.0103111199487085
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 24.793086115969345,
+                "max": 25.07835627789609,
+                "mean": 24.935721196932718,
+                "stddev": 0.20171646596858683,
+                "rounds": 2,
+                "median": 24.935721196932718,
+                "iqr": 0.28527016192674637,
+                "q1": 24.793086115969345,
+                "q3": 25.07835627789609,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 24.793086115969345,
+                "hd15iqr": 25.07835627789609,
+                "ops": 0.04010311119948708,
+                "total": 49.871442393865436,
+                "data": [
+                    24.793086115969345,
+                    25.07835627789609
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[ant-32768]",
+            "fullname": "bench_vmap.py::test_vmap[ant-32768]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 32768
+            },
+            "param": "ant-32768",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 32768,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 325254.40305966925
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 10.053669831017032,
+                "max": 10.095480920979753,
+                "mean": 10.074575375998393,
+                "stddev": 0.02956490524144072,
+                "rounds": 2,
+                "median": 10.074575375998393,
+                "iqr": 0.04181108996272087,
+                "q1": 10.053669831017032,
+                "q3": 10.095480920979753,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 10.053669831017032,
+                "hd15iqr": 10.095480920979753,
+                "ops": 0.09925976655873694,
+                "total": 20.149150751996785,
+                "data": [
+                    10.095480920979753,
+                    10.053669831017032
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[ant-4096]",
+            "fullname": "bench_vmap.py::test_vmap[ant-4096]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 4096
+            },
+            "param": "ant-4096",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 4096,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 66939.15608218941
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 6.106376975076273,
+                "max": 6.131602227920666,
+                "mean": 6.11898960149847,
+                "stddev": 0.017836947343415715,
+                "rounds": 2,
+                "median": 6.11898960149847,
+                "iqr": 0.025225252844393253,
+                "q1": 6.106376975076273,
+                "q3": 6.131602227920666,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 6.106376975076273,
+                "hd15iqr": 6.131602227920666,
+                "ops": 0.16342567402878272,
+                "total": 12.23797920299694,
+                "data": [
+                    6.131602227920666,
+                    6.106376975076273
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[ant-1024]",
+            "fullname": "bench_vmap.py::test_vmap[ant-1024]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 1024
+            },
+            "param": "ant-1024",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 1024,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 16482.431900511896
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 6.056135257007554,
+                "max": 6.369215640006587,
+                "mean": 6.2126754485070705,
+                "stddev": 0.22138126187509755,
+                "rounds": 2,
+                "median": 6.2126754485070705,
+                "iqr": 0.31308038299903274,
+                "q1": 6.056135257007554,
+                "q3": 6.369215640006587,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 6.056135257007554,
+                "hd15iqr": 6.369215640006587,
+                "ops": 0.1609612490284365,
+                "total": 12.425350897014141,
+                "data": [
+                    6.369215640006587,
+                    6.056135257007554
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[ant-128]",
+            "fullname": "bench_vmap.py::test_vmap[ant-128]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 128
+            },
+            "param": "ant-128",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 128,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 2127.352246525602
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 6.01607462996617,
+                "max": 6.017663572914898,
+                "mean": 6.016869101440534,
+                "stddev": 0.001123552333964683,
+                "rounds": 2,
+                "median": 6.016869101440534,
+                "iqr": 0.0015889429487287998,
+                "q1": 6.01607462996617,
+                "q3": 6.017663572914898,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 6.01607462996617,
+                "hd15iqr": 6.017663572914898,
+                "ops": 0.16619939425981264,
+                "total": 12.033738202881068,
+                "data": [
+                    6.017663572914898,
+                    6.01607462996617
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[ant-1]",
+            "fullname": "bench_vmap.py::test_vmap[ant-1]",
+            "params": {
+                "model_name": "ant",
+                "batch_size": 1
+            },
+            "param": "ant-1",
+            "extra_info": {
+                "model": "ant",
+                "batch_size": 1,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 16.47805303995869
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 5.954434104962274,
+                "max": 6.182922141859308,
+                "mean": 6.068678123410791,
+                "stddev": 0.16156544030989442,
+                "rounds": 2,
+                "median": 6.068678123410791,
+                "iqr": 0.22848803689703345,
+                "q1": 5.954434104962274,
+                "q3": 6.182922141859308,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 5.954434104962274,
+                "hd15iqr": 6.182922141859308,
+                "ops": 0.16478053039958693,
+                "total": 12.137356246821582,
+                "data": [
+                    5.954434104962274,
+                    6.182922141859308
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[halfcheetah-32768]",
+            "fullname": "bench_vmap.py::test_vmap[halfcheetah-32768]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 32768
+            },
+            "param": "halfcheetah-32768",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 32768,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 444710.45950066054
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 7.366257745074108,
+                "max": 7.370521793141961,
+                "mean": 7.368389769108035,
+                "stddev": 0.003015137304084149,
+                "rounds": 2,
+                "median": 7.368389769108035,
+                "iqr": 0.004264048067852855,
+                "q1": 7.366257745074108,
+                "q3": 7.370521793141961,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 7.366257745074108,
+                "hd15iqr": 7.370521793141961,
+                "ops": 0.13571486190816057,
+                "total": 14.73677953821607,
+                "data": [
+                    7.370521793141961,
+                    7.366257745074108
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[halfcheetah-4096]",
+            "fullname": "bench_vmap.py::test_vmap[halfcheetah-4096]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 4096
+            },
+            "param": "halfcheetah-4096",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 4096,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 56036.79592271625
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 7.299908136017621,
+                "max": 7.319057608023286,
+                "mean": 7.309482872020453,
+                "stddev": 0.013540721511347891,
+                "rounds": 2,
+                "median": 7.309482872020453,
+                "iqr": 0.019149472005665302,
+                "q1": 7.299908136017621,
+                "q3": 7.319057608023286,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 7.299908136017621,
+                "hd15iqr": 7.319057608023286,
+                "ops": 0.13680858379569397,
+                "total": 14.618965744040906,
+                "data": [
+                    7.319057608023286,
+                    7.299908136017621
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[halfcheetah-1024]",
+            "fullname": "bench_vmap.py::test_vmap[halfcheetah-1024]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 1024
+            },
+            "param": "halfcheetah-1024",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 1024,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 13730.559926614194
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 7.3208528810646385,
+                "max": 7.594780646963045,
+                "mean": 7.457816764013842,
+                "stddev": 0.19369618082204434,
+                "rounds": 2,
+                "median": 7.457816764013842,
+                "iqr": 0.2739277658984065,
+                "q1": 7.3208528810646385,
+                "q3": 7.594780646963045,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 7.3208528810646385,
+                "hd15iqr": 7.594780646963045,
+                "ops": 0.13408749928334174,
+                "total": 14.915633528027683,
+                "data": [
+                    7.594780646963045,
+                    7.3208528810646385
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[halfcheetah-128]",
+            "fullname": "bench_vmap.py::test_vmap[halfcheetah-128]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 128
+            },
+            "param": "halfcheetah-128",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 128,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 1747.4073980420997
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 7.318131380947307,
+                "max": 7.332144238054752,
+                "mean": 7.3251378095010296,
+                "stddev": 0.009908586284472892,
+                "rounds": 2,
+                "median": 7.3251378095010296,
+                "iqr": 0.014012857107445598,
+                "q1": 7.318131380947307,
+                "q3": 7.332144238054752,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 7.318131380947307,
+                "hd15iqr": 7.332144238054752,
+                "ops": 0.13651620297203904,
+                "total": 14.650275619002059,
+                "data": [
+                    7.318131380947307,
+                    7.332144238054752
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[halfcheetah-1]",
+            "fullname": "bench_vmap.py::test_vmap[halfcheetah-1]",
+            "params": {
+                "model_name": "halfcheetah",
+                "batch_size": 1
+            },
+            "param": "halfcheetah-1",
+            "extra_info": {
+                "model": "halfcheetah",
+                "batch_size": 1,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 13.87054972670575
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 7.1062703230418265,
+                "max": 7.312768860021606,
+                "mean": 7.209519591531716,
+                "stddev": 0.1460165158035032,
+                "rounds": 2,
+                "median": 7.209519591531716,
+                "iqr": 0.2064985369797796,
+                "q1": 7.1062703230418265,
+                "q3": 7.312768860021606,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 7.1062703230418265,
+                "hd15iqr": 7.312768860021606,
+                "ops": 0.1387054972670575,
+                "total": 14.419039183063433,
+                "data": [
+                    7.1062703230418265,
+                    7.312768860021606
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[walker2d-32768]",
+            "fullname": "bench_vmap.py::test_vmap[walker2d-32768]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 32768
+            },
+            "param": "walker2d-32768",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 32768,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 83566.45454552089
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 37.646222322946414,
+                "max": 40.77759062498808,
+                "mean": 39.21190647396725,
+                "stddev": 2.214211760766266,
+                "rounds": 2,
+                "median": 39.21190647396725,
+                "iqr": 3.1313683020416647,
+                "q1": 37.646222322946414,
+                "q3": 40.77759062498808,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 37.646222322946414,
+                "hd15iqr": 40.77759062498808,
+                "ops": 0.02550245805222195,
+                "total": 78.4238129479345,
+                "data": [
+                    37.646222322946414,
+                    40.77759062498808
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[walker2d-4096]",
+            "fullname": "bench_vmap.py::test_vmap[walker2d-4096]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 4096
+            },
+            "param": "walker2d-4096",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 4096,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 11350.409975557492
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 35.34141372703016,
+                "max": 36.83219072991051,
+                "mean": 36.08680222847033,
+                "stddev": 1.0541385279736526,
+                "rounds": 2,
+                "median": 36.08680222847033,
+                "iqr": 1.4907770028803498,
+                "q1": 35.34141372703016,
+                "q3": 36.83219072991051,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 35.34141372703016,
+                "hd15iqr": 36.83219072991051,
+                "ops": 0.02771096185438841,
+                "total": 72.17360445694067,
+                "data": [
+                    35.34141372703016,
+                    36.83219072991051
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[walker2d-1024]",
+            "fullname": "bench_vmap.py::test_vmap[walker2d-1024]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 1024
+            },
+            "param": "walker2d-1024",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 1024,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 2859.6006681167314
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 34.079731828998774,
+                "max": 37.538659607060254,
+                "mean": 35.809195718029514,
+                "stddev": 2.4458312875017896,
+                "rounds": 2,
+                "median": 35.809195718029514,
+                "iqr": 3.4589277780614793,
+                "q1": 34.079731828998774,
+                "q3": 37.538659607060254,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 34.079731828998774,
+                "hd15iqr": 37.538659607060254,
+                "ops": 0.027925787774577455,
+                "total": 71.61839143605903,
+                "data": [
+                    34.079731828998774,
+                    37.538659607060254
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[walker2d-128]",
+            "fullname": "bench_vmap.py::test_vmap[walker2d-128]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 128
+            },
+            "param": "walker2d-128",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 128,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 396.3281309239663
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 30.777046726085246,
+                "max": 33.815895340172574,
+                "mean": 32.29647103312891,
+                "stddev": 2.1487904620204916,
+                "rounds": 2,
+                "median": 32.29647103312891,
+                "iqr": 3.0388486140873283,
+                "q1": 30.777046726085246,
+                "q3": 33.815895340172574,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 30.777046726085246,
+                "hd15iqr": 33.815895340172574,
+                "ops": 0.030963135228434868,
+                "total": 64.59294206625782,
+                "data": [
+                    30.777046726085246,
+                    33.815895340172574
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[walker2d-1]",
+            "fullname": "bench_vmap.py::test_vmap[walker2d-1]",
+            "params": {
+                "model_name": "walker2d",
+                "batch_size": 1
+            },
+            "param": "walker2d-1",
+            "extra_info": {
+                "model": "walker2d",
+                "batch_size": 1,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 3.743954340447148
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 26.38308715214953,
+                "max": 27.036367737920955,
+                "mean": 26.70972744503524,
+                "stddev": 0.4619391322164957,
+                "rounds": 2,
+                "median": 26.70972744503524,
+                "iqr": 0.6532805857714266,
+                "q1": 26.38308715214953,
+                "q3": 27.036367737920955,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 26.38308715214953,
+                "hd15iqr": 27.036367737920955,
+                "ops": 0.037439543404471476,
+                "total": 53.41945489007048,
+                "data": [
+                    26.38308715214953,
+                    27.036367737920955
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[hopper-32768]",
+            "fullname": "bench_vmap.py::test_vmap[hopper-32768]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 32768
+            },
+            "param": "hopper-32768",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 32768,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 500400.1484285221
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 6.387529801111668,
+                "max": 6.709188936045393,
+                "mean": 6.548359368578531,
+                "stddev": 0.22744735554223564,
+                "rounds": 2,
+                "median": 6.548359368578531,
+                "iqr": 0.321659134933725,
+                "q1": 6.387529801111668,
+                "q3": 6.709188936045393,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 6.387529801111668,
+                "hd15iqr": 6.709188936045393,
+                "ops": 0.15271000623429018,
+                "total": 13.096718737157062,
+                "data": [
+                    6.709188936045393,
+                    6.387529801111668
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[hopper-4096]",
+            "fullname": "bench_vmap.py::test_vmap[hopper-4096]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 4096
+            },
+            "param": "hopper-4096",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 4096,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 62498.913078510785
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 6.487607826944441,
+                "max": 6.619820120977238,
+                "mean": 6.553713973960839,
+                "stddev": 0.09348820966682063,
+                "rounds": 2,
+                "median": 6.553713973960839,
+                "iqr": 0.13221229403279722,
+                "q1": 6.487607826944441,
+                "q3": 6.619820120977238,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 6.487607826944441,
+                "hd15iqr": 6.619820120977238,
+                "ops": 0.15258523700808296,
+                "total": 13.107427947921678,
+                "data": [
+                    6.619820120977238,
+                    6.487607826944441
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[hopper-1024]",
+            "fullname": "bench_vmap.py::test_vmap[hopper-1024]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 1024
+            },
+            "param": "hopper-1024",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 1024,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 15906.234880103813
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 6.3624001641292125,
+                "max": 6.513054118026048,
+                "mean": 6.43772714107763,
+                "stddev": 0.10652843241301783,
+                "rounds": 2,
+                "median": 6.43772714107763,
+                "iqr": 0.15065395389683545,
+                "q1": 6.3624001641292125,
+                "q3": 6.513054118026048,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 6.3624001641292125,
+                "hd15iqr": 6.513054118026048,
+                "ops": 0.1553343250010138,
+                "total": 12.87545428215526,
+                "data": [
+                    6.513054118026048,
+                    6.3624001641292125
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[hopper-128]",
+            "fullname": "bench_vmap.py::test_vmap[hopper-128]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 128
+            },
+            "param": "hopper-128",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 128,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 1943.857481195478
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 6.583115233108401,
+                "max": 6.586574544897303,
+                "mean": 6.584844889002852,
+                "stddev": 0.0024461028241709493,
+                "rounds": 2,
+                "median": 6.584844889002852,
+                "iqr": 0.0034593117889016867,
+                "q1": 6.583115233108401,
+                "q3": 6.586574544897303,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 6.583115233108401,
+                "hd15iqr": 6.586574544897303,
+                "ops": 0.15186386571839672,
+                "total": 13.169689778005704,
+                "data": [
+                    6.583115233108401,
+                    6.586574544897303
+                ],
+                "iterations": 1
+            }
+        },
+        {
+            "group": null,
+            "name": "test_vmap[hopper-1]",
+            "fullname": "bench_vmap.py::test_vmap[hopper-1]",
+            "params": {
+                "model_name": "hopper",
+                "batch_size": 1
+            },
+            "param": "hopper-1",
+            "extra_info": {
+                "model": "hopper",
+                "batch_size": 1,
+                "backend": "torch vmap (eager)",
+                "steps_per_s": 15.58954474702936
+            },
+            "options": {
+                "disable_gc": false,
+                "timer": "perf_counter",
+                "min_rounds": 5,
+                "max_time": 1.0,
+                "min_time": 5e-06,
+                "warmup": false
+            },
+            "stats": {
+                "min": 6.386988241923973,
+                "max": 6.442122758133337,
+                "mean": 6.414555500028655,
+                "stddev": 0.03898599028908086,
+                "rounds": 2,
+                "median": 6.414555500028655,
+                "iqr": 0.05513451620936394,
+                "q1": 6.386988241923973,
+                "q3": 6.442122758133337,
+                "iqr_outliers": 0,
+                "stddev_outliers": 0,
+                "outliers": "0;0",
+                "ld15iqr": 6.386988241923973,
+                "hd15iqr": 6.442122758133337,
+                "ops": 0.1558954474702936,
+                "total": 12.82911100005731,
+                "data": [
+                    6.442122758133337,
+                    6.386988241923973
+                ],
+                "iterations": 1
+            }
+        }
+    ],
+    "datetime": "2026-03-07T07:48:01.007425+00:00",
+    "version": "5.2.3"
+}
