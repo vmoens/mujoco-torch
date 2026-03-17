@@ -24,46 +24,50 @@ pip install -e .
 ### Requirements
 
 - Python >= 3.10
-- PyTorch (see [PyTorch build](#pytorch-build) below for `torch.compile` support)
+- PyTorch (see [compatibility notes](#pytorch--tensordict-compatibility) below)
 - MuJoCo >= 3.0
 - tensordict >= 0.11
 
-### PyTorch build
+### PyTorch & tensordict compatibility
 
-`torch.compile(fullgraph=True)` requires several upstream fixes that are not yet
-in a released PyTorch version.  Until they land, build PyTorch from the
-[`mujoco-torch-features`](https://github.com/vmoens/pytorch/tree/mujoco-torch-features)
-branch:
-
-```bash
-git clone --branch mujoco-torch-features --depth 1 \
-    https://github.com/vmoens/pytorch.git
-cd pytorch
-git submodule update --init --recursive --depth 1
-pip install -e . --no-build-isolation   # takes ~30-60 min
-```
-
-You will also need a source build of
-[tensordict](https://github.com/pytorch/tensordict):
+mujoco-torch is tested against **PyTorch nightly** and **tensordict main**.
+All modes -- eager, `torch.vmap`, and `torch.compile(fullgraph=True)` -- work
+out of the box with these versions:
 
 ```bash
+# PyTorch nightly (CUDA 13.0 example; adjust the index URL for your CUDA version)
+pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu130
+
+# tensordict from source (required for wrapper-subclass UnbatchedTensor support)
 pip install git+https://github.com/pytorch/tensordict.git
 ```
 
-Without this custom PyTorch build, eager mode and `torch.vmap` work fine; only
-`torch.compile(fullgraph=True)` requires the fork.
+#### Monkey patches for upstream PyTorch PRs
 
-#### Upstream PR tracker
+Several upstream PyTorch fixes required by mujoco-torch have not yet landed in a
+release.  Rather than requiring a custom PyTorch fork, mujoco-torch ships
+**monkey patches** (in `mujoco_torch/patches/`) that are applied automatically
+at import time.  Each patch is a no-op when the corresponding upstream fix is
+already present, so they are safe to use unconditionally and will silently
+deactivate as PyTorch merges the fixes.
 
-The following PRs must land in PyTorch before mujoco-torch can drop its custom
-fork.  Status is updated automatically by CI.
+The patches cover:
 
 <!-- UPSTREAM_PR_TRACKER_START -->
-- [ ] [#175526 — while_loop vmap batching rule](https://github.com/pytorch/pytorch/pull/175526)
-- [ ] [#176977 — Skip storage memo for wrapper subclasses in MetaConverter](https://github.com/pytorch/pytorch/pull/176977)
-- [ ] [#175525 — vmap compatibility with non-tensor leaves](https://github.com/pytorch/pytorch/pull/175525)
-- [ ] [#175852 — vmap extension points for custom container types](https://github.com/pytorch/pytorch/pull/175852)
+- [ ] [#175526 — `while_loop` vmap batching rule](https://github.com/pytorch/pytorch/pull/175526) -- required for `torch.vmap` over the simulation loop
+- [ ] [#175525 — vmap compatibility with non-tensor leaves](https://github.com/pytorch/pytorch/pull/175525) -- allows vmap to handle non-tensor outputs gracefully
+- [ ] [#175852 — vmap extension points for custom container types](https://github.com/pytorch/pytorch/pull/175852) -- enables `UnbatchedTensor` to participate in vmap
+- [ ] [#176977 — MetaConverter storage memo for wrapper subclasses](https://github.com/pytorch/pytorch/pull/176977) -- fixes a cross-device error under `torch.compile` for `_make_wrapper_subclass` tensors
 <!-- UPSTREAM_PR_TRACKER_END -->
+
+Once all of the above PRs are merged into PyTorch, the `mujoco_torch/patches/`
+directory can be removed entirely.
+
+> **Note:** If you prefer to use a custom PyTorch build that already includes
+> these fixes (e.g. the
+> [`vmoens/nomerg-sum-prs`](https://github.com/vmoens/pytorch/tree/vmoens/nomerg-sum-prs)
+> branch), the patches will detect that the fixes are present and skip
+> themselves automatically.
 
 ## Quick start
 

@@ -13,11 +13,13 @@ https://github.com/pytorch/pytorch/pull/175852
 
 from __future__ import annotations
 
-from typing import Any, Callable, NoReturn
+from collections.abc import Callable
+from typing import Any, NoReturn
 
 import torch
 from torch import Tensor
 from torch._functorch.vmap import (
+    TreeSpec,
     _add_batch_dim,
     _broadcast_to_and_flatten,
     _get_name,
@@ -28,7 +30,6 @@ from torch._functorch.vmap import (
     out_dims_t,
     tree_flatten,
     tree_unflatten,
-    TreeSpec,
     vmap_increment_nesting,
 )
 

@@ -11,7 +11,7 @@ https://github.com/pytorch/pytorch/pull/175526
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 import torch.utils._pytree as pytree
