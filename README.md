@@ -131,17 +131,14 @@ The `zoo/` directory contains TorchRL `EnvBase` environments backed by
 mujoco-torch, trained with standard RL algorithms (SAC, PPO) to validate the
 physics simulation.
 
-**CartPole — SAC**
-
-https://github.com/vmoens/mujoco-torch/raw/main/assets/cartpole_sac.mp4
-
 **HalfCheetah — SAC**
 
-https://github.com/vmoens/mujoco-torch/raw/main/assets/halfcheetah_sac.mp4
+https://github.com/user-attachments/assets/f88a7484-7fc4-4d31-bdf6-f82de777b9f0
 
 **Ant — SAC**
 
-https://github.com/vmoens/mujoco-torch/raw/main/assets/ant_sac.mp4
+https://github.com/user-attachments/assets/9c454c1b-e925-4e0b-b44a-393d85d9f3e2
+
 
 ```bash
 # SAC
