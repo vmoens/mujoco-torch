@@ -262,6 +262,9 @@ def _patched_flat_vmap(
 def apply() -> bool:
     import torch._functorch.vmap as _vmap
 
+    if hasattr(_vmap, "_is_vmappable"):
+        return False
+
     _vmap._vmappable_cls_cache = _vmappable_cls_cache
     _vmap.register_vmappable_cls = register_vmappable_cls
     _vmap._is_vmappable = _is_vmappable
