@@ -1,0 +1,40 @@
+name: Benchmarks
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[test]"
+          pip install pytest-benchmark
+
+      - name: Run benchmarks
+        run: pytest benchmarks/ --benchmark-json=output.json -v
+
+      - name: Publish results
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: 'pytest'
+          output-file-path: output.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: benchmarks
+          auto-push: true
+          alert-threshold: '130%'
+          fail-on-alert: true
