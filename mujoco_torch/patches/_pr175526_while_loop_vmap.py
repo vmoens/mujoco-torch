@@ -21,9 +21,9 @@ def apply() -> bool:
     from torch._higher_order_ops.while_loop import while_loop_op
 
     transform_type = torch._C._functorch.TransformType.Vmap
-    py_impls = getattr(while_loop_op, "py_impls", {})
-    if transform_type in py_impls:
-        return False
+    for table_attr in ("py_impls", "functorch_table"):
+        if transform_type in getattr(while_loop_op, table_attr, {}):
+            return False
 
     @while_loop_op.py_impl(transform_type)
     def while_loop_vmap(
