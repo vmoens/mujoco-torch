@@ -52,27 +52,39 @@ def fix_tensordict_unbatched() -> None:
     the unpatched source and falls back to the old implementation.
 
     This function must be called AFTER both :func:`apply` and tensordict
-    have been imported.  It reloads ``tensordict._unbatched`` with the guard
-    overridden so that the correct wrapper-subclass implementation is used.
+    have been imported.  It re-executes ``tensordict._unbatched`` with the
+    guard forced to ``True`` and swaps the ``UnbatchedTensor`` class.
     """
-    import importlib
-
     import tensordict
     import tensordict._unbatched as _ub
 
     if _ub._HAS_WRAPPER_SUBCLASS_FIX:
         return
 
-    _ub._has_wrapper_subclass_vmap_fix = lambda: True
-    importlib.reload(_ub)
+    src_path = _ub.__file__
+    with open(src_path) as f:
+        src = f.read()
 
-    if not _ub._HAS_WRAPPER_SUBCLASS_FIX:
+    marker = "_HAS_WRAPPER_SUBCLASS_FIX = _has_wrapper_subclass_vmap_fix()"
+    if marker not in src:
+        log.debug("tensordict._unbatched guard pattern not found, skipping")
+        return
+
+    patched_src = src.replace(marker, "_HAS_WRAPPER_SUBCLASS_FIX = True", 1)
+    ns: dict = {}
+    exec(compile(patched_src, src_path, "exec"), ns)  # noqa: S102
+
+    if not ns.get("_HAS_WRAPPER_SUBCLASS_FIX"):
         log.warning(
-            "Failed to activate wrapper-subclass UnbatchedTensor after reload"
+            "Failed to activate wrapper-subclass UnbatchedTensor"
         )
         return
 
-    tensordict.UnbatchedTensor = _ub.UnbatchedTensor
+    new_cls = ns["UnbatchedTensor"]
+    _ub.UnbatchedTensor = new_cls
+    _ub._HAS_WRAPPER_SUBCLASS_FIX = True
+    tensordict.UnbatchedTensor = new_cls
     log.info(
-        "Reloaded tensordict._unbatched with wrapper-subclass UnbatchedTensor"
+        "Activated wrapper-subclass UnbatchedTensor "
+        "(tensordict._unbatched guard overridden)"
     )
