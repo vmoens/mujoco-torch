@@ -125,6 +125,35 @@ d_batch = compiled_step(d_batch)
 - **Tendon / Distance equality constraints** — not yet ported from MJX.
 - **PGS solver** — only CG and Newton solvers are available.
 
+## RL Environment Zoo
+
+The `zoo/` directory contains TorchRL `EnvBase` environments backed by
+mujoco-torch, trained with standard RL algorithms (SAC, PPO) to validate the
+physics simulation.
+
+<table>
+<tr>
+<td align="center"><b>CartPole — SAC</b></td>
+<td align="center"><b>HalfCheetah — SAC</b></td>
+</tr>
+<tr>
+<td align="center">
+<video src="assets/cartpole_sac.mp4" width="256" autoplay loop muted></video>
+</td>
+<td align="center">
+<video src="assets/halfcheetah_sac.mp4" width="256" autoplay loop muted></video>
+</td>
+</tr>
+</table>
+
+```bash
+# Train an agent
+python zoo/train.py --env halfcheetah --algo sac --num_envs 64 --total_steps 500000
+
+# With torch.compile for GPU
+python zoo/train.py --env ant --algo sac --compile --num_envs 8192 --device cuda
+```
+
 ## Benchmarks
 
 ![Benchmark results](assets/benchmark.png)

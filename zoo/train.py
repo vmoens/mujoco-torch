@@ -30,7 +30,6 @@ from torchrl.record.loggers.wandb import WandbLogger
 
 from zoo import ENVS
 
-
 # ------------------------------------------------------------------
 # Network builders
 # ------------------------------------------------------------------
