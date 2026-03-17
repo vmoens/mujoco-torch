@@ -147,11 +147,14 @@ physics simulation.
 </table>
 
 ```bash
-# Train an agent
-python zoo/train.py --env halfcheetah --algo sac --num_envs 64 --total_steps 500000
+# SAC
+python zoo/train_sac.py --env halfcheetah --num_envs 64 --total_steps 500000
+
+# PPO
+python zoo/train_ppo.py --env halfcheetah --num_envs 64 --total_steps 500000
 
 # With torch.compile for GPU
-python zoo/train.py --env ant --algo sac --compile --num_envs 8192 --device cuda
+python zoo/train_sac.py --env ant --compile --num_envs 8192 --device cuda
 ```
 
 ## Benchmarks

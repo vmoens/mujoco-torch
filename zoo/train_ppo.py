@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Train RL agents on mujoco-torch zoo environments.
+"""Train a PPO agent on mujoco-torch zoo environments.
 
 Usage::
 
-    python zoo/train.py --env halfcheetah --algo ppo
-    python zoo/train.py --env ant --algo ddpg --num_envs 32
-    python zoo/train.py --env cartpole --algo ppo --total_steps 200000
+    python zoo/train_ppo.py --env halfcheetah
+    python zoo/train_ppo.py --env cartpole --total_steps 200000
+    python zoo/train_ppo.py --env ant --num_envs 32 --compile
 
 """
 
@@ -14,16 +14,14 @@ import time
 
 import torch
 import torch.nn as nn
-from tensordict.nn import AddStateIndependentNormalScale, InteractionType, TensorDictModule
-from tensordict.nn.distributions import NormalParamExtractor
+from tensordict.nn import AddStateIndependentNormalScale, TensorDictModule
 from torchrl.collectors import SyncDataCollector
 from torchrl.data import LazyTensorStorage, SamplerWithoutReplacement, TensorDictReplayBuffer
 from torchrl.envs import TransformedEnv
-from torchrl.envs.transforms import Compose, InitTracker, RewardSum
+from torchrl.envs.transforms import Compose, RewardSum
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.modules import MLP, ProbabilisticActor, TanhNormal, ValueOperator
-from torchrl.objectives import ClipPPOLoss, SoftUpdate, group_optimizers
-from torchrl.objectives.sac import SACLoss
+from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
 from torchrl.record import PixelRenderTransform, VideoRecorder
 from torchrl.record.loggers.wandb import WandbLogger
@@ -35,7 +33,7 @@ from zoo import ENVS
 # ------------------------------------------------------------------
 
 
-def _make_ppo_actor(obs_dim: int, act_dim: int, device):
+def _make_actor(obs_dim: int, act_dim: int, device):
     """MLP policy that outputs TanhNormal distribution parameters."""
     net = nn.Sequential(
         MLP(
@@ -48,17 +46,16 @@ def _make_ppo_actor(obs_dim: int, act_dim: int, device):
         AddStateIndependentNormalScale(act_dim, device=device),
     )
     module = TensorDictModule(net, in_keys=["observation"], out_keys=["loc", "scale"])
-    actor = ProbabilisticActor(
+    return ProbabilisticActor(
         module=module,
         in_keys=["loc", "scale"],
         out_keys=["action"],
         distribution_class=TanhNormal,
         return_log_prob=True,
     )
-    return actor
 
 
-def _make_ppo_critic(obs_dim: int, device):
+def _make_critic(obs_dim: int, device):
     """MLP state-value function."""
     net = MLP(
         in_features=obs_dim,
@@ -68,41 +65,6 @@ def _make_ppo_critic(obs_dim: int, device):
         device=device,
     )
     return ValueOperator(net, in_keys=["observation"])
-
-
-def _make_sac_actor(obs_dim: int, act_dim: int, device):
-    """Stochastic MLP actor for SAC (TanhNormal policy)."""
-    net = nn.Sequential(
-        MLP(
-            in_features=obs_dim,
-            out_features=2 * act_dim,
-            num_cells=[256, 256],
-            activation_class=nn.ReLU,
-            device=device,
-        ),
-        NormalParamExtractor(),
-    )
-    module = TensorDictModule(net, in_keys=["observation"], out_keys=["loc", "scale"])
-    return ProbabilisticActor(
-        module=module,
-        in_keys=["loc", "scale"],
-        out_keys=["action"],
-        distribution_class=TanhNormal,
-        default_interaction_type=InteractionType.RANDOM,
-        return_log_prob=False,
-    )
-
-
-def _make_sac_critic(obs_dim: int, act_dim: int, device):
-    """MLP Q-value function for SAC (obs + action → scalar)."""
-    net = MLP(
-        in_features=obs_dim + act_dim,
-        out_features=1,
-        num_cells=[256, 256],
-        activation_class=nn.ReLU,
-        device=device,
-    )
-    return ValueOperator(module=net, in_keys=["action", "observation"])
 
 
 # ------------------------------------------------------------------
@@ -137,7 +99,7 @@ def _run_eval(eval_env, actor, total_frames, logger, max_steps=200):
 
 
 # ------------------------------------------------------------------
-# Training loops
+# Training loop
 # ------------------------------------------------------------------
 
 
@@ -147,8 +109,8 @@ def train_ppo(env, args, logger, eval_env=None):
     act_dim = env.action_spec.shape[-1]
     device = env.device
 
-    actor = _make_ppo_actor(obs_dim, act_dim, device)
-    critic = _make_ppo_critic(obs_dim, device)
+    actor = _make_actor(obs_dim, act_dim, device)
+    critic = _make_critic(obs_dim, device)
 
     loss_module = ClipPPOLoss(
         actor_network=actor,
@@ -244,140 +206,14 @@ def train_ppo(env, args, logger, eval_env=None):
     print(f"PPO training done. {total_frames} total frames.")
 
 
-def train_sac(env, args, logger, eval_env=None):
-    """Off-policy SAC training loop following TorchRL SOTA pattern."""
-    obs_dim = env.observation_spec["observation"].shape[-1]
-    act_dim = env.action_spec.shape[-1]
-    device = env.device
-
-    actor = _make_sac_actor(obs_dim, act_dim, device)
-    critic = _make_sac_critic(obs_dim, act_dim, device)
-
-    loss_module = SACLoss(
-        actor_network=actor,
-        qvalue_network=critic,
-        num_qvalue_nets=2,
-        loss_function="l2",
-        delay_actor=False,
-        delay_qvalue=True,
-        alpha_init=1.0,
-        action_spec=env.action_spec_unbatched,
-    )
-    loss_module.to(device)
-    loss_module.make_value_estimator(gamma=0.99)
-
-    target_updater = SoftUpdate(loss_module, tau=0.005)
-
-    optimizer_actor = torch.optim.Adam(
-        loss_module.actor_network_params.flatten_keys().values(), lr=3e-4,
-    )
-    optimizer_critic = torch.optim.Adam(
-        loss_module.qvalue_network_params.flatten_keys().values(), lr=3e-4,
-    )
-    optimizer_alpha = torch.optim.Adam([loss_module.log_alpha], lr=3e-4)
-    optimizer = group_optimizers(optimizer_actor, optimizer_critic, optimizer_alpha)
-    del optimizer_actor, optimizer_critic, optimizer_alpha
-
-    storage_kwargs = {"max_size": args.buffer_size}
-    if device is not None:
-        storage_kwargs["device"] = device
-    replay_buffer = TensorDictReplayBuffer(
-        storage=LazyTensorStorage(**storage_kwargs),
-        batch_size=args.sac_batch_size,
-    )
-
-    collector = SyncDataCollector(
-        env,
-        policy=actor,
-        frames_per_batch=args.num_envs,
-        total_frames=args.total_steps,
-        init_random_frames=args.sac_warmup,
-    )
-
-    num_updates = max(1, int(args.num_envs * args.sac_utd_ratio))
-
-    print(f"SAC | obs_dim={obs_dim} act_dim={act_dim} device={device}")
-    print(f"  utd_ratio={args.sac_utd_ratio} num_updates={num_updates}")
-
-    total_frames = 0
-    t0 = time.perf_counter()
-    reward_log = []
-
-    for step_idx, batch in enumerate(collector):
-        replay_buffer.extend(batch.reshape(-1))
-        total_frames += batch.numel()
-
-        reward_log.append(batch["next", "reward"].mean().item())
-
-        if total_frames >= args.sac_warmup:
-            for _ in range(num_updates):
-                sample = replay_buffer.sample()
-                loss_td = loss_module(sample)
-
-                total_loss = (
-                    loss_td["loss_actor"]
-                    + loss_td["loss_qvalue"]
-                    + loss_td["loss_alpha"]
-                )
-                total_loss.backward()
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-                target_updater.step()
-
-            collector.update_policy_weights_()
-
-        step_reward = batch["next", "reward"].mean().item()
-        fps = total_frames / (time.perf_counter() - t0)
-        log_dict = {
-            "reward/step_mean": step_reward,
-            "perf/fps": fps,
-            "global_step": total_frames,
-        }
-        done_mask = batch["next", "done"].squeeze(-1)
-        if done_mask.any():
-            ep_reward = batch["next", "episode_reward"].squeeze(-1)[done_mask].mean().item()
-            log_dict["reward/episode_reward"] = ep_reward
-        if total_frames >= args.sac_warmup:
-            log_dict["train/alpha"] = loss_td["alpha"].item()
-            log_dict["train/entropy"] = loss_td["entropy"].item()
-        logger.experiment.log(log_dict)
-
-        if eval_env is not None and (step_idx == 0 or (step_idx + 1) % args.eval_interval == 0):
-            _run_eval(eval_env, actor, total_frames, logger, max_steps=args.eval_steps)
-
-        if (step_idx + 1) % args.log_interval == 0 or step_idx == 0:
-            recent = reward_log[-args.log_interval :]
-            mean_r = sum(recent) / len(recent)
-            print(
-                f"  step {step_idx + 1} | "
-                f"frames={total_frames} | "
-                f"fps={fps:.0f} | "
-                f"mean_reward={mean_r:.4f}"
-            )
-
-    collector.shutdown()
-    print(f"SAC training done. {total_frames} total frames.")
-
-
 # ------------------------------------------------------------------
 # Entry point
 # ------------------------------------------------------------------
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train RL on mujoco-torch zoo envs")
-    parser.add_argument(
-        "--env",
-        choices=list(ENVS),
-        required=True,
-        help="Environment name",
-    )
-    parser.add_argument(
-        "--algo",
-        choices=["ppo", "sac"],
-        default="ppo",
-        help="Algorithm (default: ppo)",
-    )
+    parser = argparse.ArgumentParser(description="Train PPO on mujoco-torch zoo envs")
+    parser.add_argument("--env", choices=list(ENVS), required=True, help="Environment name")
     parser.add_argument("--num_envs", type=int, default=64)
     parser.add_argument("--total_steps", type=int, default=1_000_000)
     parser.add_argument("--device", type=str, default=None)
@@ -385,23 +221,14 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log_interval", type=int, default=10)
 
-    # PPO-specific
     parser.add_argument("--rollout_len", type=int, default=128)
     parser.add_argument("--ppo_epochs", type=int, default=4)
     parser.add_argument("--num_minibatches", type=int, default=4)
 
-    # Logging & eval
     parser.add_argument("--wandb_project", type=str, default="mujoco-torch-zoo")
     parser.add_argument("--record_video", action="store_true", help="Record eval videos to wandb")
-    parser.add_argument("--eval_interval", type=int, default=10, help="Eval every N batches (PPO) or steps (DDPG)")
+    parser.add_argument("--eval_interval", type=int, default=10, help="Eval every N collector batches")
     parser.add_argument("--eval_steps", type=int, default=500, help="Max steps per eval episode")
-
-    # SAC-specific
-    parser.add_argument("--buffer_size", type=int, default=1_000_000)
-    parser.add_argument("--sac_batch_size", type=int, default=256)
-    parser.add_argument("--sac_warmup", type=int, default=10_000)
-    parser.add_argument("--sac_utd_ratio", type=float, default=0.25,
-                        help="Update-to-data ratio (gradient updates per env step)")
 
     args = parser.parse_args()
 
@@ -409,18 +236,16 @@ def main():
     torch.manual_seed(args.seed)
 
     logger = WandbLogger(
-        exp_name=f"{args.env}_{args.algo}",
+        exp_name=f"{args.env}_ppo",
         project=args.wandb_project,
         config=vars(args),
     )
+
     env_cls = ENVS[args.env]
-    transforms = [RewardSum()]
-    if args.algo == "sac":
-        transforms.insert(0, InitTracker())
     env_kwargs = {"device": args.device, "compile_step": args.compile}
     env = TransformedEnv(
         env_cls(num_envs=args.num_envs, **env_kwargs),
-        Compose(*transforms),
+        Compose(RewardSum()),
     )
     print(f"Env: {args.env} | batch_size={env.batch_size} | device={env.device}")
 
@@ -435,10 +260,7 @@ def main():
         Compose(*eval_transforms),
     )
 
-    if args.algo == "ppo":
-        train_ppo(env, args, logger, eval_env=eval_env)
-    else:
-        train_sac(env, args, logger, eval_env=eval_env)
+    train_ppo(env, args, logger, eval_env=eval_env)
 
 
 if __name__ == "__main__":
