@@ -135,6 +135,7 @@ physics simulation.
 <tr>
 <td align="center"><b>CartPole — SAC</b></td>
 <td align="center"><b>HalfCheetah — SAC</b></td>
+<td align="center"><b>Ant — SAC</b></td>
 </tr>
 <tr>
 <td align="center">
@@ -142,6 +143,9 @@ physics simulation.
 </td>
 <td align="center">
 <video src="assets/halfcheetah_sac.mp4" width="256" autoplay loop muted></video>
+</td>
+<td align="center">
+<video src="assets/ant_sac.mp4" width="256" autoplay loop muted></video>
 </td>
 </tr>
 </table>
