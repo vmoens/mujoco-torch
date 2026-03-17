@@ -139,13 +139,13 @@ physics simulation.
 </tr>
 <tr>
 <td align="center">
-<video src="assets/cartpole_sac.mp4" width="256" autoplay loop muted></video>
+<video src="https://github.com/vmoens/mujoco-torch/raw/refs/heads/zoo/assets/cartpole_sac.mp4" width="256" autoplay loop muted></video>
 </td>
 <td align="center">
-<video src="assets/halfcheetah_sac.mp4" width="256" autoplay loop muted></video>
+<video src="https://github.com/vmoens/mujoco-torch/raw/refs/heads/zoo/assets/halfcheetah_sac.mp4" width="256" autoplay loop muted></video>
 </td>
 <td align="center">
-<video src="assets/ant_sac.mp4" width="256" autoplay loop muted></video>
+<video src="https://github.com/vmoens/mujoco-torch/raw/refs/heads/zoo/assets/ant_sac.mp4" width="256" autoplay loop muted></video>
 </td>
 </tr>
 </table>
