@@ -18,6 +18,12 @@ bringing GPU-accelerated physics simulation to the PyTorch ecosystem with full
 ## Installation
 
 ```bash
+pip install mujoco-torch
+```
+
+For development (editable install):
+
+```bash
 pip install -e .
 ```
 
@@ -155,7 +161,7 @@ python zoo/train_sac.py --env ant --compile --num_envs 8192 --device cuda
 
 ![Benchmark results](assets/benchmark.png)
 
-Measured on a single NVIDIA H200 GPU, float64 precision, 1 000 simulation
+Measured on a single NVIDIA GPU, float64 precision, 1 000 simulation
 steps per configuration.  Sequential baselines (MuJoCo C, mujoco-torch loop)
 are measured at B=1 since they scale linearly.  All values are **steps/second**
 (higher is better).
