@@ -16,6 +16,9 @@
 
 # Apply monkey-patches for upstream PyTorch PRs that haven't landed yet.
 # Safe to call unconditionally: each patch is a no-op when the fix is present.
+# Patches MUST run before tensordict is imported (the _src imports below
+# trigger tensordict loading) so that tensordict's runtime guard sees the
+# patched MetaConverter and selects the right UnbatchedTensor implementation.
 from mujoco_torch.patches import apply as _apply_patches
 
 _apply_patches()
@@ -116,3 +119,12 @@ from mujoco_torch._src.types import (
     TrnType,
     WrapType,
 )
+
+# tensordict picks its UnbatchedTensor implementation at import time by
+# inspecting MetaConverter's *on-disk* source.  Our in-memory patch isn't
+# visible to inspect.getsource, so tensordict may have chosen the wrong
+# implementation.  Fix it up now that both patches and tensordict are loaded.
+from mujoco_torch.patches import fix_tensordict_unbatched as _fix_ut
+
+_fix_ut()
+del _fix_ut

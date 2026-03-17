@@ -41,3 +41,38 @@ def apply() -> None:
             log.info("Applied monkey-patch: %s", label)
         else:
             log.debug("Skipped monkey-patch (already present): %s", label)
+
+
+def fix_tensordict_unbatched() -> None:
+    """Ensure tensordict uses the wrapper-subclass UnbatchedTensor.
+
+    tensordict picks which UnbatchedTensor implementation to use at import
+    time by inspecting MetaConverter's source on disk.  Our MetaConverter
+    patch modifies the function in memory only, so tensordict's guard sees
+    the unpatched source and falls back to the old implementation.
+
+    This function must be called AFTER both :func:`apply` and tensordict
+    have been imported.  It reloads ``tensordict._unbatched`` with the guard
+    overridden so that the correct wrapper-subclass implementation is used.
+    """
+    import importlib
+
+    import tensordict
+    import tensordict._unbatched as _ub
+
+    if _ub._HAS_WRAPPER_SUBCLASS_FIX:
+        return
+
+    _ub._has_wrapper_subclass_vmap_fix = lambda: True
+    importlib.reload(_ub)
+
+    if not _ub._HAS_WRAPPER_SUBCLASS_FIX:
+        log.warning(
+            "Failed to activate wrapper-subclass UnbatchedTensor after reload"
+        )
+        return
+
+    tensordict.UnbatchedTensor = _ub.UnbatchedTensor
+    log.info(
+        "Reloaded tensordict._unbatched with wrapper-subclass UnbatchedTensor"
+    )
