@@ -66,3 +66,4 @@ ignore = [
 "test/*" = ["T201"]
 "benchmarks/*" = ["T201"]
 "scripts/*" = ["T201"]
+"zoo/*" = ["T201"]
