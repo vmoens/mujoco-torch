@@ -14,6 +14,8 @@ from zoo.base import MujocoTorchEnv
 class HalfCheetahEnv(MujocoTorchEnv):
     """HalfCheetah: run forward as fast as possible."""
 
+    RESET_NOISE_SCALE = 0.1
+
     @classmethod
     def _xml_path(cls) -> str:
         return "halfcheetah.xml"

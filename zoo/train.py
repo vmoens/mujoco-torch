@@ -14,18 +14,19 @@ import time
 
 import torch
 import torch.nn as nn
-from tensordict.nn import AddStateIndependentNormalScale, TensorDictModule
-from torchrl.data import LazyTensorStorage, ReplayBuffer
+from tensordict.nn import AddStateIndependentNormalScale, InteractionType, TensorDictModule
+from tensordict.nn.distributions import NormalParamExtractor
+from torchrl.collectors import SyncDataCollector
+from torchrl.data import LazyTensorStorage, SamplerWithoutReplacement, TensorDictReplayBuffer
+from torchrl.envs import TransformedEnv
+from torchrl.envs.transforms import Compose, InitTracker, RewardSum
 from torchrl.envs.utils import ExplorationType, set_exploration_type
-from torchrl.modules import (
-    MLP,
-    OrnsteinUhlenbeckProcessModule,
-    ProbabilisticActor,
-    TanhNormal,
-    ValueOperator,
-)
-from torchrl.objectives import ClipPPOLoss, DDPGLoss
+from torchrl.modules import MLP, ProbabilisticActor, TanhNormal, ValueOperator
+from torchrl.objectives import ClipPPOLoss, SoftUpdate, group_optimizers
+from torchrl.objectives.sac import SACLoss
 from torchrl.objectives.value import GAE
+from torchrl.record import PixelRenderTransform, VideoRecorder
+from torchrl.record.loggers.wandb import WandbLogger
 
 from zoo import ENVS
 
@@ -70,24 +71,31 @@ def _make_ppo_critic(obs_dim: int, device):
     return ValueOperator(net, in_keys=["observation"])
 
 
-def _make_ddpg_actor(obs_dim: int, act_dim: int, device):
-    """Deterministic MLP actor for DDPG (outputs tanh-squashed action)."""
+def _make_sac_actor(obs_dim: int, act_dim: int, device):
+    """Stochastic MLP actor for SAC (TanhNormal policy)."""
     net = nn.Sequential(
         MLP(
             in_features=obs_dim,
-            out_features=act_dim,
+            out_features=2 * act_dim,
             num_cells=[256, 256],
             activation_class=nn.ReLU,
-            activate_last_layer=False,
             device=device,
         ),
-        nn.Tanh(),
+        NormalParamExtractor(),
     )
-    return TensorDictModule(net, in_keys=["observation"], out_keys=["action"])
+    module = TensorDictModule(net, in_keys=["observation"], out_keys=["loc", "scale"])
+    return ProbabilisticActor(
+        module=module,
+        in_keys=["loc", "scale"],
+        out_keys=["action"],
+        distribution_class=TanhNormal,
+        default_interaction_type=InteractionType.RANDOM,
+        return_log_prob=False,
+    )
 
 
-def _make_ddpg_critic(obs_dim: int, act_dim: int, device):
-    """MLP Q-value function for DDPG (obs + action → scalar)."""
+def _make_sac_critic(obs_dim: int, act_dim: int, device):
+    """MLP Q-value function for SAC (obs + action → scalar)."""
     net = MLP(
         in_features=obs_dim + act_dim,
         out_features=1,
@@ -95,20 +103,38 @@ def _make_ddpg_critic(obs_dim: int, act_dim: int, device):
         activation_class=nn.ReLU,
         device=device,
     )
+    return ValueOperator(module=net, in_keys=["action", "observation"])
 
-    class _QNet(nn.Module):
-        def __init__(self, mlp):
-            super().__init__()
-            self.mlp = mlp
 
-        def forward(self, observation, action):
-            return self.mlp(torch.cat([observation, action], dim=-1))
+# ------------------------------------------------------------------
+# Eval helper
+# ------------------------------------------------------------------
 
-    return TensorDictModule(
-        _QNet(net),
-        in_keys=["observation", "action"],
-        out_keys=["state_action_value"],
-    )
+
+def _run_eval(eval_env, actor, total_frames, logger, max_steps=200):
+    """Run one eval episode, log reward and dump video (if recording)."""
+    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
+        rollout = eval_env.rollout(
+            max_steps=max_steps,
+            policy=actor,
+            auto_reset=True,
+            break_when_any_done=True,
+        )
+    ep_reward = rollout["next", "episode_reward"][:, -1].mean().item()
+    log_dict = {
+        "eval/episode_reward": ep_reward,
+        "global_step": total_frames,
+    }
+    for t in eval_env.transform:
+        if isinstance(t, VideoRecorder) and t.obs:
+            import wandb
+
+            vid = torch.stack(t.obs, 0).unsqueeze(0).cpu()
+            log_dict["eval_video"] = wandb.Video(vid, fps=30, format="mp4")
+            t.obs = []
+            t.count = 0
+    logger.experiment.log(log_dict)
+    print(f"  [EVAL] frames={total_frames} episode_reward={ep_reward:.2f}")
 
 
 # ------------------------------------------------------------------
@@ -116,8 +142,8 @@ def _make_ddpg_critic(obs_dim: int, act_dim: int, device):
 # ------------------------------------------------------------------
 
 
-def train_ppo(env, args):
-    """On-policy PPO training loop."""
+def train_ppo(env, args, logger, eval_env=None):
+    """On-policy PPO training loop using TorchRL collector + replay buffer."""
     obs_dim = env.observation_spec["observation"].shape[-1]
     act_dim = env.action_spec.shape[-1]
     device = env.device
@@ -145,9 +171,22 @@ def train_ppo(env, args):
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=3e-4)
 
     frames_per_batch = args.num_envs * args.rollout_len
-    num_batches = args.total_steps // frames_per_batch
     mini_batch_size = frames_per_batch // args.num_minibatches
 
+    collector = SyncDataCollector(
+        env,
+        policy=actor,
+        frames_per_batch=frames_per_batch,
+        total_frames=args.total_steps,
+    )
+
+    data_buffer = TensorDictReplayBuffer(
+        storage=LazyTensorStorage(frames_per_batch),
+        sampler=SamplerWithoutReplacement(),
+        batch_size=mini_batch_size,
+    )
+
+    num_batches = len(collector)
     print(f"PPO | obs_dim={obs_dim} act_dim={act_dim} device={device}")
     print(
         f"  frames_per_batch={frames_per_batch} "
@@ -158,27 +197,14 @@ def train_ppo(env, args):
     total_frames = 0
     t0 = time.perf_counter()
 
-    for batch_idx in range(num_batches):
-        with torch.no_grad(), set_exploration_type(ExplorationType.RANDOM):
-            rollout = env.rollout(
-                max_steps=args.rollout_len,
-                policy=actor,
-                auto_reset=True,
-                break_when_any_done=False,
-            )
-
-        total_frames += rollout.numel()
-
-        with torch.no_grad():
-            advantage_module(rollout)
-
-        flat = rollout.reshape(-1)
+    for batch_idx, batch in enumerate(collector):
+        total_frames += batch.numel()
 
         for _epoch in range(args.ppo_epochs):
-            perm = torch.randperm(flat.shape[0], device=device)
-            for start in range(0, flat.shape[0], mini_batch_size):
-                idx = perm[start : start + mini_batch_size]
-                mb = flat[idx]
+            with torch.no_grad():
+                advantage_module(batch)
+            data_buffer.extend(batch.reshape(-1))
+            for mb in data_buffer:
                 loss_vals = loss_module(mb)
                 loss = (
                     loss_vals["loss_objective"]
@@ -190,10 +216,24 @@ def train_ppo(env, args):
                 nn.utils.clip_grad_norm_(loss_module.parameters(), 0.5)
                 optimizer.step()
 
+        collector.update_policy_weights_()
+
+        fps = total_frames / (time.perf_counter() - t0)
+        done_mask = batch["next", "done"].squeeze(-1)
+        if done_mask.any():
+            ep_reward = batch["next", "episode_reward"].squeeze(-1)[done_mask].mean().item()
+        else:
+            ep_reward = batch["next", "episode_reward"][:, -1].mean().item()
+        logger.experiment.log({
+            "reward/episode_reward": ep_reward,
+            "perf/fps": fps,
+            "global_step": total_frames,
+        })
+
+        if eval_env is not None and (batch_idx == 0 or (batch_idx + 1) % args.eval_interval == 0):
+            _run_eval(eval_env, actor, total_frames, logger, max_steps=args.eval_steps)
+
         if (batch_idx + 1) % args.log_interval == 0 or batch_idx == 0:
-            elapsed = time.perf_counter() - t0
-            fps = total_frames / elapsed
-            ep_reward = rollout["next", "reward"].sum(dim=-2).mean().item()
             print(
                 f"  batch {batch_idx + 1}/{num_batches} | "
                 f"frames={total_frames} | "
@@ -201,109 +241,112 @@ def train_ppo(env, args):
                 f"mean_ep_reward={ep_reward:.2f}"
             )
 
+    collector.shutdown()
     print(f"PPO training done. {total_frames} total frames.")
 
 
-def train_ddpg(env, args):
-    """Off-policy DDPG training loop."""
+def train_sac(env, args, logger, eval_env=None):
+    """Off-policy SAC training loop following TorchRL SOTA pattern."""
     obs_dim = env.observation_spec["observation"].shape[-1]
     act_dim = env.action_spec.shape[-1]
     device = env.device
 
-    actor = _make_ddpg_actor(obs_dim, act_dim, device)
-    critic = _make_ddpg_critic(obs_dim, act_dim, device)
+    actor = _make_sac_actor(obs_dim, act_dim, device)
+    critic = _make_sac_critic(obs_dim, act_dim, device)
 
-    loss_module = DDPGLoss(
+    loss_module = SACLoss(
         actor_network=actor,
-        value_network=critic,
+        qvalue_network=critic,
+        num_qvalue_nets=2,
         loss_function="l2",
-        delay_actor=True,
-        delay_value=True,
+        delay_actor=False,
+        delay_qvalue=True,
+        alpha_init=1.0,
+        action_spec=env.action_spec_unbatched,
     )
     loss_module.to(device)
     loss_module.make_value_estimator(gamma=0.99)
 
-    target_updater = loss_module.target_value_network_params
-    tau = 0.005
+    target_updater = SoftUpdate(loss_module, tau=0.005)
 
-    exploration = OrnsteinUhlenbeckProcessModule(
-        spec=env.action_spec,
-        eps_init=1.0,
-        eps_end=0.1,
-        annealing_num_steps=args.total_steps // 2,
-        device=device,
+    optimizer_actor = torch.optim.Adam(
+        loss_module.actor_network_params.flatten_keys().values(), lr=3e-4,
+    )
+    optimizer_critic = torch.optim.Adam(
+        loss_module.qvalue_network_params.flatten_keys().values(), lr=3e-4,
+    )
+    optimizer_alpha = torch.optim.Adam([loss_module.log_alpha], lr=3e-4)
+    optimizer = group_optimizers(optimizer_actor, optimizer_critic, optimizer_alpha)
+    del optimizer_actor, optimizer_critic, optimizer_alpha
+
+    storage_kwargs = {"max_size": args.buffer_size}
+    if device is not None:
+        storage_kwargs["device"] = device
+    replay_buffer = TensorDictReplayBuffer(
+        storage=LazyTensorStorage(**storage_kwargs),
+        batch_size=args.sac_batch_size,
     )
 
-    actor_opt = torch.optim.Adam(loss_module.actor_network_params.values(), lr=1e-4)
-    critic_opt = torch.optim.Adam(loss_module.value_network_params.values(), lr=1e-3)
-
-    replay_buffer = ReplayBuffer(
-        storage=LazyTensorStorage(max_size=args.buffer_size, device=device),
-        batch_size=args.ddpg_batch_size,
+    collector = SyncDataCollector(
+        env,
+        policy=actor,
+        frames_per_batch=args.num_envs,
+        total_frames=args.total_steps,
+        init_random_frames=args.sac_warmup,
     )
 
-    print(f"DDPG | obs_dim={obs_dim} act_dim={act_dim} device={device}")
+    num_updates = max(1, int(args.num_envs * args.sac_utd_ratio))
+
+    print(f"SAC | obs_dim={obs_dim} act_dim={act_dim} device={device}")
+    print(f"  utd_ratio={args.sac_utd_ratio} num_updates={num_updates}")
 
     total_frames = 0
     t0 = time.perf_counter()
     reward_log = []
 
-    td = env.reset()
+    for step_idx, batch in enumerate(collector):
+        replay_buffer.extend(batch.reshape(-1))
+        total_frames += batch.numel()
 
-    for step_idx in range(args.total_steps // args.num_envs):
-        with torch.no_grad(), set_exploration_type(ExplorationType.RANDOM):
-            td = actor(td)
-            td = exploration(td)
+        reward_log.append(batch["next", "reward"].mean().item())
 
-        next_td = env.step(td)
-        replay_buffer.extend(next_td.reshape(-1))
-        total_frames += args.num_envs
+        if total_frames >= args.sac_warmup:
+            for _ in range(num_updates):
+                sample = replay_buffer.sample()
+                loss_td = loss_module(sample)
 
-        reward_log.append(next_td["next", "reward"].mean().item())
+                total_loss = (
+                    loss_td["loss_actor"]
+                    + loss_td["loss_qvalue"]
+                    + loss_td["loss_alpha"]
+                )
+                total_loss.backward()
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                target_updater.step()
 
-        td = next_td["next"].clone()
-        done_mask = td["done"].squeeze(-1)
+            collector.update_policy_weights_()
+
+        step_reward = batch["next", "reward"].mean().item()
+        fps = total_frames / (time.perf_counter() - t0)
+        log_dict = {
+            "reward/step_mean": step_reward,
+            "perf/fps": fps,
+            "global_step": total_frames,
+        }
+        done_mask = batch["next", "done"].squeeze(-1)
         if done_mask.any():
-            reset_td = env.reset(next_td["next"])
-            td[done_mask] = reset_td[done_mask]
+            ep_reward = batch["next", "episode_reward"].squeeze(-1)[done_mask].mean().item()
+            log_dict["reward/episode_reward"] = ep_reward
+        if total_frames >= args.sac_warmup:
+            log_dict["train/alpha"] = loss_td["alpha"].item()
+            log_dict["train/entropy"] = loss_td["entropy"].item()
+        logger.experiment.log(log_dict)
 
-        if total_frames < args.ddpg_warmup:
-            continue
-
-        for _update in range(args.ddpg_updates_per_step):
-            batch = replay_buffer.sample()
-            loss_vals = loss_module(batch)
-
-            critic_opt.zero_grad()
-            loss_vals["loss_value"].backward()
-            nn.utils.clip_grad_norm_(
-                loss_module.value_network_params.values(), 1.0
-            )
-            critic_opt.step()
-
-            actor_opt.zero_grad()
-            loss_vals["loss_actor"].backward()
-            nn.utils.clip_grad_norm_(
-                loss_module.actor_network_params.values(), 1.0
-            )
-            actor_opt.step()
-
-            # Soft-update target networks
-            with torch.no_grad():
-                for p_target, p in zip(
-                    target_updater.values(True, True),
-                    loss_module.actor_network_params.values(True, True),
-                ):
-                    p_target.data.lerp_(p.data, tau)
-                for p_target, p in zip(
-                    loss_module.target_value_network_params.values(True, True),
-                    loss_module.value_network_params.values(True, True),
-                ):
-                    p_target.data.lerp_(p.data, tau)
+        if eval_env is not None and (step_idx == 0 or (step_idx + 1) % args.eval_interval == 0):
+            _run_eval(eval_env, actor, total_frames, logger, max_steps=args.eval_steps)
 
         if (step_idx + 1) % args.log_interval == 0 or step_idx == 0:
-            elapsed = time.perf_counter() - t0
-            fps = total_frames / elapsed
             recent = reward_log[-args.log_interval :]
             mean_r = sum(recent) / len(recent)
             print(
@@ -313,7 +356,8 @@ def train_ddpg(env, args):
                 f"mean_reward={mean_r:.4f}"
             )
 
-    print(f"DDPG training done. {total_frames} total frames.")
+    collector.shutdown()
+    print(f"SAC training done. {total_frames} total frames.")
 
 
 # ------------------------------------------------------------------
@@ -331,7 +375,7 @@ def main():
     )
     parser.add_argument(
         "--algo",
-        choices=["ppo", "ddpg"],
+        choices=["ppo", "sac"],
         default="ppo",
         help="Algorithm (default: ppo)",
     )
@@ -346,25 +390,54 @@ def main():
     parser.add_argument("--ppo_epochs", type=int, default=4)
     parser.add_argument("--num_minibatches", type=int, default=4)
 
-    # DDPG-specific
+    # Logging & eval
+    parser.add_argument("--wandb_project", type=str, default="mujoco-torch-zoo")
+    parser.add_argument("--record_video", action="store_true", help="Record eval videos to wandb")
+    parser.add_argument("--eval_interval", type=int, default=10, help="Eval every N batches (PPO) or steps (DDPG)")
+    parser.add_argument("--eval_steps", type=int, default=500, help="Max steps per eval episode")
+
+    # SAC-specific
     parser.add_argument("--buffer_size", type=int, default=1_000_000)
-    parser.add_argument("--ddpg_batch_size", type=int, default=256)
-    parser.add_argument("--ddpg_warmup", type=int, default=10_000)
-    parser.add_argument("--ddpg_updates_per_step", type=int, default=1)
+    parser.add_argument("--sac_batch_size", type=int, default=256)
+    parser.add_argument("--sac_warmup", type=int, default=10_000)
+    parser.add_argument("--sac_utd_ratio", type=float, default=0.25,
+                        help="Update-to-data ratio (gradient updates per env step)")
 
     args = parser.parse_args()
 
     torch.set_default_dtype(torch.float64)
     torch.manual_seed(args.seed)
 
+    logger = WandbLogger(
+        exp_name=f"{args.env}_{args.algo}",
+        project=args.wandb_project,
+        config=vars(args),
+    )
     env_cls = ENVS[args.env]
-    env = env_cls(num_envs=args.num_envs, device=args.device)
+    transforms = [RewardSum()]
+    if args.algo == "sac":
+        transforms.insert(0, InitTracker())
+    env = TransformedEnv(
+        env_cls(num_envs=args.num_envs, device=args.device),
+        Compose(*transforms),
+    )
     print(f"Env: {args.env} | batch_size={env.batch_size} | device={env.device}")
 
+    eval_transforms = [RewardSum()]
+    if args.record_video:
+        eval_transforms = [
+            PixelRenderTransform(out_keys=["pixels"]),
+            VideoRecorder(logger=logger, tag="eval_video", skip=1, make_grid=False),
+        ] + eval_transforms
+    eval_env = TransformedEnv(
+        env_cls(num_envs=1, device=args.device),
+        Compose(*eval_transforms),
+    )
+
     if args.algo == "ppo":
-        train_ppo(env, args)
+        train_ppo(env, args, logger, eval_env=eval_env)
     else:
-        train_ddpg(env, args)
+        train_sac(env, args, logger, eval_env=eval_env)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,13 @@ class CartPoleEnv(MujocoTorchEnv):
     def _xml_path(cls) -> str:
         return "cartpole.xml"
 
+    @classmethod
+    def _camera_xml(cls) -> str:
+        return (
+            '<camera name="side" pos="0 -2 1.5" '
+            'xyaxes="1 0 0 0 0.45 1" fovy="60"/>'
+        )
+
     @staticmethod
     def _obs_spec_dict(num_envs, dtype, device):
         # nq=2 (slider + hinge), nv=2 => obs dim = 4

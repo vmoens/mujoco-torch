@@ -1,5 +1,6 @@
 """Base batched TorchRL environment backed by mujoco-torch."""
 
+import re
 from abc import abstractmethod
 
 import mujoco
@@ -31,6 +32,8 @@ class MujocoTorchEnv(EnvBase):
         device: torch device.
         dtype: floating-point dtype for observations, actions, rewards.
     """
+
+    RESET_NOISE_SCALE = 0.01
 
     def __init__(
         self,
@@ -76,8 +79,9 @@ class MujocoTorchEnv(EnvBase):
         if device is not None:
             dx0 = dx0.to(device)
         # Run one step so all dtypes match what vmap(step) produces.
-        dx0 = mujoco_torch.step(self.mx, dx0, fixed_iterations=True)
+        dx0 = mujoco_torch.step(self.mx, dx0)
         self._dx0 = dx0
+        self._render_precomp = mujoco_torch.precompute_render_data(self.mx)
 
     # ------------------------------------------------------------------
     # Subclass interface
@@ -120,8 +124,41 @@ class MujocoTorchEnv(EnvBase):
         return (-1.0, 1.0)
 
     @classmethod
+    def _camera_xml(cls) -> str:
+        """Return the XML for the default camera.
+
+        Subclasses can override for environment-specific framing.
+        """
+        return (
+            '<camera name="side" pos="0 -4 3" '
+            'xyaxes="1 0 0 0 0.45 1" fovy="60"/>'
+        )
+
+    @classmethod
     def _patch_xml(cls, xml: str) -> str:
-        """Optional hook to modify the XML string before model creation."""
+        """Modify the XML string before model creation.
+
+        Replaces all cameras and lights with a well-lit, fixed viewpoint.
+        Also injects a ground plane with collision if the model has none.
+        """
+        xml = re.sub(r"<camera\b[^/]*/>\s*", "", xml)
+        xml = re.sub(r"<light\b[^/]*/>\s*", "", xml)
+        camera = cls._camera_xml()
+        light = (
+            '<light name="top" pos="0 0 4" dir="0 0 -1" '
+            'diffuse="0.8 0.8 0.8" ambient="0.3 0.3 0.3" '
+            'directional="true"/>'
+        )
+        floor = ""
+        if not re.search(r'<geom\b[^>]*type="plane"', xml):
+            floor = (
+                '\n  <geom name="floor" type="plane" size="10 10 0.1" '
+                'rgba="0.8 0.85 0.8 1" conaffinity="1" condim="3"/>'
+            )
+        xml = xml.replace(
+            "<worldbody>",
+            f"<worldbody>\n  {camera}\n  {light}{floor}",
+        )
         return xml
 
     # ------------------------------------------------------------------
@@ -129,7 +166,12 @@ class MujocoTorchEnv(EnvBase):
     # ------------------------------------------------------------------
 
     def _make_batch(self, n: int):
-        return torch.stack([self._dx0.clone() for _ in range(n)])
+        batch = torch.stack([self._dx0.clone() for _ in range(n)])
+        noise = self.RESET_NOISE_SCALE
+        if noise > 0:
+            batch.qpos = batch.qpos + torch.empty_like(batch.qpos).uniform_(-noise, noise)
+            batch.qvel = batch.qvel + torch.empty_like(batch.qvel).uniform_(-noise, noise)
+        return batch
 
     def _reset(self, tensordict=None, **kwargs):
         reset_mask = None
@@ -167,11 +209,12 @@ class MujocoTorchEnv(EnvBase):
         qpos_before = self._dx.qpos.clone()
 
         self._dx = self._dx.replace(ctrl=action)
-        stepped = [
-            mujoco_torch.step(self.mx, self._dx[i])
-            for i in range(self.num_envs)
-        ]
-        self._dx = torch.stack(stepped)
+        step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
+        self._dx = (
+            step_fn(self._dx[0]).unsqueeze(0)
+            if self.num_envs == 1
+            else torch.vmap(step_fn)(self._dx)
+        )
         self._step_count += 1
 
         reward = self._compute_reward(qpos_before, action)
@@ -192,3 +235,19 @@ class MujocoTorchEnv(EnvBase):
 
     def _set_seed(self, seed):
         torch.manual_seed(seed)
+
+    def render(self, width=256, height=256, camera_id=0):
+        """Render the first environment using the mujoco-torch ray-cast renderer.
+
+        Returns an RGB uint8 array of shape ``(H, W, 3)``.
+        """
+        rgb, _, _ = mujoco_torch.render(
+            self.mx,
+            self._dx[0],
+            camera_id=camera_id,
+            width=width,
+            height=height,
+            precomp=self._render_precomp,
+            background=(0.4, 0.6, 0.8),
+        )
+        return (rgb * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()

@@ -22,6 +22,7 @@ from zoo.base import MujocoTorchEnv
 class AntEnv(MujocoTorchEnv):
     """Ant: quadruped locomotion."""
 
+    RESET_NOISE_SCALE = 0.1
     HEALTHY_Z_LOW = 0.2
     HEALTHY_Z_HIGH = 1.0
     HEALTHY_REWARD = 1.0
@@ -34,6 +35,7 @@ class AntEnv(MujocoTorchEnv):
     @classmethod
     def _patch_xml(cls, xml: str) -> str:
         """Insert a freejoint on the torso so the ant can translate/rotate."""
+        xml = super()._patch_xml(xml)
         return re.sub(
             r'(<body\s+name="torso"[^>]*>)',
             r"\1\n      <freejoint name='root'/>",
