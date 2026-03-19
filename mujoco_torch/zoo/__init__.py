@@ -17,9 +17,12 @@ import pkgutil
 
 from mujoco_torch.zoo.base import ENVS, MujocoTorchEnv, register_env
 
-# Auto-import all sibling modules to trigger @register_env decorators.
+# Auto-import env modules to trigger @register_env decorators.
+# Skip training scripts -- they are entry-points with heavy deps, not env definitions.
+_SKIP_PREFIXES = (__name__ + ".train_",)
 for _info in pkgutil.walk_packages(__path__, prefix=__name__ + "."):
-    importlib.import_module(_info.name)
+    if not _info.name.startswith(_SKIP_PREFIXES):
+        importlib.import_module(_info.name)
 
 # Re-export every registered env class so `from mujoco_torch.zoo import XxxEnv` works.
 globals().update({cls.__name__: cls for cls in ENVS.values()})

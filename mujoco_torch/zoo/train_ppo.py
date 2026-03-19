@@ -26,7 +26,7 @@ from torchrl.objectives.value import GAE
 from torchrl.record import PixelRenderTransform, VideoRecorder
 from torchrl.record.loggers.wandb import WandbLogger
 
-from mujoco_torch import logger as mjt_logger
+from mujoco_torch._src.log import logger as mjt_logger
 from mujoco_torch.zoo import ENVS
 
 # ------------------------------------------------------------------
