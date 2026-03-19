@@ -157,7 +157,7 @@ physics simulation.
 
 **Satellite (small)**
 
-![Satellite large](assets/satellite_small_demo.gif)
+![Satellite small](assets/satellite_small_demo.gif)
 
 ```bash
 # SAC
