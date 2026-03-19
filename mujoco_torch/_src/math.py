@@ -547,7 +547,11 @@ def concatenate(data):
 
 
 # ============================================================================
-# Smooth math primitives for differentiable collision detection
+# Smooth math primitives for differentiable collision detection.
+#
+# Based on: Paulus et al., "Hard Contacts with Soft Gradients: Refining
+# Differentiable Simulators for Learning and Control", 2025.
+# https://arxiv.org/abs/2506.14186
 # ============================================================================
 
 
