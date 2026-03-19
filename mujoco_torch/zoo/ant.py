@@ -16,9 +16,10 @@ import re
 import torch
 from torchrl.data import Unbounded
 
-from zoo.base import MujocoTorchEnv
+from mujoco_torch.zoo.base import MujocoTorchEnv, register_env
 
 
+@register_env("ant")
 class AntEnv(MujocoTorchEnv):
     """Ant: quadruped locomotion."""
 

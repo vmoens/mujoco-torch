@@ -8,9 +8,10 @@ Termination: |pole angle| > 0.2
 import torch
 from torchrl.data import Unbounded
 
-from zoo.base import MujocoTorchEnv
+from mujoco_torch.zoo.base import MujocoTorchEnv, register_env
 
 
+@register_env("cartpole")
 class CartPoleEnv(MujocoTorchEnv):
     """CartPole / Inverted Pendulum: balance a pole on a cart."""
 

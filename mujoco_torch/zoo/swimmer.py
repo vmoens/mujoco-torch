@@ -11,9 +11,10 @@ We skip the first two positional coords (x, y) from observations.
 import torch
 from torchrl.data import Unbounded
 
-from zoo.base import MujocoTorchEnv
+from mujoco_torch.zoo.base import MujocoTorchEnv, register_env
 
 
+@register_env("swimmer")
 class SwimmerEnv(MujocoTorchEnv):
     """Swimmer: multi-link aquatic locomotion."""
 

@@ -8,9 +8,10 @@ Termination: never
 import torch
 from torchrl.data import Unbounded
 
-from zoo.base import MujocoTorchEnv
+from mujoco_torch.zoo.base import MujocoTorchEnv, register_env
 
 
+@register_env("halfcheetah")
 class HalfCheetahEnv(MujocoTorchEnv):
     """HalfCheetah: run forward as fast as possible."""
 
