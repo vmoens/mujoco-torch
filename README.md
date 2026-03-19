@@ -159,6 +159,7 @@ physics simulation.
 
 ![Satellite small](assets/satellite_small_demo.gif)
 
+
 ```bash
 # SAC
 python zoo/train_sac.py --env halfcheetah --num_envs 64 --total_steps 500000
