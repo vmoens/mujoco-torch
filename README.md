@@ -32,20 +32,30 @@ pip install -e .
 - Python >= 3.10
 - PyTorch (see [compatibility notes](#pytorch--tensordict-compatibility) below)
 - MuJoCo >= 3.0
-- tensordict >= 0.11
+- tensordict — **must be built from source or use nightlies from 2026-03-16 or
+  later** (the latest stable release will not work; see
+  [compatibility notes](#pytorch--tensordict-compatibility) below)
 
 ### PyTorch & tensordict compatibility
 
 mujoco-torch is tested against **PyTorch nightly** and **tensordict main**.
 All modes -- eager, `torch.vmap`, and `torch.compile(fullgraph=True)` -- work
-out of the box with these versions:
+out of the box with these versions.
+
+> **Important:** The latest stable release of tensordict does **not** include the
+> `UnbatchedTensor` wrapper-subclass support that mujoco-torch requires.  You
+> must either install from source or use a **nightly build dated 2026-03-16 or
+> later**.
 
 ```bash
 # PyTorch nightly (CUDA 13.0 example; adjust the index URL for your CUDA version)
 pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu130
 
-# tensordict from source (required for wrapper-subclass UnbatchedTensor support)
+# Option 1: tensordict from source
 pip install git+https://github.com/pytorch/tensordict.git
+
+# Option 2: tensordict nightly (>= 2026-03-16)
+pip install --pre tensordict --index-url https://download.pytorch.org/whl/nightly/cpu
 ```
 
 #### Monkey patches for upstream PyTorch PRs
@@ -139,11 +149,15 @@ physics simulation.
 
 **HalfCheetah — SAC**
 
-https://github.com/user-attachments/assets/f88a7484-7fc4-4d31-bdf6-f82de777b9f0
+![HalfCheetah SAC](assets/halfcheetah_sac.gif)
 
 **Ant — SAC**
 
-https://github.com/user-attachments/assets/9c454c1b-e925-4e0b-b44a-393d85d9f3e2
+![Ant SAC](assets/ant_sac.gif)
+
+**Satellite (small)**
+
+![Satellite small](assets/satellite_small_demo.gif)
 
 
 ```bash
