@@ -155,11 +155,7 @@ physics simulation.
 
 ![Ant SAC](assets/ant_sac.gif)
 
-**Satellite (large) — SAC**
-
-![Satellite large](assets/satellite_large_demo.gif)
-
-**Satellite (small) — SAC**
+**Satellite (small)**
 
 ![Satellite small](assets/satellite_small_demo.gif)
 
