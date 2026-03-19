@@ -14,6 +14,18 @@ import mujoco_torch
 
 _TEST_DATA = epath.resource_path("mujoco_torch") / "test_data"
 
+ENVS: dict[str, type["MujocoTorchEnv"]] = {}
+
+
+def register_env(name: str):
+    """Class decorator that registers an env class in the ``ENVS`` dict."""
+
+    def decorator(cls):
+        ENVS[name] = cls
+        return cls
+
+    return decorator
+
 
 class MujocoTorchEnv(EnvBase):
     """A batched TorchRL environment backed by mujoco-torch.
@@ -31,10 +43,19 @@ class MujocoTorchEnv(EnvBase):
         max_episode_steps: truncation horizon per environment.
         device: torch device.
         dtype: floating-point dtype for observations, actions, rewards.
+        frame_skip: number of physics steps per agent action.  Defaults to
+            the class-level ``FRAME_SKIP`` (1 for the base, higher for
+            subclasses).
+        from_pixels: if ``True``, include rendered pixel observations.
+        pixel_only: if ``True``, drop state observations and return only pixels.
+            Requires ``from_pixels=True``.
+        render_width: pixel observation width.
+        render_height: pixel observation height.
     """
 
     RESET_NOISE_SCALE = 0.01
     FRAME_SKIP = 1
+    RENDER_BACKGROUND = (0.4, 0.6, 0.8)
 
     def __init__(
         self,
@@ -43,11 +64,22 @@ class MujocoTorchEnv(EnvBase):
         device=None,
         dtype=torch.float64,
         compile_step: bool = False,
+        frame_skip: int | None = None,
+        from_pixels: bool = False,
+        pixel_only: bool = False,
+        render_width: int = 64,
+        render_height: int = 64,
     ):
+        if frame_skip is not None:
+            self.FRAME_SKIP = frame_skip
         super().__init__(device=device, batch_size=torch.Size([num_envs]))
         self.dtype = dtype
         self.num_envs = num_envs
         self.max_episode_steps = max_episode_steps
+        self.from_pixels = from_pixels
+        self.pixel_only = pixel_only
+        self.render_width = render_width
+        self.render_height = render_height
 
         xml_string = (_TEST_DATA / self._xml_path()).read_text()
         xml_string = self._patch_xml(xml_string)
@@ -61,6 +93,18 @@ class MujocoTorchEnv(EnvBase):
         nu = m_mj.nu
 
         obs_keys = self._obs_spec_dict(num_envs, dtype, self.device)
+        if from_pixels:
+            pixel_spec = Bounded(
+                low=0,
+                high=255,
+                shape=(num_envs, render_height, render_width, 3),
+                dtype=torch.uint8,
+                device=self.device,
+            )
+            if pixel_only:
+                obs_keys = {"pixels": pixel_spec}
+            else:
+                obs_keys["pixels"] = pixel_spec
         self.observation_spec = Composite(**obs_keys, batch_size=[num_envs])
 
         low, high = self._action_range()
@@ -123,6 +167,37 @@ class MujocoTorchEnv(EnvBase):
     def _action_range(cls) -> tuple[float, float]:
         """Return ``(low, high)`` for the action spec.  Default ``(-1, 1)``."""
         return (-1.0, 1.0)
+
+    def _prepare_ctrl(self, action: torch.Tensor) -> torch.Tensor:
+        """Transform agent action into simulator ctrl vector.
+
+        Override for partial actuation (e.g. satellite CMGs where rotors
+        are held at constant speed and only gimbals are agent-controlled).
+        """
+        return action
+
+    def _build_obs(self) -> dict:
+        """Build the full observation dict, optionally including pixels."""
+        obs = {} if (self.from_pixels and self.pixel_only) else self._make_obs()
+        if self.from_pixels:
+            obs["pixels"] = self._render_pixels()
+        return obs
+
+    def _render_pixels(self) -> torch.Tensor:
+        """Render all environments.  Returns ``(num_envs, H, W, 3)`` uint8."""
+        frames = []
+        for i in range(self.num_envs):
+            rgb, _, _ = mujoco_torch.render(
+                self.mx,
+                self._dx[i],
+                camera_id=0,
+                width=self.render_width,
+                height=self.render_height,
+                precomp=self._render_precomp,
+                background=self.RENDER_BACKGROUND,
+            )
+            frames.append((rgb * 255).clamp(0, 255).to(torch.uint8))
+        return torch.stack(frames)
 
     @classmethod
     def _camera_xml(cls) -> str:
@@ -187,7 +262,7 @@ class MujocoTorchEnv(EnvBase):
 
         return TensorDict(
             {
-                **self._make_obs(),
+                **self._build_obs(),
                 "done": torch.zeros(*self.batch_size, 1, dtype=torch.bool, device=self.device),
                 "terminated": torch.zeros(*self.batch_size, 1, dtype=torch.bool, device=self.device),
             },
@@ -197,10 +272,11 @@ class MujocoTorchEnv(EnvBase):
 
     def _step(self, tensordict):
         action = tensordict["action"].to(self.dtype)
+        ctrl = self._prepare_ctrl(action)
 
         qpos_before = self._dx.qpos.clone()
 
-        self._dx = self._dx.replace(ctrl=action)
+        self._dx = self._dx.replace(ctrl=ctrl)
         step_fn = self._physics_step
         for _ in range(self.FRAME_SKIP):
             self._dx = step_fn(self._dx[0]).unsqueeze(0) if self.num_envs == 1 else torch.vmap(step_fn)(self._dx)
@@ -213,7 +289,7 @@ class MujocoTorchEnv(EnvBase):
 
         return TensorDict(
             {
-                **self._make_obs(),
+                **self._build_obs(),
                 "reward": reward,
                 "done": done,
                 "terminated": terminated,
@@ -237,6 +313,6 @@ class MujocoTorchEnv(EnvBase):
             width=width,
             height=height,
             precomp=self._render_precomp,
-            background=(0.4, 0.6, 0.8),
+            background=self.RENDER_BACKGROUND,
         )
         return (rgb * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()

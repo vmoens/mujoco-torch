@@ -56,3 +56,8 @@ mre_*.py
 torch_compile_debug/
 *.json.gz
 bench_results.json
+
+# Generated artifacts
+wandb/
+satellite_logs/
+*.mp4

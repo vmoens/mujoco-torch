@@ -3,9 +3,9 @@
 
 Usage::
 
-    python zoo/train_sac.py --env halfcheetah
-    python zoo/train_sac.py --env cartpole --total_steps 100000
-    python zoo/train_sac.py --env ant --num_envs 64 --compile
+    python -m mujoco_torch.zoo.train_sac --env halfcheetah
+    python -m mujoco_torch.zoo.train_sac --env cartpole --total_steps 100000
+    python -m mujoco_torch.zoo.train_sac --env ant --num_envs 64 --compile
 
 """
 
@@ -27,7 +27,8 @@ from torchrl.objectives.sac import SACLoss
 from torchrl.record import PixelRenderTransform, VideoRecorder
 from torchrl.record.loggers.wandb import WandbLogger
 
-from zoo import ENVS
+from mujoco_torch._src.log import logger as mjt_logger
+from mujoco_torch.zoo import ENVS
 
 # ------------------------------------------------------------------
 # Network builders
@@ -97,7 +98,7 @@ def _run_eval(eval_env, actor, total_frames, logger, max_steps=200):
             t.obs = []
             t.count = 0
     logger.experiment.log(log_dict)
-    print(f"  [EVAL] frames={total_frames} episode_reward={ep_reward:.2f}")
+    mjt_logger.info(f"  [EVAL] frames={total_frames} episode_reward={ep_reward:.2f}")
 
 
 # ------------------------------------------------------------------
@@ -159,8 +160,8 @@ def train_sac(env, args, logger, eval_env=None):
 
     num_updates = max(1, int(args.num_envs * args.utd_ratio))
 
-    print(f"SAC | obs_dim={obs_dim} act_dim={act_dim} device={device}")
-    print(f"  utd_ratio={args.utd_ratio} num_updates={num_updates}")
+    mjt_logger.info(f"SAC | obs_dim={obs_dim} act_dim={act_dim} device={device}")
+    mjt_logger.info(f"  utd_ratio={args.utd_ratio} num_updates={num_updates}")
 
     total_frames = 0
     t0 = time.perf_counter()
@@ -207,10 +208,10 @@ def train_sac(env, args, logger, eval_env=None):
         if (step_idx + 1) % args.log_interval == 0 or step_idx == 0:
             recent = reward_log[-args.log_interval :]
             mean_r = sum(recent) / len(recent)
-            print(f"  step {step_idx + 1} | frames={total_frames} | fps={fps:.0f} | mean_reward={mean_r:.4f}")
+            mjt_logger.info(f"  step {step_idx + 1} | frames={total_frames} | fps={fps:.0f} | mean_reward={mean_r:.4f}")
 
     collector.shutdown()
-    print(f"SAC training done. {total_frames} total frames.")
+    mjt_logger.info(f"SAC training done. {total_frames} total frames.")
 
 
 # ------------------------------------------------------------------
@@ -257,7 +258,7 @@ def main():
         env_cls(num_envs=args.num_envs, **env_kwargs),
         Compose(InitTracker(), RewardSum()),
     )
-    print(f"Env: {args.env} | batch_size={env.batch_size} | device={env.device}")
+    mjt_logger.info(f"Env: {args.env} | batch_size={env.batch_size} | device={env.device}")
 
     eval_transforms = [RewardSum()]
     if args.record_video:
