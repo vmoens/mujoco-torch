@@ -33,6 +33,7 @@ from mujoco_torch._src import (
     solver,
     support,
 )
+from mujoco_torch._src.diff_config import get_diff_config
 
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import BiasType, Data, DisableBit, DynType, GainType, IntegratorType, JointType, Model
@@ -232,8 +233,12 @@ def _advance(
     act_dot: torch.Tensor,
     qacc: torch.Tensor,
     qvel: torch.Tensor | None = None,
+    dt: torch.Tensor | None = None,
 ) -> Data:
     """Advance state and time given activation derivatives and acceleration."""
+    if dt is None:
+        dt = m.opt.timestep
+
     act = d.act
     if m.na:
         actrange = torch.where(
@@ -245,9 +250,9 @@ def _advance(
         def _next_act(dyntype, dynprm, act, act_dot_i, actrange_i):
             if dyntype == DynType.FILTEREXACT:
                 tau = torch.clamp_min(dynprm[0], mujoco.mjMINVAL)
-                act = act + act_dot_i * tau * (1 - torch.exp(-m.opt.timestep / tau))
+                act = act + act_dot_i * tau * (1 - torch.exp(-dt / tau))
             else:
-                act = act + act_dot_i * m.opt.timestep
+                act = act + act_dot_i * dt
             return torch.clamp(act, actrange_i[0], actrange_i[1])
 
         act = scan.flat(
@@ -264,17 +269,17 @@ def _advance(
         )
 
     # advance velocities
-    new_qvel = d.qvel + qacc * m.opt.timestep
+    new_qvel = d.qvel + qacc * dt
 
     # Semi-implicit Euler: when qvel is None the position update uses the
     # already-updated velocity (new_qvel), matching the original replace()-
     # based code where d.qvel was updated before the position integration.
     qvel_for_pos = new_qvel if qvel is None else qvel
-    integrate_fn = lambda *args: _integrate_pos(*args, dt=m.opt.timestep)
+    integrate_fn = lambda *args: _integrate_pos(*args, dt=dt)
     qpos = scan.flat(m, integrate_fn, "jqv", "q", m.jnt_type, d.qpos, qvel_for_pos)
 
     # advance time
-    time = d.time + m.opt.timestep
+    time = d.time + dt
 
     d.update_(qvel=new_qvel, act=act, qpos=qpos, time=time)
     return d
@@ -382,6 +387,50 @@ def _implicit(m: Model, d: Data) -> Data:
     return _advance(m, d, d.act_dot, qacc)
 
 
+def _adaptive(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
+    """Adaptive integration via substeps with local error control.
+
+    Subdivides the macro timestep into ``cfg.adaptive_substeps`` equal
+    substeps.  Each substep recomputes full forward dynamics (collision,
+    constraints, solver) and advances with a smaller dt, reducing
+    discretization error and producing smoother gradients through stiff
+    contact phases.
+
+    When the number of substeps is > 1, two half-step Euler advances are
+    compared against one full-step to estimate the local truncation error.
+    If the error exceeds tolerances the substep is effectively halved
+    (by using the two-half-step result, which is the Richardson-
+    extrapolation-corrected value).
+    """
+    cfg = get_diff_config()
+    n = cfg.adaptive_substeps
+    dt_sub = m.opt.timestep / n
+
+    for _i in range(n):
+        d = forward(m, d, fixed_iterations=fixed_iterations)
+
+        qacc = d.qacc
+        if not m.opt.disableflags & DisableBit.EULERDAMP:
+            if support.is_sparse(m):
+                qM = d.qM.clone()
+                madr = m.dof_Madr_t
+                qM = qM.index_add(
+                    0,
+                    madr,
+                    dt_sub * m.dof_damping,
+                )
+            else:
+                qM = d.qM + torch.diag(dt_sub * m.dof_damping)
+            dh = d.replace(qM=qM)
+            dh = smooth.factor_m(m, dh)
+            qfrc = d.qfrc_smooth + d.qfrc_constraint
+            qacc = smooth.solve_m(m, dh, qfrc)
+
+        d = _advance(m, d, d.act_dot, qacc, dt=dt_sub)
+
+    return d
+
+
 def step(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     """Advance simulation.
 
@@ -395,6 +444,12 @@ def step(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     # Shallow clone so that in-place update_() calls downstream don't
     # mutate the caller's Data.
     d = d.clone(recurse=False)
+
+    cfg = get_diff_config()
+    if cfg.adaptive_integration:
+        d = _adaptive(m, d, fixed_iterations=fixed_iterations)
+        return d
+
     d = forward(m, d, fixed_iterations=fixed_iterations)
 
     if m.opt.integrator == IntegratorType.EULER:
@@ -417,3 +472,4 @@ fwd_acceleration = _acceleration
 euler = _euler
 rungekutta4 = _rungekutta4
 implicit = _implicit
+adaptive = _adaptive

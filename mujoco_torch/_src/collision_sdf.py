@@ -31,6 +31,7 @@ from mujoco_torch._src import math
 # pylint: disable=g-importing-member
 from mujoco_torch._src.collision_types import Collision as Contact
 from mujoco_torch._src.collision_types import GeomInfo
+from mujoco_torch._src.diff_config import get_diff_config
 
 # pylint: enable=g-importing-member
 
@@ -48,13 +49,15 @@ def _sphere(pos: torch.Tensor, size: torch.Tensor) -> torch.Tensor:
 
 
 def _capsule(pos: torch.Tensor, size: torch.Tensor) -> torch.Tensor:
+    cfg = get_diff_config()
     unit_z = torch.eye(3, dtype=pos.dtype, device=pos.device)[2]
     pa = -size[1] * unit_z
     pb = size[1] * unit_z
     ab = pb - pa
     ap = pos - pa
     denom = (ab * ab).sum(-1)
-    denom = torch.where(torch.abs(denom) < 1e-12, 1e-12 * math.sign(denom), denom)
+    sign_fn = math.soft_sign if cfg.smooth_collisions else math.sign
+    denom = torch.where(torch.abs(denom) < 1e-12, 1e-12 * sign_fn(denom), denom)
     t = (ab * ap).sum(-1) / denom
     t = torch.clamp(t, 0, 1)
     c = pa + t * ab
@@ -78,7 +81,7 @@ def _cylinder_grad(x: torch.Tensor, size: torch.Tensor) -> torch.Tensor:
             torch.maximum(a[1], torch.full((), 0.0, dtype=x.dtype, device=x.device)),
         ]
     )
-    j = torch.argmax(a)
+    cfg = get_diff_config()
     bnorm = torch.sqrt(b[0] * b[0] + b[1] * b[1])
     bnorm = bnorm + (torch.allclose(bnorm, torch.zeros_like(bnorm)) * 1e-12)
     grada = torch.stack(
@@ -102,6 +105,13 @@ def _cylinder_grad(x: torch.Tensor, size: torch.Tensor) -> torch.Tensor:
     )
     b_idx = torch.stack([b[0], b[0], b[1]])
     gradb = grada * b_idx / bnorm
+    if cfg.smooth_collisions:
+        s = cfg.smooth_sharpness
+        w = torch.softmax(s * a, dim=0)
+        gradm_blended = (w.unsqueeze(-1) * gradm).sum(dim=0)
+        w_inside = torch.sigmoid(s * (-a.max()))
+        return math.soft_where(w_inside, gradm_blended, gradb)
+    j = torch.argmax(a)
     return torch.where(a[j] < 0, gradm[j], gradb)
 
 
@@ -174,6 +184,12 @@ def _gradient_step(objective: SDFFn, state: tuple[torch.Tensor, torch.Tensor]) -
     grad = torch.autograd.grad(objective(x_grad), x_grad)[0]
     candidates = x.unsqueeze(0) - alpha.unsqueeze(1) * grad.unsqueeze(0)
     values = torch.stack([objective(candidates[i]) for i in range(nlinesearch)])
+    cfg = get_diff_config()
+    if cfg.smooth_collisions:
+        s = cfg.smooth_sharpness
+        best_val = math.softmin_weighted(values, values.unsqueeze(-1), s).squeeze(-1)
+        best_x = math.softmin_weighted(values, candidates, s)
+        return best_val, best_x
     idx = torch.argmin(values)
     return values[idx], candidates[idx]
 

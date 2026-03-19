@@ -544,3 +544,53 @@ def concatenate(data):
     if device is not None:
         filtered = [t.to(device) if t.device != device else t for t in filtered]
     return torch.cat(filtered, dim=0)
+
+
+# ============================================================================
+# Smooth math primitives for differentiable collision detection
+# ============================================================================
+
+
+def smooth_sigmoid(
+    x: torch.Tensor,
+    low: torch.Tensor,
+    high: torch.Tensor,
+    sharpness: float = 10.0,
+) -> torch.Tensor:
+    """Smooth step from 0 to 1 between *low* and *high*."""
+    mid = 0.5 * (low + high)
+    scale = sharpness / torch.clamp_min(high - low, 1e-12)
+    return torch.sigmoid(scale * (x - mid))
+
+
+def soft_sign(x: torch.Tensor, sharpness: float = 10.0) -> torch.Tensor:
+    """Smooth approximation of :func:`sign` using tanh."""
+    return torch.tanh(sharpness * x)
+
+
+def soft_where(
+    w: torch.Tensor,
+    x: torch.Tensor,
+    y: torch.Tensor,
+) -> torch.Tensor:
+    """Differentiable interpolation: ``w * x + (1 - w) * y``."""
+    return w * x + (1 - w) * y
+
+
+def softmin_weighted(
+    values: torch.Tensor,
+    candidates: torch.Tensor,
+    sharpness: float = 10.0,
+) -> torch.Tensor:
+    """Softmin-weighted combination of candidates along dim 0.
+
+    Args:
+      values: (N,) distances
+      candidates: (N, ...) corresponding points/vectors
+      sharpness: higher = closer to hard argmin selection
+    """
+    weights = torch.softmax(-sharpness * values, dim=0)
+    ndim = candidates.ndim
+    for _ in range(ndim - 1):
+        weights = weights.unsqueeze(-1)
+    return (weights * candidates).sum(dim=0)
