@@ -3,9 +3,9 @@
 
 Usage::
 
-    python zoo/train_sac.py --env halfcheetah
-    python zoo/train_sac.py --env cartpole --total_steps 100000
-    python zoo/train_sac.py --env ant --num_envs 64 --compile
+    python -m mujoco_torch.zoo.train_sac --env halfcheetah
+    python -m mujoco_torch.zoo.train_sac --env cartpole --total_steps 100000
+    python -m mujoco_torch.zoo.train_sac --env ant --num_envs 64 --compile
 
 """
 
@@ -27,7 +27,7 @@ from torchrl.objectives.sac import SACLoss
 from torchrl.record import PixelRenderTransform, VideoRecorder
 from torchrl.record.loggers.wandb import WandbLogger
 
-from zoo import ENVS
+from mujoco_torch.zoo import ENVS
 
 # ------------------------------------------------------------------
 # Network builders

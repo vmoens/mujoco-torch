@@ -14,6 +14,18 @@ import mujoco_torch
 
 _TEST_DATA = epath.resource_path("mujoco_torch") / "test_data"
 
+ENVS: dict[str, type["MujocoTorchEnv"]] = {}
+
+
+def register_env(name: str):
+    """Class decorator that registers an env class in the ``ENVS`` dict."""
+
+    def decorator(cls):
+        ENVS[name] = cls
+        return cls
+
+    return decorator
+
 
 class MujocoTorchEnv(EnvBase):
     """A batched TorchRL environment backed by mujoco-torch.

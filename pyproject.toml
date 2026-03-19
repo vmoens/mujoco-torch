@@ -21,6 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+zoo = ["torchrl>=0.6"]
 test = ["pytest", "pytest-benchmark"]
 benchmark = ["pytest", "pytest-benchmark", "pytest-xdist"]
 

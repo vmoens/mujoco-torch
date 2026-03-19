@@ -13,17 +13,12 @@ Usage (from the repo root):
 Outputs are saved under ``satellite_logs/<env_name>/``.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 import torch
-from torchrl.envs import StepCounter, TransformedEnv
 from tensordict import TensorDictBase
+from torchrl.envs import StepCounter, TransformedEnv
 from torchrl.record import CSVLogger, VideoRecorder
 
-from zoo import SatelliteLargeEnv, SatelliteSmallEnv
+from mujoco_torch.zoo import SatelliteLargeEnv, SatelliteSmallEnv
 
 STEPS = 500
 RENDER_SIZE = 256
@@ -31,10 +26,12 @@ FPS = 50
 
 torch.set_default_dtype(torch.float64)
 
+
 def count_steps(self, td: TensorDictBase):
     s = td["step_count"].float().mean().item()
     if s % 10 == 0:
         print(f"Step count: {s:.0f}")
+
 
 def run(env_cls, name):
     logger = CSVLogger(
@@ -80,8 +77,7 @@ def run(env_cls, name):
     logger.log_scalar("mean_reward", mean_r, step=0)
     logger.log_scalar("total_reward", total_r, step=0)
 
-    print(f"  {name}: mean_reward={mean_r:.4f}, "
-          f"total_reward={total_r:.2f}")
+    print(f"  {name}: mean_reward={mean_r:.4f}, total_reward={total_r:.2f}")
     print(f"  Video + CSV saved under satellite_logs/{name}/")
 
     del env

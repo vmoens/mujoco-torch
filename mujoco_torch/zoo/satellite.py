@@ -27,7 +27,7 @@ import re
 import torch
 from torchrl.data import Bounded, Unbounded
 
-from zoo.base import MujocoTorchEnv
+from mujoco_torch.zoo.base import MujocoTorchEnv, register_env
 
 
 class _SatelliteBase(MujocoTorchEnv):
@@ -73,7 +73,9 @@ class _SatelliteBase(MujocoTorchEnv):
         obs_dim = 7 + 4 * cls.N_GIMBALS
         return {
             "observation": Unbounded(
-                shape=(num_envs, obs_dim), dtype=dtype, device=device,
+                shape=(num_envs, obs_dim),
+                dtype=dtype,
+                device=device,
             ),
         }
 
@@ -85,8 +87,8 @@ class _SatelliteBase(MujocoTorchEnv):
                 [
                     qpos[..., 3:7],  # bus quaternion (w, x, y, z)
                     qvel[..., 3:6],  # bus angular velocity
-                    qpos[..., 7:],   # CMG joint angles
-                    qvel[..., 6:],   # all CMG joint rates
+                    qpos[..., 7:],  # CMG joint angles
+                    qvel[..., 6:],  # all CMG joint rates
                 ],
                 dim=-1,
             ),
@@ -121,11 +123,14 @@ class _SatelliteBase(MujocoTorchEnv):
 
     def _compute_terminated(self):
         return torch.zeros(
-            *self.batch_size, 1,
-            dtype=torch.bool, device=self.device,
+            *self.batch_size,
+            1,
+            dtype=torch.bool,
+            device=self.device,
         )
 
 
+@register_env("satellite_large")
 class SatelliteLargeEnv(_SatelliteBase):
     """High-altitude satellite with 4 CMGs in a pyramid arrangement."""
 
@@ -138,13 +143,10 @@ class SatelliteLargeEnv(_SatelliteBase):
 
     @classmethod
     def _camera_xml(cls) -> str:
-        return (
-            '<camera name="side" pos="3 -3 2"'
-            ' xyaxes="0.707 0.707 0 -0.302 0.302 0.905"'
-            ' fovy="60"/>'
-        )
+        return '<camera name="side" pos="3 -3 2" xyaxes="0.707 0.707 0 -0.302 0.302 0.905" fovy="60"/>'
 
 
+@register_env("satellite_small")
 class SatelliteSmallEnv(_SatelliteBase):
     """Low-altitude CubeSat with 6 CMGs for redundant attitude control."""
 
@@ -157,8 +159,4 @@ class SatelliteSmallEnv(_SatelliteBase):
 
     @classmethod
     def _camera_xml(cls) -> str:
-        return (
-            '<camera name="side" pos="0.5 -0.5 0.3"'
-            ' xyaxes="0.707 0.707 0 -0.276 0.276 0.920"'
-            ' fovy="60"/>'
-        )
+        return '<camera name="side" pos="0.5 -0.5 0.3" xyaxes="0.707 0.707 0 -0.276 0.276 0.920" fovy="60"/>'

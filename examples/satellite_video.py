@@ -10,10 +10,6 @@ Usage (from the repo root):
 """
 
 import math
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import imageio
 import mujoco
@@ -21,7 +17,7 @@ import torch
 from tensordict import TensorDict
 
 import mujoco_torch
-from zoo import SatelliteLargeEnv, SatelliteSmallEnv
+from mujoco_torch.zoo import SatelliteLargeEnv, SatelliteSmallEnv
 
 STEPS = 750
 WIDTH, HEIGHT = 640, 480
@@ -35,13 +31,11 @@ def _sinusoidal_action(step, n_gimbals, dt):
     freqs = [0.6 + 0.35 * i for i in range(n_gimbals)]
     phases = [i * math.pi / n_gimbals for i in range(n_gimbals)]
     return torch.tensor(
-        [[0.9 * math.sin(2 * math.pi * f * t + p)
-          for f, p in zip(freqs, phases)]],
+        [[0.9 * math.sin(2 * math.pi * f * t + p) for f, p in zip(freqs, phases)]],
     )
 
 
-def make_video(env_cls, filename, camera_distance,
-               camera_elevation=-20, camera_azimuth=135):
+def make_video(env_cls, filename, camera_distance, camera_elevation=-20, camera_azimuth=135):
     env = env_cls(num_envs=1)
     env.reset()
     n_gimbals = env.action_spec.shape[-1]
@@ -71,14 +65,11 @@ def make_video(env_cls, filename, camera_distance,
         frames.append(renderer.render().copy())
 
     imageio.mimwrite(filename, frames, fps=FPS)
-    print(f"Saved {filename}  ({len(frames)} frames, "
-          f"{len(frames)/FPS:.1f}s)")
+    print(f"Saved {filename}  ({len(frames)} frames, {len(frames) / FPS:.1f}s)")
 
 
 print("Rendering large satellite (4 CMGs, pyramid)...")
-make_video(SatelliteLargeEnv, "satellite_large_demo.mp4",
-           camera_distance=5.0)
+make_video(SatelliteLargeEnv, "satellite_large_demo.mp4", camera_distance=5.0)
 
 print("Rendering small satellite (6 CMGs, redundant)...")
-make_video(SatelliteSmallEnv, "satellite_small_demo.mp4",
-           camera_distance=0.7)
+make_video(SatelliteSmallEnv, "satellite_small_demo.mp4", camera_distance=0.7)

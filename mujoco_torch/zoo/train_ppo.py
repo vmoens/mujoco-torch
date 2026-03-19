@@ -3,9 +3,9 @@
 
 Usage::
 
-    python zoo/train_ppo.py --env halfcheetah
-    python zoo/train_ppo.py --env cartpole --total_steps 200000
-    python zoo/train_ppo.py --env ant --num_envs 32 --compile
+    python -m mujoco_torch.zoo.train_ppo --env halfcheetah
+    python -m mujoco_torch.zoo.train_ppo --env cartpole --total_steps 200000
+    python -m mujoco_torch.zoo.train_ppo --env ant --num_envs 32 --compile
 
 """
 
@@ -26,7 +26,7 @@ from torchrl.objectives.value import GAE
 from torchrl.record import PixelRenderTransform, VideoRecorder
 from torchrl.record.loggers.wandb import WandbLogger
 
-from zoo import ENVS
+from mujoco_torch.zoo import ENVS
 
 # ------------------------------------------------------------------
 # Network builders
