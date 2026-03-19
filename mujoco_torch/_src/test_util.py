@@ -30,6 +30,8 @@ TEST_FILES: list[str] = [
     "hopper.xml",
     "humanoid.xml",
     "pendula.xml",
+    "satellite_large.xml",
+    "satellite_small.xml",
     "swimmer.xml",
     "walker2d.xml",
 ]
