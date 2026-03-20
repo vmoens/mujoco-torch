@@ -140,10 +140,15 @@ def _run_eval(eval_env, policy, iteration, logger, max_steps=500):
 
     for t in eval_env.transform:
         if isinstance(t, VideoRecorder) and t.obs:
-            import wandb
+            try:
+                import wandb
 
-            vid = torch.stack(t.obs, 0).unsqueeze(0).cpu()
-            log_dict["eval_video"] = wandb.Video(vid, fps=30, format="mp4")
+                vid = torch.stack(t.obs, 0).unsqueeze(0).cpu()
+                log_dict["eval_video"] = wandb.Video(
+                    vid, fps=30, format="mp4"
+                )
+            except Exception as e:
+                mjt_logger.warning(f"  Video encoding failed: {e}")
             t.obs = []
             t.count = 0
 
