@@ -199,11 +199,22 @@ def train_direct(args):
         return mujoco_torch.step(mx, d, fixed_iterations=True)
 
     # Batched step: vmap over the leading env dimension
-    batched_step = torch.vmap(physics_step)
-
-    if args.compile:
-        batched_step = torch.compile(batched_step, fullgraph=True)
-        mjt_logger.info("  torch.compile(fullgraph=True) on vmapped step")
+    compile_mode = args.compile_mode  # "none", "compile_vmap", "vmap_compile"
+    if compile_mode == "compile_vmap":
+        # compile(vmap(fn)) — compile the whole vmapped function
+        batched_step = torch.compile(
+            torch.vmap(physics_step), fullgraph=True
+        )
+        mjt_logger.info("  mode: compile(vmap(step), fullgraph=True)")
+    elif compile_mode == "vmap_compile":
+        # vmap(compile(fn)) — compile the inner fn, then vmap
+        batched_step = torch.vmap(
+            torch.compile(physics_step, fullgraph=True)
+        )
+        mjt_logger.info("  mode: vmap(compile(step, fullgraph=True))")
+    else:
+        batched_step = torch.vmap(physics_step)
+        mjt_logger.info("  mode: vmap(step) [no compile]")
 
     # WandB logger
     logger = WandbLogger(
@@ -237,7 +248,7 @@ def train_direct(args):
         f"  diff_mode: smooth={args.smooth_collisions} "
         f"cfd={args.cfd} adaptive={args.adaptive_integration}"
     )
-    mjt_logger.info(f"  compile={args.compile}")
+    mjt_logger.info(f"  compile_mode={compile_mode}")
 
     t0 = time.perf_counter()
     best_reward = float("-inf")
@@ -373,7 +384,14 @@ def main():
     parser.add_argument("--num_iters", type=int, default=5000)
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument(
-        "--compile", action="store_true", help="torch.compile the physics step"
+        "--compile", action="store_true",
+        help="(deprecated) alias for --compile_mode=compile_vmap",
+    )
+    parser.add_argument(
+        "--compile_mode",
+        choices=["none", "compile_vmap", "vmap_compile"],
+        default="none",
+        help="compile(vmap(fn)) vs vmap(compile(fn)) vs no compile",
     )
 
     # Differentiable mode
@@ -407,6 +425,10 @@ def main():
     parser.add_argument("--device", type=str, default=None)
 
     args = parser.parse_args()
+
+    # --compile is a shorthand for --compile_mode=compile_vmap
+    if args.compile and args.compile_mode == "none":
+        args.compile_mode = "compile_vmap"
 
     torch.set_default_dtype(torch.float64)
     torch.manual_seed(args.seed)
