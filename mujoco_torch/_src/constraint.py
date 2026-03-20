@@ -20,6 +20,7 @@ import mujoco
 import torch
 
 from mujoco_torch._src import collision_driver, math, support
+from mujoco_torch._src.diff_config import DiffConfig, get_diff_config
 from mujoco_torch._src.math import _CachedConst
 
 _MJMINVAL = _CachedConst(mujoco.mjMINVAL)
@@ -70,6 +71,7 @@ def _kbi(
     solimp: torch.Tensor,
     pos: torch.Tensor,
     refsafe: bool = False,
+    cfd_config: DiffConfig | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Calculates stiffness, damping, and impedance of a constraint."""
     timeconst, dampratio = solref
@@ -99,6 +101,13 @@ def _kbi(
     imp = dmin + imp_y * (dmax - dmin)
     imp = torch.clamp(imp, dmin, dmax)
     imp = torch.where(imp_x > 1.0, dmax, imp)
+
+    if cfd_config is not None:
+        cfd_w = cfd_config.cfd_width
+        cfd_dc = cfd_config.cfd_dc
+        cfd_frac = torch.clamp(1.0 - pos / cfd_w, 0.0, 1.0)
+        cfd_imp = cfd_dc + (dmax - cfd_dc) * cfd_frac
+        imp = torch.where(pos > 0, cfd_imp, imp)
 
     return k, b, imp  # corresponds to K, B, I of efc_KBIP
 
@@ -400,6 +409,7 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc:
 
     Each condim=1 contact produces a single normal-force constraint row.
     """
+    cfg = get_diff_config()
     ncon_fl = m.condim_counts_py[0]
 
     @torch.vmap
@@ -415,7 +425,7 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc:
 
         j = (c.frame @ diff.T)[0]
 
-        active = dist < 0
+        active = dist < cfg.cfd_width if cfg.cfd else dist < 0
         return j * active, dist * active, t
 
     contact = d.contact
@@ -446,6 +456,7 @@ def _instantiate_contact_pyramidal(m: Model, d: Data, condim: int, start_idx: in
     Handles condim=3 (tangential only), condim=4 (+torsional), condim=6 (+rolling).
     Each contact produces (condim-1)*2 constraint rows (pyramid edges).
     """
+    cfg = get_diff_config()
     n_edges = (condim - 1) * 2
 
     @torch.vmap
@@ -474,7 +485,7 @@ def _instantiate_contact_pyramidal(m: Model, d: Data, condim: int, start_idx: in
         mu = c.friction[0]
         invweight = (t + mu * mu * t) * 2 * mu * mu / m.opt.impratio
 
-        active = dist < 0
+        active = dist < cfg.cfd_width if cfg.cfd else dist < 0
         j = j * active
         pos = dist.unsqueeze(0).expand(n_edges) * active
         solref = torch.tile(c.solref, (n_edges, 1))
@@ -509,6 +520,7 @@ def _instantiate_contact_elliptic(m: Model, d: Data, condim: int, start_idx: int
 
     Each contact produces ``condim`` constraint rows (1 normal + condim-1 friction).
     """
+    cfg = get_diff_config()
 
     @torch.vmap
     def fn(c: Contact):
@@ -541,7 +553,7 @@ def _instantiate_contact_elliptic(m: Model, d: Data, condim: int, start_idx: int
 
         solimp = c.solimp.unsqueeze(0).expand(condim, -1)
 
-        active = dist < 0
+        active = dist < cfg.cfd_width if cfg.cfd else dist < 0
         j = j * active
         pos_aref = pos_aref * active
 
@@ -657,6 +669,38 @@ def make_constraint(m: Model, d: Data) -> Data:
         return aref, r
 
     aref, r = fn(efc)
+
+    cfg = get_diff_config()
+    if cfg.cfd:
+
+        @torch.vmap
+        def fn_cfd(efc):
+            k, b, imp = _kbi(
+                m,
+                efc.solref,
+                efc.solimp,
+                efc.pos_norm,
+                refsafe=refsafe,
+                cfd_config=cfg,
+            )
+            r = torch.maximum(
+                efc.invweight * (1 - imp) / imp,
+                _MJMINVAL.get(
+                    efc.invweight.dtype,
+                    efc.invweight.device,
+                ),
+            )
+            pos_cfd = -torch.nn.functional.softplus(
+                -efc.pos,
+                beta=1.0 / max(cfg.cfd_width, 1e-8),
+            )
+            aref = -b * (efc.J @ d.qvel) - k * imp * pos_cfd
+            return aref, r
+
+        aref_cfd, r_cfd = fn_cfd(efc)
+        aref = aref.detach() + aref_cfd - aref_cfd.detach()
+        r = r.detach() + r_cfd - r_cfd.detach()
+
     d.update_(
         efc_J=efc.J,
         efc_D=1 / r,
