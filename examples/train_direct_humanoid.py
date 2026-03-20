@@ -94,7 +94,7 @@ def _make_policy(obs_dim: int, act_dim: int, device, use_batchnorm: bool = True)
     """
     layers = []
     if use_batchnorm:
-        layers.append(nn.BatchNorm1d(obs_dim))
+        layers.append(nn.BatchNorm1d(obs_dim, device=device))
     layers.append(
         MLP(
             in_features=obs_dim,
