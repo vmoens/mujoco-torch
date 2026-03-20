@@ -198,9 +198,12 @@ def train_direct(args):
     def physics_step(d):
         return mujoco_torch.step(mx, d, fixed_iterations=True)
 
+    # Batched step: vmap over the leading env dimension
+    batched_step = torch.vmap(physics_step)
+
     if args.compile:
-        physics_step = torch.compile(physics_step)
-        mjt_logger.info("  torch.compile enabled for physics step")
+        batched_step = torch.compile(batched_step, fullgraph=True)
+        mjt_logger.info("  torch.compile(fullgraph=True) on vmapped step")
 
     # WandB logger
     logger = WandbLogger(
@@ -238,6 +241,7 @@ def train_direct(args):
 
     t0 = time.perf_counter()
     best_reward = float("-inf")
+    use_cuda = device is not None and "cuda" in str(device)
 
     for iteration in range(args.num_iters):
         # Fresh batch of initial states each iteration
@@ -245,6 +249,11 @@ def train_direct(args):
 
         total_reward = torch.zeros(args.num_envs, device=device, dtype=dtype)
         step_rewards = []
+
+        # --- Forward pass (timed) ---
+        if use_cuda:
+            torch.cuda.synchronize()
+        t_fwd_start = time.perf_counter()
 
         # Unroll trajectory with differentiable physics
         with mujoco_torch.differentiable_mode(
@@ -265,7 +274,7 @@ def train_direct(args):
 
                 dx = dx.replace(ctrl=action)
                 for _ in range(args.frame_skip):
-                    dx = torch.vmap(physics_step)(dx)
+                    dx = batched_step(dx)
 
                 reward = _compute_reward(dx, qpos_before, action, dt, args)
                 total_reward = total_reward + reward
@@ -274,7 +283,15 @@ def train_direct(args):
         # Loss = negative mean return
         loss = -total_reward.mean()
 
-        # Backward + optimize
+        if use_cuda:
+            torch.cuda.synchronize()
+        t_fwd = time.perf_counter() - t_fwd_start
+
+        # --- Backward pass (timed) ---
+        if use_cuda:
+            torch.cuda.synchronize()
+        t_bwd_start = time.perf_counter()
+
         optimizer.zero_grad()
         loss.backward()
         grad_norm = nn.utils.clip_grad_norm_(
@@ -282,6 +299,10 @@ def train_direct(args):
         )
         optimizer.step()
         scheduler.step()
+
+        if use_cuda:
+            torch.cuda.synchronize()
+        t_bwd = time.perf_counter() - t_bwd_start
 
         # Logging
         mean_reward = total_reward.detach().mean().item()
@@ -298,6 +319,9 @@ def train_direct(args):
             else grad_norm,
             "train/lr": scheduler.get_last_lr()[0],
             "train/mean_step_reward": sum(step_rewards) / len(step_rewards),
+            "perf/forward_s": t_fwd,
+            "perf/backward_s": t_bwd,
+            "perf/fwd_bwd_ratio": t_fwd / max(t_bwd, 1e-9),
             "iteration": iteration,
         }
         logger.experiment.log(log_dict)
@@ -310,6 +334,7 @@ def train_direct(args):
                 f"reward={mean_reward:.2f} | "
                 f"best={best_reward:.2f} | "
                 f"grad={grad_norm:.4f} | "
+                f"fwd={t_fwd:.2f}s bwd={t_bwd:.2f}s | "
                 f"it/s={iters_per_sec:.2f} | "
                 f"time={elapsed:.1f}s"
             )
