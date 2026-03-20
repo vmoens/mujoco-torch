@@ -21,6 +21,7 @@ from mujoco_torch._src import math
 # pylint: disable=g-importing-member
 from mujoco_torch._src.collision_types import Collision as Contact
 from mujoco_torch._src.collision_types import GeomInfo
+from mujoco_torch._src.diff_config import get_diff_config
 
 # pylint: enable=g-importing-member
 
@@ -46,6 +47,7 @@ def plane_sphere(plane: GeomInfo, sphere: GeomInfo) -> Contact:
 
 def plane_capsule(plane: GeomInfo, cap: GeomInfo) -> Contact:
     """Calculates two contacts between a capsule and a plane."""
+    cfg = get_diff_config()
     n, axis = plane.mat[:, 2], cap.mat[:, 2]
     # align contact frames with capsule axis
     b, b_norm = math.normalize_with_norm(axis - n * (n * axis).sum(-1))
@@ -53,7 +55,14 @@ def plane_capsule(plane: GeomInfo, cap: GeomInfo) -> Contact:
         torch.eye(3, dtype=axis.dtype, device=axis.device)[1],
         torch.eye(3, dtype=axis.dtype, device=axis.device)[2],
     )
-    b = torch.where(b_norm < 0.5, torch.where((-0.5 < n[1]) & (n[1] < 0.5), y, z), b)
+    if cfg.smooth_collisions:
+        s = cfg.smooth_sharpness
+        w_valid = torch.sigmoid(s * (b_norm - 0.5))
+        w_yz = torch.sigmoid(s * (torch.abs(n[1]) - 0.5))
+        fallback = math.soft_where(w_yz, z, y)
+        b = math.soft_where(w_valid, b, fallback)
+    else:
+        b = torch.where(b_norm < 0.5, torch.where((-0.5 < n[1]) & (n[1] < 0.5), y, z), b)
     frame = torch.stack([n, b, math.cross(n, b)]).unsqueeze(0)
     segment = axis * cap.geom_size[1]
     contacts = []
@@ -78,12 +87,13 @@ def plane_ellipsoid(plane: GeomInfo, ellipsoid: GeomInfo) -> Contact:
 
 def plane_cylinder(plane: GeomInfo, cylinder: GeomInfo) -> Contact:
     """Calculates three contacts between a cylinder and a plane."""
+    cfg = get_diff_config()
     n = plane.mat[:, 2]
     axis = cylinder.mat[:, 2]
 
     # make sure axis points towards plane
     prjaxis = (n * axis).sum(-1)
-    sign = -math.sign(prjaxis)
+    sign = -math.soft_sign(prjaxis, cfg.smooth_sharpness) if cfg.smooth_collisions else -math.sign(prjaxis)
     axis = axis * sign
     prjaxis = prjaxis * sign
 
@@ -94,11 +104,22 @@ def plane_cylinder(plane: GeomInfo, cylinder: GeomInfo) -> Contact:
     vec = axis * prjaxis - n
     len_ = math.norm(vec)
 
-    vec = torch.where(
-        len_ < 1e-12,
-        cylinder.mat[:, 0] * cylinder.geom_size[0],
-        math.safe_div(vec, len_) * cylinder.geom_size[0],
-    )
+    if cfg.smooth_collisions:
+        s = cfg.smooth_sharpness
+        _zero = torch.zeros((), dtype=len_.dtype, device=len_.device)
+        _eps = torch.full((), 1e-12, dtype=len_.dtype, device=len_.device)
+        w_len = torch.sigmoid(s * (len_ - _eps))
+        vec = math.soft_where(
+            w_len,
+            math.safe_div(vec, len_) * cylinder.geom_size[0],
+            cylinder.mat[:, 0] * cylinder.geom_size[0],
+        )
+    else:
+        vec = torch.where(
+            len_ < 1e-12,
+            cylinder.mat[:, 0] * cylinder.geom_size[0],
+            math.safe_div(vec, len_) * cylinder.geom_size[0],
+        )
 
     # project vector on normal
     prjvec = (vec * n).sum(-1)
@@ -115,8 +136,8 @@ def plane_cylinder(plane: GeomInfo, cylinder: GeomInfo) -> Contact:
     # disk parallel to plane
     d1 = dist0 + prjaxis + prjvec
     d2 = dist0 + prjaxis + prjvec1
-    dist = torch.stack([d1, d2, d2])
-    pos = (
+    dist_disk = torch.stack([d1, d2, d2])
+    pos_disk = (
         cylinder.pos
         + axis
         + torch.stack(
@@ -129,14 +150,20 @@ def plane_cylinder(plane: GeomInfo, cylinder: GeomInfo) -> Contact:
     )
 
     # cylinder parallel to plane
-    cond = torch.abs(prjaxis) < 1e-3
     d3 = dist0 - prjaxis + prjvec
-    dist_new = dist.clone()
-    dist_new = torch.stack([dist_new[0], d3, dist_new[2]])
-    dist = torch.where(cond, dist_new, dist)
-    pos_new = pos.clone()
-    pos_new = torch.stack([pos_new[0], cylinder.pos + vec - axis - n * d3 * 0.5, pos_new[2]])
-    pos = torch.where(cond, pos_new, pos)
+    dist_par = torch.stack([d1, d3, d2])
+    pos_par = torch.stack([pos_disk[0], cylinder.pos + vec - axis - n * d3 * 0.5, pos_disk[2]])
+
+    if cfg.smooth_collisions:
+        s = cfg.smooth_sharpness
+        _thresh = torch.full((), 1e-3, dtype=prjaxis.dtype, device=prjaxis.device)
+        w_par = torch.sigmoid(s * (_thresh - torch.abs(prjaxis)))
+        dist = math.soft_where(w_par.unsqueeze(0), dist_par, dist_disk)
+        pos = math.soft_where(w_par.unsqueeze(0).unsqueeze(-1), pos_par, pos_disk)
+    else:
+        cond = torch.abs(prjaxis) < 1e-3
+        dist = torch.where(cond, dist_par, dist_disk)
+        pos = torch.where(cond, pos_par, pos_disk)
 
     frame = torch.stack([math.make_frame(n)] * 3, dim=0)
     return dist, pos, frame
@@ -146,8 +173,14 @@ def _sphere_sphere(
     pos1: torch.Tensor, radius1: torch.Tensor, pos2: torch.Tensor, radius2: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Returns the penetration, contact point, and normal between two spheres."""
+    cfg = get_diff_config()
     n, dist = math.normalize_with_norm(pos2 - pos1)
-    n = torch.where(dist == 0.0, torch.eye(3, dtype=n.dtype, device=n.device)[0], n)
+    if cfg.smooth_collisions:
+        _eps = torch.full((), 1e-6, dtype=dist.dtype, device=dist.device)
+        w = torch.sigmoid(cfg.smooth_sharpness * (dist - _eps))
+        n = math.soft_where(w, n, torch.eye(3, dtype=n.dtype, device=n.device)[0])
+    else:
+        n = torch.where(dist == 0.0, torch.eye(3, dtype=n.dtype, device=n.device)[0], n)
     dist = dist - (radius1 + radius2)
     pos = pos1 + n * (radius1 + dist * 0.5)
     return dist, pos, n

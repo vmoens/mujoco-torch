@@ -26,6 +26,7 @@ del _apply_patches
 
 # pylint:disable=g-importing-member
 
+# Differentiable mode (experimental)
 # Collision
 from mujoco_torch._src.collision_driver import collision
 
@@ -37,6 +38,7 @@ from mujoco_torch._src.derivative import deriv_smooth_vel
 
 # Device (put/get model and data)
 from mujoco_torch._src.device import device_get_into, device_put
+from mujoco_torch._src.diff_config import DiffConfig, differentiable_mode, get_diff_config
 
 # Forward dynamics
 from mujoco_torch._src.forward import (

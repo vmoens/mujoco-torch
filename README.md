@@ -272,3 +272,13 @@ mujoco-torch is a derivative work of
 [MuJoCo MJX](https://github.com/google-deepmind/mujoco/tree/main/mjx),
 originally developed by Google DeepMind.  See the [NOTICE](NOTICE) file for
 attribution details.
+
+The differentiable simulation features (smooth collision detection, Contacts
+From Distance, and adaptive integration — available via
+`mujoco_torch.differentiable_mode()`) are based on the work of Paulus, Geist,
+Schumacher, Musil & Martius:
+
+> **Hard Contacts with Soft Gradients: Refining Differentiable Simulators for
+> Learning and Control.**
+> Anselm Paulus, A. René Geist, Pierre Schumacher, Vít Musil, Georg Martius.
+> [arXiv:2506.14186](https://arxiv.org/abs/2506.14186), 2025.
