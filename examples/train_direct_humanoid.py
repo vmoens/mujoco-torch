@@ -198,6 +198,10 @@ def train_direct(args):
     def physics_step(d):
         return mujoco_torch.step(mx, d, fixed_iterations=True)
 
+    if args.compile:
+        physics_step = torch.compile(physics_step)
+        mjt_logger.info("  torch.compile enabled for physics step")
+
     # WandB logger
     logger = WandbLogger(
         exp_name="humanoid_direct_backprop",
@@ -230,6 +234,7 @@ def train_direct(args):
         f"  diff_mode: smooth={args.smooth_collisions} "
         f"cfd={args.cfd} adaptive={args.adaptive_integration}"
     )
+    mjt_logger.info(f"  compile={args.compile}")
 
     t0 = time.perf_counter()
     best_reward = float("-inf")
@@ -342,6 +347,9 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--num_iters", type=int, default=5000)
     parser.add_argument("--grad_clip", type=float, default=1.0)
+    parser.add_argument(
+        "--compile", action="store_true", help="torch.compile the physics step"
+    )
 
     # Differentiable mode
     parser.add_argument(
