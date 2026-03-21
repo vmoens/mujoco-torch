@@ -216,10 +216,10 @@ def train(args):
 
     # Separate optimizers (standard for SAC)
     actor_optim = torch.optim.Adam(
-        loss_module.actor_network_params.values(), lr=args.lr,
+        list(loss_module.actor_network_params.values(True, True)), lr=args.lr,
     )
     critic_optim = torch.optim.Adam(
-        loss_module.qvalue_network_params.values(), lr=args.lr,
+        list(loss_module.qvalue_network_params.values(True, True)), lr=args.lr,
     )
     alpha_optim = torch.optim.Adam(
         [loss_module.log_alpha], lr=args.lr,
@@ -277,7 +277,7 @@ def train(args):
             critic_optim.zero_grad()
             loss_vals["loss_qvalue"].backward()
             nn.utils.clip_grad_norm_(
-                loss_module.qvalue_network_params.values(), 1.0,
+                list(loss_module.qvalue_network_params.values(True, True)), 1.0,
             )
             critic_optim.step()
 
