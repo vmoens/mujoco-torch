@@ -206,9 +206,12 @@ def train(args):
         actor_network=actor,
         qvalue_network=qvalue,
         num_qvalue_nets=2,
-        gamma=args.gamma,
     )
-    loss_module.make_value_estimator(loss_module.default_value_estimator)
+    from torchrl.objectives.value import ValueEstimators
+
+    loss_module.make_value_estimator(
+        ValueEstimators.TD0, gamma=args.gamma,
+    )
 
     # Target network soft-update
     target_updater = SoftUpdate(loss_module, tau=args.tau)
