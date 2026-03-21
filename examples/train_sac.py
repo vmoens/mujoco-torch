@@ -202,10 +202,12 @@ def train(args):
     qvalue = make_qvalue(obs_dim, act_dim, device)
 
     # --- SAC loss ---
+    # target_entropy = -act_dim (standard heuristic)
     loss_module = SACLoss(
         actor_network=actor,
         qvalue_network=qvalue,
         num_qvalue_nets=2,
+        action_spec=train_env.action_spec,
     )
     loss_module.make_value_estimator(
         loss_module.default_value_estimator, gamma=args.gamma,
