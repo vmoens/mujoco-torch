@@ -277,7 +277,7 @@ def train(args):
 
             # Critic update
             critic_optim.zero_grad()
-            loss_vals["loss_qvalue"].backward()
+            loss_vals["loss_qvalue"].backward(retain_graph=True)
             nn.utils.clip_grad_norm_(
                 list(loss_module.qvalue_network_params.values(True, True)), 1.0,
             )
@@ -285,7 +285,7 @@ def train(args):
 
             # Actor update
             actor_optim.zero_grad()
-            loss_vals["loss_actor"].backward()
+            loss_vals["loss_actor"].backward(retain_graph=True)
             actor_optim.step()
 
             # Alpha update
