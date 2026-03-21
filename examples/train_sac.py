@@ -312,7 +312,7 @@ def train(args):
             if mean_ep == mean_ep:
                 best_reward = max(best_reward, mean_ep)
 
-            alpha = loss_module.alpha.item()
+            alpha = loss_module.log_alpha.exp().item()
 
             logger.experiment.log({
                 "train/mean_ep_reward": mean_ep,
