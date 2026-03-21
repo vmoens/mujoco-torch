@@ -282,9 +282,27 @@ def train(args):
 
         optimizer.zero_grad()
         loss.backward()
-        grad_norm = nn.utils.clip_grad_norm_(
-            policy.parameters(), args.grad_clip,
+
+        # Compute raw gradient norm for logging
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            policy.parameters(), float("inf"),
         )
+
+        if args.grad_normalize:
+            # Normalize gradients to unit norm, then scale by grad_clip
+            if grad_norm > 0:
+                scale = args.grad_clip / grad_norm
+                for p in policy.parameters():
+                    if p.grad is not None:
+                        p.grad.mul_(scale)
+        else:
+            # Standard gradient clipping
+            if grad_norm > args.grad_clip:
+                scale = args.grad_clip / grad_norm
+                for p in policy.parameters():
+                    if p.grad is not None:
+                        p.grad.mul_(scale)
+
         optimizer.step()
         scheduler.step()
 
@@ -361,6 +379,10 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--num_iters", type=int, default=5000)
     parser.add_argument("--grad_clip", type=float, default=1.0)
+    parser.add_argument(
+        "--grad_normalize", action="store_true", default=False,
+        help="Normalize gradients to unit norm instead of clipping",
+    )
 
     # Policy
     parser.add_argument("--batchnorm", action="store_true", default=True)
