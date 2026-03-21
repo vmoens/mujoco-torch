@@ -200,8 +200,8 @@ def train(args):
         actor_network=actor,
         critic_network=critic,
         clip_epsilon=args.clip_epsilon,
-        entropy_coef=args.entropy_coef,
-        critic_coef=args.critic_coef,
+        entropy_coeff=args.entropy_coeff,
+        critic_coeff=args.critic_coeff,
     )
 
     optim = torch.optim.Adam(
@@ -322,8 +322,8 @@ def main():
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--gae_lambda", type=float, default=0.95)
     p.add_argument("--clip_epsilon", type=float, default=0.2)
-    p.add_argument("--entropy_coef", type=float, default=0.01)
-    p.add_argument("--critic_coef", type=float, default=0.5)
+    p.add_argument("--entropy_coeff", type=float, default=0.01)
+    p.add_argument("--critic_coeff", type=float, default=0.5)
     p.add_argument("--num_epochs", type=int, default=10)
     p.add_argument("--mini_batch_size", type=int, default=4096)
     p.add_argument("--max_grad_norm", type=float, default=0.5)
