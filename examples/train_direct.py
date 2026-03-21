@@ -49,18 +49,21 @@ class DifferentiableEnv:
     _SMOOTH_ENVS = {"humanoid", "ant", "hopper", "walker2d"}
 
     @staticmethod
-    def make(env_name, **kwargs):
+    def make(env_name, fixed_iterations=True, **kwargs):
         """Create a differentiable version of a zoo env."""
         base_cls = ENVS[env_name]
+        _fixed = fixed_iterations
 
         # Build a subclass that overrides the physics step
         class _DiffEnv(base_cls):
             def __init__(self, *args, **kw):
                 super().__init__(*args, **kw)
                 mx = self.mx
-                self._physics_step = lambda d: mujoco_torch.step(
-                    mx, d, fixed_iterations=True,
-                )
+                if _fixed:
+                    self._physics_step = lambda d: mujoco_torch.step(
+                        mx, d, fixed_iterations=True,
+                    )
+                # else: use the default physics step (variable iterations)
 
         # For envs with hard healthy thresholds, add smooth reward
         if env_name in DifferentiableEnv._SMOOTH_ENVS:
@@ -184,6 +187,7 @@ def train(args):
     # Training env
     train_env = DifferentiableEnv.make(
         args.env,
+        fixed_iterations=args.fixed_iterations,
         num_envs=args.num_envs,
         device=device,
         frame_skip=args.frame_skip,
@@ -234,6 +238,7 @@ def train(args):
         f"cfd={args.cfd} adaptive={args.adaptive_integration}"
     )
     mjt_logger.info(f"  batchnorm={args.batchnorm}")
+    mjt_logger.info(f"  fixed_iterations={args.fixed_iterations}")
 
     t0 = time.perf_counter()
     best_reward = float("-inf")
@@ -376,6 +381,14 @@ def main():
     parser.add_argument("--no_cfd", dest="cfd", action="store_false")
     parser.add_argument(
         "--adaptive_integration", action="store_true", default=False,
+    )
+    parser.add_argument(
+        "--fixed_iterations", action="store_true", default=True,
+    )
+    parser.add_argument(
+        "--no_fixed_iterations",
+        dest="fixed_iterations",
+        action="store_false",
     )
 
     # Logging
