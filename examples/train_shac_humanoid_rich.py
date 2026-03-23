@@ -226,7 +226,7 @@ def train(args):
                     {
                         "observation": td["observation"],
                         "action": td["action"],
-                        "sample_log_prob": td["sample_log_prob"],
+                        "sample_log_prob": td["action_log_prob"],
                         "next": TensorDict(
                             {
                                 "observation": next_td["next", "observation"],
