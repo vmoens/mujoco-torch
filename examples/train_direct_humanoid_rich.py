@@ -51,9 +51,8 @@ class SmoothHumanoidRichEnv(HumanoidRichEnv):
             torch.sigmoid(10.0 * (z - self.HEALTHY_Z_LOW))
             * torch.sigmoid(10.0 * (self.HEALTHY_Z_HIGH - z))
         )
-        healthy_reward = self.HEALTHY_REWARD * soft_healthy
-
-        reward = forward_vel + healthy_reward - ctrl_cost
+        # Multiplicative: forward velocity only counts while upright (dm_control style)
+        reward = soft_healthy * (forward_vel + self.HEALTHY_REWARD) - ctrl_cost
         return reward.unsqueeze(-1).to(self.dtype)
 
     def _compute_terminated(self):
