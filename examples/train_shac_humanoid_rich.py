@@ -268,7 +268,7 @@ def train(args):
         # Critic update (no physics gradients, cheap)
         # ----------------------------------------------------------
         critic_optim.zero_grad()
-        loss_critic = shac.critic_loss(rollout)
+        loss_critic = shac.critic_loss(rollout.detach())
         loss_critic.backward()
         critic_grad_norm = nn.utils.clip_grad_norm_(
             critic.parameters(), args.grad_clip,
