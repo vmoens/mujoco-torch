@@ -47,9 +47,9 @@ from mujoco_torch.zoo import ENVS
 # ------------------------------------------------------------------
 
 
-def make_env(env_name, num_envs, device, frame_skip):
+def make_env(env_name, num_envs, device, frame_skip, compile_step=False):
     cls = ENVS[env_name]
-    base = cls(num_envs=num_envs, device=device, frame_skip=frame_skip)
+    base = cls(num_envs=num_envs, device=device, frame_skip=frame_skip, compile_step=compile_step)
     return TransformedEnv(
         base,
         Compose(
@@ -185,6 +185,7 @@ def train(args):
     # --- Envs ---
     train_env = make_env(
         args.env, args.num_envs, device, args.frame_skip,
+        compile_step=args.compile,
     )
     obs_dim = train_env.observation_spec["observation"].shape[-1]
     act_dim = train_env.action_spec.shape[-1]
@@ -378,6 +379,7 @@ def main():
     p.add_argument("--wandb_project", type=str, default="mujoco-torch-zoo")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", type=str, default=None)
+    p.add_argument("--compile", action="store_true", default=False)
 
     args = p.parse_args()
     torch.manual_seed(args.seed)
