@@ -238,15 +238,15 @@ def train(args):
     collector = SyncDataCollector(
         train_env,
         actor,
-        frames_per_batch=args.num_envs,  # one step across all envs
+        frames_per_batch=args.frames_per_batch,
         total_frames=args.total_frames,
         device=device,
     )
 
     print(
         f"SAC [{args.env}] obs={obs_dim} act={act_dim} device={device}\n"
-        f"  num_envs={args.num_envs} buffer_size={args.buffer_size} "
-        f"batch_size={args.batch_size}\n"
+        f"  num_envs={args.num_envs} frames_per_batch={args.frames_per_batch} "
+        f"buffer_size={args.buffer_size} batch_size={args.batch_size}\n"
         f"  gamma={args.gamma} tau={args.tau} lr={args.lr}",
         flush=True,
     )
@@ -362,6 +362,8 @@ def main():
     p.add_argument("--frame_skip", type=int, default=5)
 
     # Collection
+    p.add_argument("--frames_per_batch", type=int, default=None,
+                   help="Frames per collection batch (default: num_envs * 1000)")
     p.add_argument("--total_frames", type=int, default=3_000_000)
     p.add_argument("--learning_starts", type=int, default=25000)
 
@@ -385,6 +387,8 @@ def main():
     torch.manual_seed(args.seed)
     if args.device is None:
         args.device = "cuda" if torch.cuda.is_available() else "cpu"
+    if args.frames_per_batch is None:
+        args.frames_per_batch = args.num_envs * 1000
 
     train(args)
 

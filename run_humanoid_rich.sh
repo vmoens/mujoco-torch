@@ -20,13 +20,14 @@ CUDA_VISIBLE_DEVICES=0 python -u examples/train_ppo.py \
     > /root/ppo_humanoid_rich.log 2>&1 &
 echo "PPO humanoid_rich PID=$!"
 
-# GPU 1: SAC (compiled step, batch_size=8K, buffer=1M)
+# GPU 1: SAC (compiled step, 8K envs, 1000 steps/env = 8M frames/batch, 8K loss batch)
 CUDA_VISIBLE_DEVICES=1 python -u examples/train_sac.py \
-    --env humanoid_rich --num_envs 256 --frame_skip 5 \
-    --total_frames 50000000 --learning_starts 25000 \
+    --env humanoid_rich --num_envs 8192 --frame_skip 5 \
+    --frames_per_batch 8192000 --total_frames 500000000 \
+    --learning_starts 25000 \
     --batch_size 8192 --buffer_size 1000000 --utd_ratio 1 \
     --compile \
-    --eval_interval 1000 --log_interval 100 \
+    --eval_interval 10 --log_interval 1 \
     --wandb_project mujoco-torch-zoo --seed 42 \
     > /root/sac_humanoid_rich.log 2>&1 &
 echo "SAC humanoid_rich PID=$!"
