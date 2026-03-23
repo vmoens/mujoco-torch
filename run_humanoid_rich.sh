@@ -7,7 +7,7 @@ pip install -e ".[zoo]" -q 2>&1 | tail -3
 
 export WANDB_API_KEY="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"
 
-echo "Launching 3 humanoid_rich experiments..."
+echo "Launching 4 humanoid_rich experiments..."
 
 # GPU 0: PPO
 CUDA_VISIBLE_DEVICES=0 python -u examples/train_ppo.py \
@@ -38,6 +38,17 @@ CUDA_VISIBLE_DEVICES=2 python -u examples/train_direct_humanoid_rich.py \
     --wandb_project mujoco-torch-zoo --seed 42 \
     > /root/direct_humanoid_rich.log 2>&1 &
 echo "Direct humanoid_rich PID=$!"
+
+# GPU 3: SHAC
+CUDA_VISIBLE_DEVICES=3 python -u examples/train_shac_humanoid_rich.py \
+    --device cuda --num_envs 128 --horizon 5 --frame_skip 2 \
+    --lr_actor 3e-4 --lr_critic 1e-3 --gamma 0.99 --tau 0.005 \
+    --grad_clip 1.0 --num_iters 5000 \
+    --batchnorm --smooth_collisions --cfd \
+    --eval_interval 50 --log_interval 10 \
+    --wandb_project mujoco-torch-zoo --seed 42 \
+    > /root/shac_humanoid_rich.log 2>&1 &
+echo "SHAC humanoid_rich PID=$!"
 
 echo "Waiting..."
 wait
