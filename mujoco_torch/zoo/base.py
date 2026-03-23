@@ -128,9 +128,11 @@ class MujocoTorchEnv(EnvBase):
         self._render_precomp = mujoco_torch.precompute_render_data(self.mx)
 
         _step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
-        if compile_step:
-            _step_fn = torch.compile(_step_fn)
-        self._physics_step = _step_fn
+        if num_envs == 1:
+            self._physics_step = torch.compile(_step_fn) if compile_step else _step_fn
+        else:
+            _vmap_step = torch.vmap(_step_fn)
+            self._physics_step = torch.compile(_vmap_step) if compile_step else _vmap_step
 
     # ------------------------------------------------------------------
     # Subclass interface
@@ -279,7 +281,7 @@ class MujocoTorchEnv(EnvBase):
         self._dx = self._dx.replace(ctrl=ctrl)
         step_fn = self._physics_step
         for _ in range(self.FRAME_SKIP):
-            self._dx = step_fn(self._dx[0]).unsqueeze(0) if self.num_envs == 1 else torch.vmap(step_fn)(self._dx)
+            self._dx = step_fn(self._dx[0]).unsqueeze(0) if self.num_envs == 1 else step_fn(self._dx)
         self._step_count += 1
 
         reward = self._compute_reward(qpos_before, action)
