@@ -96,6 +96,33 @@ python examples/train_sac.py --env humanoid_rich --num_envs 8192 \
     --frames_per_batch 8192 --compile
 ```
 
+## Analysis of Captured State
+
+Saved file: `TODO/degenerate_iter0.pt` (3MB)
+
+**Env 167, step 25 of 1000, reward = -8.77e31**
+
+Timeline (10 steps before blow-up):
+
+| Step | Reward | obs_max | Notes |
+|------|--------|---------|-------|
+| 15-23 | 3.3–4.5 | 80–120 | Normal |
+| 24 | 2.71 | 53.9 | Slightly lower than usual |
+| **25** | **-8.77e31** | **1450** | Blow-up |
+| 26 | 4.96 | 6.62 | Env reset, back to normal |
+
+- No NaN or Inf — all values are finite but extreme
+- Extreme obs components at indices **256, 257, 262, 263, 268, 269** (values ~1300-1450)
+- These correspond to `cfrc_ext` (external contact forces) in the rich observation
+- Actions are normal (max ~1.0, within bounds)
+- The blow-up happens in a **single physics step**: obs_max goes from 54 to 1450
+- The env recovers immediately after reset (step 26)
+
+**Conclusion**: A single `mujoco_torch.step()` call produces extreme contact forces
+(cfrc_ext) that cause a huge negative reward. The physics state before the blow-up
+(step 24) appears unremarkable. This suggests the solver hits a degenerate
+configuration in the contact/constraint computation.
+
 ## Suggested Fix Directions
 
 1. **Regularize the Hessian in `solver.py:_update_gradient`**: Add a small epsilon
