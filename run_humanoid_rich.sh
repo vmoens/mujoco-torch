@@ -9,24 +9,24 @@ export WANDB_API_KEY="wandb_v1_04PefnYMq9CWbLSHeWVyDhS4aZN_P2l51z04q2JA6nrQ6gnSo
 
 echo "Launching 4 humanoid_rich experiments..."
 
-# GPU 0: PPO (compiled step, 8K envs, 1000 steps/env = 8M frames/batch)
-CUDA_VISIBLE_DEVICES=0 python -u examples/train_ppo.py \
+# GPUs 0+4: PPO (2-GPU: env on 0, training on 4)
+CUDA_VISIBLE_DEVICES=0,4 python -u examples/train_ppo.py \
     --env humanoid_rich --num_envs 8192 --frame_skip 5 \
     --frames_per_batch 8192000 --total_frames 500000000 \
     --lr 3e-4 --num_epochs 10 --mini_batch_size 2048 \
-    --compile \
+    --device cuda:0 --train_device cuda:1 --compile \
     --eval_interval 10 --log_interval 1 \
     --wandb_project mujoco-torch-zoo --seed 42 \
     > /root/ppo_humanoid_rich.log 2>&1 &
 echo "PPO humanoid_rich PID=$!"
 
-# GPU 1: SAC (compiled step, 8K envs, 1000 steps/env = 8M frames/batch, 8K loss batch)
-CUDA_VISIBLE_DEVICES=1 python -u examples/train_sac.py \
-    --env humanoid_rich --num_envs 8192 --frame_skip 5 \
-    --frames_per_batch 8192000 --total_frames 500000000 \
+# GPUs 1+5: SAC (2-GPU: env on 1, training on 5)
+CUDA_VISIBLE_DEVICES=1,5 python -u examples/train_sac.py \
+    --env humanoid_rich --num_envs 2048 --frame_skip 5 \
+    --frames_per_batch 2048000 --total_frames 500000000 \
     --learning_starts 25000 \
     --batch_size 8192 --buffer_size 1000000 --utd_ratio 1 \
-    --compile \
+    --device cuda:0 --train_device cuda:1 --compile \
     --eval_interval 10 --log_interval 1 \
     --wandb_project mujoco-torch-zoo --seed 42 \
     > /root/sac_humanoid_rich.log 2>&1 &

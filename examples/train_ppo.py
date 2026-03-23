@@ -167,11 +167,12 @@ def run_eval(eval_env, actor, iteration, logger, max_steps=1000):
 
 
 def train(args):
-    device = args.device
+    env_device = args.device
+    train_device = args.train_device or env_device
 
     # --- Envs ---
     train_env = make_env(
-        args.env, args.num_envs, device, args.frame_skip,
+        args.env, args.num_envs, env_device, args.frame_skip,
         compile_step=args.compile,
     )
     obs_dim = train_env.observation_spec["observation"].shape[-1]
@@ -183,11 +184,11 @@ def train(args):
         project=args.wandb_project,
         config=vars(args),
     )
-    eval_env = make_eval_env(args.env, device, args.frame_skip, logger)
+    eval_env = make_eval_env(args.env, train_device, args.frame_skip, logger)
 
-    # --- Models ---
-    actor = make_actor(obs_dim, act_dim, device)
-    critic = make_critic(obs_dim, device)
+    # --- Models (on train device) ---
+    actor = make_actor(obs_dim, act_dim, train_device)
+    critic = make_critic(obs_dim, train_device)
 
     # --- GAE ---
     adv_module = GAE(
@@ -210,16 +211,19 @@ def train(args):
     )
 
     # --- Collector ---
+    # Env runs on env_device; collected data is stored on train_device
     collector = SyncDataCollector(
         train_env,
         actor,
         frames_per_batch=args.frames_per_batch,
         total_frames=args.total_frames,
-        device=device,
+        device=env_device,
+        storing_device=train_device,
     )
 
     print(
-        f"PPO [{args.env}] obs={obs_dim} act={act_dim} device={device}\n"
+        f"PPO [{args.env}] obs={obs_dim} act={act_dim}\n"
+        f"  env_device={env_device} train_device={train_device}\n"
         f"  num_envs={args.num_envs} frames_per_batch={args.frames_per_batch} "
         f"total_frames={args.total_frames}\n"
         f"  gamma={args.gamma} gae_lambda={args.gae_lambda} "
@@ -243,7 +247,7 @@ def train(args):
         # --- PPO epochs ---
         data = batch.reshape(-1)
         for _ in range(args.num_epochs):
-            perm = torch.randperm(data.shape[0], device=device)
+            perm = torch.randperm(data.shape[0], device=train_device)
             for start in range(0, data.shape[0], args.mini_batch_size):
                 idx = perm[start : start + args.mini_batch_size]
                 mb = data[idx]
@@ -334,7 +338,10 @@ def main():
     p.add_argument("--eval_interval", type=int, default=20)
     p.add_argument("--wandb_project", type=str, default="mujoco-torch-zoo")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--device", type=str, default=None)
+    p.add_argument("--device", type=str, default=None,
+                   help="Env/collection device (default: cuda)")
+    p.add_argument("--train_device", type=str, default=None,
+                   help="Training device (default: same as --device)")
     p.add_argument("--compile", action="store_true", default=False)
 
     args = p.parse_args()

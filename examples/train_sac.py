@@ -180,11 +180,12 @@ def run_eval(eval_env, actor, iteration, logger, max_steps=1000):
 
 
 def train(args):
-    device = args.device
+    env_device = args.device
+    train_device = args.train_device or env_device
 
     # --- Envs ---
     train_env = make_env(
-        args.env, args.num_envs, device, args.frame_skip,
+        args.env, args.num_envs, env_device, args.frame_skip,
         compile_step=args.compile,
     )
     obs_dim = train_env.observation_spec["observation"].shape[-1]
@@ -196,11 +197,11 @@ def train(args):
         project=args.wandb_project,
         config=vars(args),
     )
-    eval_env = make_eval_env(args.env, device, args.frame_skip, logger)
+    eval_env = make_eval_env(args.env, train_device, args.frame_skip, logger)
 
-    # --- Models ---
-    actor = make_actor(obs_dim, act_dim, device)
-    qvalue = make_qvalue(obs_dim, act_dim, device)
+    # --- Models (on train device) ---
+    actor = make_actor(obs_dim, act_dim, train_device)
+    qvalue = make_qvalue(obs_dim, act_dim, train_device)
 
     # --- SAC loss ---
     # target_entropy = -act_dim (standard heuristic)
@@ -208,7 +209,7 @@ def train(args):
         actor_network=actor,
         qvalue_network=qvalue,
         num_qvalue_nets=2,
-        action_spec=train_env.action_spec,
+        action_spec=train_env.action_spec.to(train_device),
     )
     loss_module.make_value_estimator(
         loss_module.default_value_estimator, gamma=args.gamma,
@@ -228,23 +229,26 @@ def train(args):
         [loss_module.log_alpha], lr=args.lr,
     )
 
-    # --- Replay buffer ---
+    # --- Replay buffer (on train device) ---
     buffer = ReplayBuffer(
-        storage=LazyTensorStorage(args.buffer_size, device=device),
+        storage=LazyTensorStorage(args.buffer_size, device=train_device),
         batch_size=args.batch_size,
     )
 
     # --- Collector ---
+    # Env runs on env_device; collected data is stored on train_device
     collector = SyncDataCollector(
         train_env,
         actor,
         frames_per_batch=args.frames_per_batch,
         total_frames=args.total_frames,
-        device=device,
+        device=env_device,
+        storing_device=train_device,
     )
 
     print(
-        f"SAC [{args.env}] obs={obs_dim} act={act_dim} device={device}\n"
+        f"SAC [{args.env}] obs={obs_dim} act={act_dim}\n"
+        f"  env_device={env_device} train_device={train_device}\n"
         f"  num_envs={args.num_envs} frames_per_batch={args.frames_per_batch} "
         f"buffer_size={args.buffer_size} batch_size={args.batch_size}\n"
         f"  gamma={args.gamma} tau={args.tau} lr={args.lr}",
@@ -380,7 +384,10 @@ def main():
     p.add_argument("--eval_interval", type=int, default=1000)
     p.add_argument("--wandb_project", type=str, default="mujoco-torch-zoo")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--device", type=str, default=None)
+    p.add_argument("--device", type=str, default=None,
+                   help="Env/collection device (default: cuda)")
+    p.add_argument("--train_device", type=str, default=None,
+                   help="Training device (default: same as --device)")
     p.add_argument("--compile", action="store_true", default=False)
 
     args = p.parse_args()
