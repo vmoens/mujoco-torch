@@ -275,27 +275,25 @@ def train(args):
             sample = buffer.sample()
             loss_vals = loss_module(sample)
 
-            # Zero all grads
+            # Critic update
             critic_optim.zero_grad()
-            actor_optim.zero_grad()
-            alpha_optim.zero_grad()
-
-            # Single combined backward
-            total_loss = (
-                loss_vals["loss_qvalue"]
-                + loss_vals["loss_actor"]
-                + loss_vals["loss_alpha"]
-            )
-            total_loss.backward()
-
-            # Clip critic grads
+            loss_vals["loss_qvalue"].backward()
             nn.utils.clip_grad_norm_(
                 list(loss_module.qvalue_network_params.values(True, True)), 1.0,
             )
-
-            # Step all optimizers
             critic_optim.step()
+
+            # Actor update
+            actor_optim.zero_grad()
+            loss_vals["loss_actor"].backward()
+            nn.utils.clip_grad_norm_(
+                list(loss_module.actor_network_params.values(True, True)), 1.0,
+            )
             actor_optim.step()
+
+            # Alpha update
+            alpha_optim.zero_grad()
+            loss_vals["loss_alpha"].backward()
             alpha_optim.step()
 
             # Target update
