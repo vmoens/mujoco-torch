@@ -18,6 +18,7 @@ from mujoco_torch.zoo import ENVS
 
 def bench_raw_physics(env, num_steps=200):
     """Raw vmap(step) — matches the README benchmark."""
+    env.reset()
     mx = env.mx
     dx = env._dx
     step_fn = lambda d: mujoco_torch.step(mx, d)
@@ -42,6 +43,7 @@ def bench_raw_physics(env, num_steps=200):
 
 def bench_compiled_physics(env, num_steps=200):
     """compile(vmap(step)) — what compile_step should give."""
+    env.reset()
     mx = env.mx
     dx = env._dx
     step_fn = lambda d: mujoco_torch.step(mx, d)
