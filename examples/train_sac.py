@@ -12,7 +12,9 @@ Usage::
 """
 
 import argparse
+import os
 import time
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -260,8 +262,75 @@ def train(args):
     collected_frames = 0
     num_updates = 0
 
+    # Directory for saving degenerate physics states
+    bug_save_dir = Path("degenerate_states")
+    bug_save_dir.mkdir(exist_ok=True)
+    degenerate_saved = False
+
     for collect_iter, batch in enumerate(collector):
         collected_frames += batch.numel()
+
+        # --- Detect degenerate physics states ---
+        # batch shape: [num_envs, steps, ...] or [num_envs * steps, ...]
+        # Check for extreme rewards (physics blow-up)
+        if not degenerate_saved:
+            rewards = batch["next", "reward"]
+            reward_threshold = 1e6
+            extreme_mask = rewards.abs() > reward_threshold
+            if extreme_mask.any():
+                try:
+                    print(
+                        f"  [BUG] Detected degenerate reward at iter {collect_iter}! "
+                        f"Saving state...",
+                        flush=True,
+                    )
+                    # batch is [num_envs, steps, ...] from the collector
+                    # Find which env and step has the extreme reward
+                    if batch.ndim >= 2:
+                        # [num_envs, steps] layout
+                        env_idx, step_idx = torch.where(
+                            extreme_mask.squeeze(-1)
+                        )
+                        env_i = env_idx[0].item()
+                        step_i = step_idx[0].item()
+                        # Save 10 steps before the blow-up through the blow-up
+                        start = max(0, step_i - 10)
+                        end = min(step_i + 1, batch.shape[1])
+                        slice_td = batch[env_i, start:end].detach().cpu()
+                        # Also save context: the full env trajectory
+                        full_env_td = batch[env_i].detach().cpu()
+                    else:
+                        # Flat layout — find first extreme element
+                        flat_idx = torch.where(extreme_mask.squeeze(-1))[0]
+                        idx = flat_idx[0].item()
+                        start = max(0, idx - 10)
+                        end = min(idx + 1, batch.shape[0])
+                        slice_td = batch[start:end].detach().cpu()
+                        full_env_td = slice_td
+
+                    save_path = bug_save_dir / f"degenerate_iter{collect_iter}.pt"
+                    torch.save(
+                        {
+                            "slice": slice_td,
+                            "full_env_trajectory": full_env_td,
+                            "collect_iter": collect_iter,
+                            "env_idx": env_i if batch.ndim >= 2 else None,
+                            "step_idx": step_i if batch.ndim >= 2 else None,
+                            "extreme_reward": rewards[extreme_mask][0].item(),
+                            "args": vars(args),
+                        },
+                        save_path,
+                    )
+                    print(
+                        f"  [BUG] Saved to {save_path} "
+                        f"(env={env_i if batch.ndim >= 2 else 'flat'}, "
+                        f"step={step_i if batch.ndim >= 2 else idx}, "
+                        f"reward={rewards[extreme_mask][0].item():.2e})",
+                        flush=True,
+                    )
+                    degenerate_saved = True
+                except Exception as e:
+                    print(f"  [BUG] Failed to save degenerate state: {e}", flush=True)
 
         # Store in replay buffer
         buffer.extend(batch.reshape(-1))
