@@ -30,7 +30,7 @@ def main():
         num_envs=args.num_envs,
         device=args.device,
         frame_skip=args.frame_skip,
-        compile_step=True,
+        compile_step=False,
     )
     env = TransformedEnv(
         base,
