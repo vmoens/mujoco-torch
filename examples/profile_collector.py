@@ -14,7 +14,7 @@ from mujoco_torch.zoo import ENVS
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--env", default="humanoid_rich")
-    p.add_argument("--num_envs", type=int, default=2048)
+    p.add_argument("--num_envs", type=int, default=64)
     p.add_argument("--frame_skip", type=int, default=5)
     p.add_argument("--device", default="cuda")
     p.add_argument("--output", default="collector_trace.json.gz")
@@ -99,14 +99,15 @@ def main():
     print("Warmup done.", flush=True)
 
     # -- profile 100 collection steps --------------------------------------
-    print("Profiling 100 collector steps...", flush=True)
+    num_profile_steps = 50
+    print(f"Profiling {num_profile_steps} collector steps ({args.num_envs} envs)...", flush=True)
 
     with profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         record_shapes=False,
         with_stack=False,
     ) as prof:
-        for _ in range(100):
+        for _ in range(num_profile_steps):
             _ = next(it)
         torch.cuda.synchronize()
 
