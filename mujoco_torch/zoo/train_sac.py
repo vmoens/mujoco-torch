@@ -279,8 +279,9 @@ def main():
             PixelRenderTransform(out_keys=["pixels"]),
             VideoRecorder(logger=logger, tag="eval_video", skip=1, make_grid=False),
         ] + eval_transforms
+    eval_env_kwargs = {"device": args.device, "compile_step": False, "auto_reset": False}
     eval_env = TransformedEnv(
-        env_cls(num_envs=1, **env_kwargs),
+        env_cls(num_envs=1, **eval_env_kwargs),
         Compose(*eval_transforms),
     )
 
