@@ -71,6 +71,7 @@ def main():
     p.add_argument("--output", default="collector_trace.json.gz")
     p.add_argument("--fast", action="store_true", help="Enable fast-path flags")
     p.add_argument("--compile", action="store_true", help="Enable compiled physics step")
+    p.add_argument("--auto_reset", action="store_true", help="Fuse reset into env._step")
     args = p.parse_args()
 
     # -- env ---------------------------------------------------------------
@@ -83,6 +84,7 @@ def main():
         device=args.device,
         frame_skip=args.frame_skip,
         compile_step=args.compile,
+        auto_reset=args.auto_reset,
     )
     env = TransformedEnv(
         base,
@@ -95,6 +97,9 @@ def main():
     if args.fast:
         base._trust_step_output = True
         env._trust_step_output = True
+    if args.auto_reset:
+        base._skip_maybe_reset = True
+        env._skip_maybe_reset = True
 
     # -- Instrument EnvBase.step and step_and_maybe_reset at class level ---
     orig_envbase_step = EnvBase.step
