@@ -124,14 +124,31 @@ def bench_env_step_with_frameskip(env, num_steps=200):
     return fps
 
 
-def bench_collector(env_name, num_envs, device, frame_skip, compile_step, num_frames=500_000):
-    """Full TorchRL SyncDataCollector loop."""
-    from torchrl.collectors import SyncDataCollector
-    from torchrl.envs import TransformedEnv
-    from torchrl.envs.transforms import Compose, DoubleToFloat, StepCounter, RewardSum
+def _make_actor(env, device):
+    """Build a small stochastic actor for benchmarking."""
     from torchrl.modules import MLP, NormalParamExtractor, ProbabilisticActor, TanhNormal
     from tensordict.nn import TensorDictModule
     import torch.nn as nn
+
+    obs_dim = env.observation_spec["observation"].shape[-1]
+    act_dim = env.action_spec.shape[-1]
+
+    actor_net = nn.Sequential(
+        MLP(in_features=obs_dim, out_features=2 * act_dim,
+            num_cells=[256, 256], activation_class=nn.ReLU, device=device),
+        NormalParamExtractor(),
+    )
+    actor_module = TensorDictModule(actor_net, in_keys=["observation"], out_keys=["loc", "scale"])
+    return ProbabilisticActor(
+        module=actor_module, in_keys=["loc", "scale"], out_keys=["action"],
+        distribution_class=TanhNormal, return_log_prob=True,
+    )
+
+
+def _make_env(env_name, num_envs, device, frame_skip, compile_step, fast=False):
+    """Build a TransformedEnv, optionally with fast-path flags."""
+    from torchrl.envs import TransformedEnv
+    from torchrl.envs.transforms import Compose, DoubleToFloat, StepCounter, RewardSum
 
     cls = ENVS[env_name]
     base = cls(num_envs=num_envs, device=device, frame_skip=frame_skip, compile_step=compile_step)
@@ -143,34 +160,38 @@ def bench_collector(env_name, num_envs, device, frame_skip, compile_step, num_fr
             RewardSum(),
         ),
     )
+    if fast:
+        # Enable fast-path flags from pytorch/rl faster-collector branch
+        base._trust_step_output = True
+        base._skip_maybe_reset = True
+        env._trust_step_output = True
+        env._skip_maybe_reset = True
+    return env
 
-    obs_dim = env.observation_spec["observation"].shape[-1]
-    act_dim = env.action_spec.shape[-1]
 
-    actor_net = nn.Sequential(
-        MLP(in_features=obs_dim, out_features=2 * act_dim,
-            num_cells=[256, 256], activation_class=nn.ReLU, device=device),
-        NormalParamExtractor(),
-    )
-    actor_module = TensorDictModule(actor_net, in_keys=["observation"], out_keys=["loc", "scale"])
-    actor = ProbabilisticActor(
-        module=actor_module, in_keys=["loc", "scale"], out_keys=["action"],
-        distribution_class=TanhNormal, return_log_prob=True,
-    )
+def _bench_collector_inner(env, actor, num_envs, num_frames, label, fast=False):
+    """Run a single collector benchmark and print results."""
+    try:
+        from torchrl.collectors import Collector
+    except ImportError:
+        from torchrl.collectors import SyncDataCollector as Collector
 
-    # Use num_envs as frames_per_batch (1 step per batch) for tight loop
-    collector = SyncDataCollector(
-        env, actor,
+    collector_kwargs = dict(
         frames_per_batch=num_envs,
-        total_frames=num_frames,
-        device=device,
+        total_frames=num_frames + num_envs * 10,  # extra for warmup
+        device=env.device,
     )
+    if fast:
+        collector_kwargs["update_traj_ids"] = False
+
+    collector = Collector(env, actor, **collector_kwargs)
 
     # Warmup
     it = iter(collector)
-    for _ in range(3):
+    for _ in range(5):
         batch = next(it)
-    torch.cuda.synchronize()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
 
     t0 = time.perf_counter()
     count = 0
@@ -178,50 +199,33 @@ def bench_collector(env_name, num_envs, device, frame_skip, compile_step, num_fr
         count += batch.numel()
         if count >= num_frames:
             break
-    torch.cuda.synchronize()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
 
-    fps = count / elapsed
-    print(f"  Collector (1-step batch): {fps:>12,.0f} frames/sec  ({elapsed:.3f}s for {count:,} frames)")
+    fps = count / elapsed if elapsed > 0 else 0
+    print(f"  {label:<30s} {fps:>12,.0f} frames/sec  ({elapsed:.3f}s for {count:,} frames)")
 
-    # Now test with larger batches
-    del collector, env, base
+    del collector
+    return fps
 
-    base2 = cls(num_envs=num_envs, device=device, frame_skip=frame_skip, compile_step=compile_step)
-    env2 = TransformedEnv(
-        base2,
-        Compose(
-            DoubleToFloat(in_keys=["observation"], in_keys_inv=[]),
-            StepCounter(max_steps=1000),
-            RewardSum(),
-        ),
-    )
-    fpb = num_envs * 100  # 100 steps per batch
-    collector2 = SyncDataCollector(
-        env2, actor,
-        frames_per_batch=fpb,
-        total_frames=num_frames,
-        device=device,
-    )
 
-    it2 = iter(collector2)
-    for _ in range(2):
-        batch = next(it2)
-    torch.cuda.synchronize()
+def bench_collector(env_name, num_envs, device, frame_skip, compile_step, num_frames=500_000):
+    """Full TorchRL collector loop (standard flags)."""
+    env = _make_env(env_name, num_envs, device, frame_skip, compile_step, fast=False)
+    actor = _make_actor(env, device)
+    fps = _bench_collector_inner(env, actor, num_envs, num_frames, "Collector (standard):", fast=False)
+    del env
+    return fps
 
-    t0 = time.perf_counter()
-    count = 0
-    for batch in collector2:
-        count += batch.numel()
-        if count >= num_frames:
-            break
-    torch.cuda.synchronize()
-    elapsed = time.perf_counter() - t0
 
-    fps2 = count / elapsed
-    print(f"  Collector (100-step batch):{fps2:>12,.0f} frames/sec  ({elapsed:.3f}s for {count:,} frames)")
-
-    return fps, fps2
+def bench_collector_fast(env_name, num_envs, device, frame_skip, compile_step, num_frames=500_000):
+    """TorchRL collector with faster-collector branch optimizations."""
+    env = _make_env(env_name, num_envs, device, frame_skip, compile_step, fast=True)
+    actor = _make_actor(env, device)
+    fps = _bench_collector_inner(env, actor, num_envs, num_frames, "Collector (fast flags):", fast=True)
+    del env
+    return fps
 
 
 def main():
@@ -257,13 +261,19 @@ def main():
 
     del env_compiled
 
-    print(f"\n[3] Collector (no compile)")
-    bench_collector(args.env, args.num_envs, args.device, args.frame_skip,
-                    compile_step=False, num_frames=args.num_envs * 200)
+    nf = args.num_envs * 200
 
-    print(f"\n[4] Collector (compiled)")
+    print(f"\n[3] Collector (compiled, standard)")
     bench_collector(args.env, args.num_envs, args.device, args.frame_skip,
-                    compile_step=True, num_frames=args.num_envs * 200)
+                    compile_step=True, num_frames=nf)
+
+    print(f"\n[4] Collector (compiled, fast flags)")
+    bench_collector_fast(args.env, args.num_envs, args.device, args.frame_skip,
+                         compile_step=True, num_frames=nf)
+
+    print(f"\n[5] Collector (eager, fast flags)")
+    bench_collector_fast(args.env, args.num_envs, args.device, args.frame_skip,
+                         compile_step=False, num_frames=nf)
 
     print("\nDone.")
 
