@@ -256,11 +256,11 @@ class MujocoTorchEnv(EnvBase):
     # ------------------------------------------------------------------
 
     def _make_batch(self, n: int):
-        batch = torch.stack([self._dx0.clone() for _ in range(n)])
+        batch = self._dx0.expand(n).clone()
         noise = self.RESET_NOISE_SCALE
         if noise > 0:
-            batch.qpos = batch.qpos + torch.empty_like(batch.qpos).uniform_(-noise, noise)
-            batch.qvel = batch.qvel + torch.empty_like(batch.qvel).uniform_(-noise, noise)
+            batch.qpos.add_(torch.empty_like(batch.qpos).uniform_(-noise, noise))
+            batch.qvel.add_(torch.empty_like(batch.qvel).uniform_(-noise, noise))
         return batch
 
     def _reset(self, tensordict=None, **kwargs):
