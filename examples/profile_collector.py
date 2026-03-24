@@ -70,6 +70,7 @@ def main():
     p.add_argument("--device", default="cuda")
     p.add_argument("--output", default="collector_trace.json.gz")
     p.add_argument("--fast", action="store_true", help="Enable fast-path flags")
+    p.add_argument("--compile", action="store_true", help="Enable compiled physics step")
     args = p.parse_args()
 
     # -- env ---------------------------------------------------------------
@@ -81,7 +82,7 @@ def main():
         num_envs=args.num_envs,
         device=args.device,
         frame_skip=args.frame_skip,
-        compile_step=False,
+        compile_step=args.compile,
     )
     env = TransformedEnv(
         base,
@@ -187,11 +188,12 @@ def main():
     _instrument_collector(collector)
 
     # -- warmup (outside profiler) -----------------------------------------
-    print("Warming up (5 steps)...", flush=True)
+    warmup_steps = 20 if args.compile else 5
+    print(f"Warming up ({warmup_steps} steps, compile={args.compile})...", flush=True)
     it = iter(collector)
-    for i in range(5):
+    for i in range(warmup_steps):
         _ = next(it)
-        print(f"  warmup step {i+1}/5", flush=True)
+        print(f"  warmup step {i+1}/{warmup_steps}", flush=True)
     torch.cuda.synchronize()
     print("Warmup done.", flush=True)
 
