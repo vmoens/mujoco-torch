@@ -59,7 +59,8 @@ def inv_constraint(m: Model, d: Data) -> Data:
     """Inverse constraint solver."""
 
     # no constraints
-    if d.efc_J.numel() == 0:
+    _, _, _, _, nefc = constraint_sizes(m)
+    if nefc == 0:
         return d.replace(qfrc_constraint=torch.zeros(m.nv, dtype=d.qpos.dtype, device=d.qpos.device))
 
     ne, nf, _, _, _ = constraint_sizes(m)
