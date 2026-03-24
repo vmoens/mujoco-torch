@@ -163,9 +163,10 @@ def _make_env(env_name, num_envs, device, frame_skip, compile_step, fast=False):
     if fast:
         # Enable fast-path flags from pytorch/rl faster-collector branch
         base._trust_step_output = True
-        base._skip_maybe_reset = True
         env._trust_step_output = True
-        env._skip_maybe_reset = True
+        # NOTE: _skip_maybe_reset requires the env to auto-reset inside _step().
+        # MujocoTorchEnv handles resets in _reset() via the collector, so we
+        # cannot skip maybe_reset.
     return env
 
 
