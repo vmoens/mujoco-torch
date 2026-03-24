@@ -362,7 +362,8 @@ def forward(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     d = _actuation(m, d)
     d = _acceleration(m, d)
 
-    if d.efc_J.numel() == 0:
+    _, _, _, _, nefc = collision_driver.constraint_sizes(m)
+    if nefc == 0:
         d.update_(qacc=d.qacc_smooth)
         return d
 
