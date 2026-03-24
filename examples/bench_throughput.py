@@ -236,31 +236,34 @@ def main():
     p.add_argument("--frame_skip", type=int, default=5)
     p.add_argument("--device", default="cuda")
     p.add_argument("--num_steps", type=int, default=200)
+    p.add_argument("--collector_only", action="store_true",
+                   help="Skip raw physics tests, only run collector benchmarks")
     args = p.parse_args()
 
     print(f"\n=== Throughput benchmark: {args.env}, {args.num_envs} envs, "
           f"frame_skip={args.frame_skip}, device={args.device} ===\n")
 
-    # Create base env (no compile)
-    cls = ENVS[args.env]
-    env_eager = cls(num_envs=args.num_envs, device=args.device,
-                    frame_skip=args.frame_skip, compile_step=False)
+    if not args.collector_only:
+        # Create base env (no compile)
+        cls = ENVS[args.env]
+        env_eager = cls(num_envs=args.num_envs, device=args.device,
+                        frame_skip=args.frame_skip, compile_step=False)
 
-    print("[1] Raw physics (no compile)")
-    bench_raw_physics(env_eager, args.num_steps)
-    bench_env_step(env_eager, args.num_steps)
-    bench_env_step_with_frameskip(env_eager, args.num_steps)
+        print("[1] Raw physics (no compile)")
+        bench_raw_physics(env_eager, args.num_steps)
+        bench_env_step(env_eager, args.num_steps)
+        bench_env_step_with_frameskip(env_eager, args.num_steps)
 
-    del env_eager
+        del env_eager
 
-    print(f"\n[2] Compiled physics")
-    env_compiled = cls(num_envs=args.num_envs, device=args.device,
-                       frame_skip=args.frame_skip, compile_step=True)
-    bench_compiled_physics(env_compiled, args.num_steps)
-    bench_env_step(env_compiled, args.num_steps)
-    bench_env_step_with_frameskip(env_compiled, args.num_steps)
+        print(f"\n[2] Compiled physics")
+        env_compiled = cls(num_envs=args.num_envs, device=args.device,
+                           frame_skip=args.frame_skip, compile_step=True)
+        bench_compiled_physics(env_compiled, args.num_steps)
+        bench_env_step(env_compiled, args.num_steps)
+        bench_env_step_with_frameskip(env_compiled, args.num_steps)
 
-    del env_compiled
+        del env_compiled
 
     nf = args.num_envs * 200
 
