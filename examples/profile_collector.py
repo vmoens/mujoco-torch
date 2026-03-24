@@ -103,8 +103,7 @@ def main():
     with profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         record_shapes=True,
-        with_stack=True,
-        # No schedule — just profile the entire block
+        with_stack=False,
     ) as prof:
         for _ in range(100):
             _ = next(it)
@@ -113,19 +112,16 @@ def main():
     # -- export ------------------------------------------------------------
     print(f"Exporting trace to {args.output} ...", flush=True)
     prof.export_chrome_trace(args.output)
+    print("Trace exported.", flush=True)
 
-    # Also print a table summary
+    # Print a compact summary (no stack grouping to avoid OOM)
     print("\n=== Top 30 by CUDA time ===")
     print(
-        prof.key_averages(group_by_stack_n=3).table(
-            sort_by="cuda_time_total", row_limit=30
-        )
+        prof.key_averages().table(sort_by="cuda_time_total", row_limit=30)
     )
     print("\n=== Top 30 by CPU time ===")
     print(
-        prof.key_averages(group_by_stack_n=3).table(
-            sort_by="cpu_time_total", row_limit=30
-        )
+        prof.key_averages().table(sort_by="cpu_time_total", row_limit=30)
     )
 
     print("\nDone.")
