@@ -1,14 +1,65 @@
 #!/usr/bin/env python3
 """Profile the SyncDataCollector inner loop with torch.profiler.
 
-Runs a short collector rollout (100 steps) and saves a Chrome trace.
+Instruments key methods with record_function markers for readable traces.
 """
 
 import argparse
+import functools
+
 import torch
-from torch.profiler import profile, ProfilerActivity, schedule
+from torch.profiler import profile, ProfilerActivity, record_function
 
 from mujoco_torch.zoo import ENVS
+
+
+def _wrap_method(obj, method_name, label):
+    """Monkey-patch a method with a record_function marker."""
+    original = getattr(obj, method_name)
+
+    @functools.wraps(original)
+    def wrapper(*args, **kwargs):
+        with record_function(label):
+            return original(*args, **kwargs)
+
+    setattr(obj, method_name, wrapper)
+
+
+def _instrument_env(base_env, transformed_env):
+    """Add profiler markers to env methods."""
+    # Base env methods
+    _wrap_method(base_env, "_step", "ENV._step")
+    _wrap_method(base_env, "_reset", "ENV._reset")
+    _wrap_method(base_env, "_build_obs", "ENV._build_obs")
+    _wrap_method(base_env, "_compute_reward", "ENV._compute_reward")
+    _wrap_method(base_env, "_compute_terminated", "ENV._compute_terminated")
+
+    # Wrap physics step (the hot path)
+    orig_physics = base_env._physics_step
+
+    @functools.wraps(orig_physics)
+    def physics_wrapper(*a, **kw):
+        with record_function("ENV._physics_step"):
+            return orig_physics(*a, **kw)
+
+    base_env._physics_step = physics_wrapper
+
+    # TransformedEnv methods
+    _wrap_method(transformed_env, "_step", "TransformedEnv._step")
+    _wrap_method(transformed_env, "step", "TransformedEnv.step")
+
+    # Wrap individual transforms
+    for i, t in enumerate(transformed_env.transform):
+        name = type(t).__name__
+        _wrap_method(t, "_step", f"Transform[{i}].{name}._step")
+
+
+def _instrument_collector(collector):
+    """Add profiler markers to collector methods."""
+    _wrap_method(collector, "rollout", "Collector.rollout")
+    # The _step_and_maybe_reset is the core inner loop
+    if hasattr(collector, "_step_and_maybe_reset"):
+        _wrap_method(collector, "_step_and_maybe_reset", "Collector._step_and_maybe_reset")
 
 
 def main():
@@ -22,7 +73,7 @@ def main():
     args = p.parse_args()
 
     # -- env ---------------------------------------------------------------
-    from torchrl.envs import TransformedEnv
+    from torchrl.envs import TransformedEnv, EnvBase
     from torchrl.envs.transforms import Compose, DoubleToFloat, StepCounter, RewardSum
 
     cls = ENVS[args.env]
@@ -43,6 +94,50 @@ def main():
     if args.fast:
         base._trust_step_output = True
         env._trust_step_output = True
+
+    # -- Instrument EnvBase.step and step_and_maybe_reset at class level ---
+    orig_envbase_step = EnvBase.step
+
+    @functools.wraps(orig_envbase_step)
+    def envbase_step_wrapper(self, *a, **kw):
+        with record_function("EnvBase.step"):
+            return orig_envbase_step(self, *a, **kw)
+
+    EnvBase.step = envbase_step_wrapper
+
+    if hasattr(EnvBase, "step_and_maybe_reset"):
+        orig_samr = EnvBase.step_and_maybe_reset
+
+        @functools.wraps(orig_samr)
+        def samr_wrapper(self, *a, **kw):
+            with record_function("EnvBase.step_and_maybe_reset"):
+                return orig_samr(self, *a, **kw)
+
+        EnvBase.step_and_maybe_reset = samr_wrapper
+
+    if hasattr(EnvBase, "maybe_reset"):
+        orig_mr = EnvBase.maybe_reset
+
+        @functools.wraps(orig_mr)
+        def mr_wrapper(self, *a, **kw):
+            with record_function("EnvBase.maybe_reset"):
+                return orig_mr(self, *a, **kw)
+
+        EnvBase.maybe_reset = mr_wrapper
+
+    # Also instrument _step_proc_data if it exists
+    if hasattr(EnvBase, "_step_proc_data"):
+        orig_spd = EnvBase._step_proc_data
+
+        @functools.wraps(orig_spd)
+        def spd_wrapper(self, *a, **kw):
+            with record_function("EnvBase._step_proc_data"):
+                return orig_spd(self, *a, **kw)
+
+        EnvBase._step_proc_data = spd_wrapper
+
+    # -- Instrument instance methods ---------------------------------------
+    _instrument_env(base, env)
 
     # -- actor -------------------------------------------------------------
     from torchrl.modules import MLP, NormalParamExtractor, ProbabilisticActor, TanhNormal
@@ -72,6 +167,7 @@ def main():
         distribution_class=TanhNormal,
         return_log_prob=True,
     )
+    _wrap_method(actor, "forward", "Actor.forward")
 
     # -- collector ---------------------------------------------------------
     try:
@@ -88,6 +184,7 @@ def main():
         collector_kwargs["update_traj_ids"] = False
 
     collector = Collector(env, actor, **collector_kwargs)
+    _instrument_collector(collector)
 
     # -- warmup (outside profiler) -----------------------------------------
     print("Warming up (5 steps)...", flush=True)
@@ -98,7 +195,7 @@ def main():
     torch.cuda.synchronize()
     print("Warmup done.", flush=True)
 
-    # -- profile 100 collection steps --------------------------------------
+    # -- profile -----------------------------------------------------------
     num_profile_steps = 50
     print(f"Profiling {num_profile_steps} collector steps ({args.num_envs} envs)...", flush=True)
 
@@ -116,11 +213,7 @@ def main():
     prof.export_chrome_trace(args.output)
     print("Trace exported.", flush=True)
 
-    # Print a compact summary (no stack grouping to avoid OOM)
-    print("\n=== Top 30 by CUDA time ===")
-    print(
-        prof.key_averages().table(sort_by="cuda_time_total", row_limit=30)
-    )
+    # Print a compact summary
     print("\n=== Top 30 by CPU time ===")
     print(
         prof.key_averages().table(sort_by="cpu_time_total", row_limit=30)
