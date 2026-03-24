@@ -90,10 +90,11 @@ def main():
     collector = Collector(env, actor, **collector_kwargs)
 
     # -- warmup (outside profiler) -----------------------------------------
-    print("Warming up (20 steps)...", flush=True)
+    print("Warming up (5 steps)...", flush=True)
     it = iter(collector)
-    for _ in range(20):
+    for i in range(5):
         _ = next(it)
+        print(f"  warmup step {i+1}/5", flush=True)
     torch.cuda.synchronize()
     print("Warmup done.", flush=True)
 
@@ -102,7 +103,7 @@ def main():
 
     with profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        record_shapes=True,
+        record_shapes=False,
         with_stack=False,
     ) as prof:
         for _ in range(100):
