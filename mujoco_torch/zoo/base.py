@@ -64,6 +64,7 @@ class MujocoTorchEnv(EnvBase):
         device=None,
         dtype=torch.float64,
         compile_step: bool = False,
+        auto_reset: bool = False,
         frame_skip: int | None = None,
         from_pixels: bool = False,
         pixel_only: bool = False,
@@ -72,6 +73,7 @@ class MujocoTorchEnv(EnvBase):
     ):
         if frame_skip is not None:
             self.FRAME_SKIP = frame_skip
+        self.auto_reset = auto_reset
         super().__init__(device=device, batch_size=torch.Size([num_envs]))
         self.dtype = dtype
         self.num_envs = num_envs
@@ -304,6 +306,21 @@ class MujocoTorchEnv(EnvBase):
         terminated = self._compute_terminated()
         truncated = (self._step_count >= self.max_episode_steps).unsqueeze(-1)
         done = terminated | truncated
+
+        # Fused auto-reset: reset done envs before building obs so the
+        # returned observation for done envs is the reset observation
+        # (matches TorchRL's maybe_reset behaviour).
+        if self.auto_reset:
+            done_mask = done.squeeze(-1)
+            if done_mask.any():
+                n_reset = done_mask.sum()
+                reset_batch = self._dx0.expand(n_reset).clone()
+                noise = self.RESET_NOISE_SCALE
+                if noise > 0:
+                    reset_batch.qpos.add_(torch.empty_like(reset_batch.qpos).uniform_(-noise, noise))
+                    reset_batch.qvel.add_(torch.empty_like(reset_batch.qvel).uniform_(-noise, noise))
+                self._dx[done_mask] = reset_batch
+                self._step_count[done_mask] = 0
 
         return TensorDict(
             {
