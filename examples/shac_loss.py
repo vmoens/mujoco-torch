@@ -160,7 +160,10 @@ class SHACLoss(nn.Module):
         Args:
             mean_log_prob: Detached mean log-probability from ``actor_loss``.
         """
-        return -(self.log_alpha * (mean_log_prob + self.target_entropy).detach())
+        loss = -(self.log_alpha * (mean_log_prob + self.target_entropy).detach())
+        # Clamp log_alpha to prevent runaway entropy scaling
+        self.log_alpha.data.clamp_(-5.0, 2.0)
+        return loss
 
     # ------------------------------------------------------------------
     # Target network EMA update
