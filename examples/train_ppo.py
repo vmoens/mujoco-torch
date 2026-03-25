@@ -22,6 +22,7 @@ from torchrl.envs import TransformedEnv
 from torchrl.envs.transforms import (
     Compose,
     DoubleToFloat,
+    ObservationNorm,
     RewardSum,
     StepCounter,
 )
@@ -46,26 +47,31 @@ from mujoco_torch.zoo import ENVS
 # ------------------------------------------------------------------
 
 
-def make_env(env_name, num_envs, device, frame_skip, compile_step=False):
+def make_env(env_name, num_envs, device, frame_skip, compile_step=False, obs_norm_num_iter=1000):
     cls = ENVS[env_name]
     base = cls(num_envs=num_envs, device=device, frame_skip=frame_skip, compile_step=compile_step)
-    return TransformedEnv(
+    env = TransformedEnv(
         base,
         Compose(
             DoubleToFloat(in_keys=["observation"], in_keys_inv=[]),
+            ObservationNorm(in_keys=["observation"], standard_normal=True),
             StepCounter(max_steps=1000),
             RewardSum(),
         ),
     )
+    env.transform[1].init_stats(obs_norm_num_iter)
+    return env
 
 
-def make_eval_env(env_name, device, frame_skip, logger):
+def make_eval_env(env_name, device, frame_skip, logger, obs_norm_td=None):
     cls = ENVS[env_name]
     base = cls(num_envs=1, device=device, frame_skip=frame_skip)
-    return TransformedEnv(
+    obs_norm = ObservationNorm(in_keys=["observation"], standard_normal=True)
+    env = TransformedEnv(
         base,
         Compose(
             DoubleToFloat(in_keys=["observation"], in_keys_inv=[]),
+            obs_norm,
             StepCounter(max_steps=1000),
             RewardSum(),
             PixelRenderTransform(out_keys=["pixels"]),
@@ -74,6 +80,9 @@ def make_eval_env(env_name, device, frame_skip, logger):
             ),
         ),
     )
+    if obs_norm_td is not None:
+        obs_norm.load_state_dict(obs_norm_td)
+    return env
 
 
 # ------------------------------------------------------------------
@@ -184,7 +193,9 @@ def train(args):
         project=args.wandb_project,
         config=vars(args),
     )
-    eval_env = make_eval_env(args.env, train_device, args.frame_skip, logger)
+    # Share obs normalization stats from train env to eval env
+    obs_norm_td = train_env.transform[1].state_dict()
+    eval_env = make_eval_env(args.env, train_device, args.frame_skip, logger, obs_norm_td=obs_norm_td)
 
     # --- Models (on train device) ---
     actor = make_actor(obs_dim, act_dim, train_device)
