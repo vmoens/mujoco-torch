@@ -599,6 +599,8 @@ def count_constraints(m: Model, d: Data) -> tuple[int, int, int, int]:
 def make_constraint(m: Model, d: Data) -> Data:
     """Creates constraint jacobians and other supporting data."""
     ne, nf, nl, ncon, nefc = collision_driver.constraint_sizes(m)
+    if nefc == 0:
+        return d
     ns = ne + nf + nl
     actual_ncon = d.contact.dist.shape[0]
     has_contacts = ncon > 0 and actual_ncon > 0
@@ -643,17 +645,6 @@ def make_constraint(m: Model, d: Data) -> Data:
         offset += count
     efcs = tuple(efcs)
 
-    if not efcs:
-        _dev = d.qpos.device
-        z = torch.empty(0, device=_dev)
-        d.update_(
-            efc_J=torch.empty((0, m.nv), device=_dev),
-            efc_D=z,
-            efc_aref=z,
-            efc_frictionloss=z,
-            nefc=_ZERO_I32.get(torch.int32, _dev),
-        )
-        return d
 
     efc = torch.cat(list(efcs))
     refsafe = precomp["refsafe"]
@@ -669,6 +660,9 @@ def make_constraint(m: Model, d: Data) -> Data:
         return aref, r
 
     aref, r = fn(efc)
+
+    if not torch.compiler.is_compiling():
+        assert r.shape[0] == nefc, f"Expected {nefc} constraint rows, got {r.shape[0]}"
 
     cfg = get_diff_config()
     if cfg.cfd:
@@ -706,6 +700,6 @@ def make_constraint(m: Model, d: Data) -> Data:
         efc_D=1 / r,
         efc_aref=aref,
         efc_frictionloss=efc.frictionloss,
-        nefc=torch.full((), r.shape[0], dtype=torch.int32, device=r.device),
+        nefc=torch.full((), nefc, dtype=torch.int32, device=r.device),
     )
     return d
