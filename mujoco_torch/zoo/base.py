@@ -297,8 +297,11 @@ class MujocoTorchEnv(EnvBase):
         reset_dx = self._dx0.expand_as(self._dx).clone()
         reset_dx.qpos = reset_dx.qpos + torch.empty_like(reset_dx.qpos).uniform_(-noise, noise)
         reset_dx.qvel = reset_dx.qvel + torch.empty_like(reset_dx.qvel).uniform_(-noise, noise)
-        done_mask = done.squeeze(-1).unsqueeze(-1)
-        self._dx = self._dx.apply(lambda v, rv: torch.where(done_mask, rv, v), reset_dx)
+        done_mask = done.squeeze(-1)
+        self._dx = self._dx.apply(
+            lambda v, rv: torch.where(done_mask.view(-1, *((1,) * (v.ndim - 1))), rv, v),
+            reset_dx,
+        )
         self._step_count = torch.where(done.squeeze(-1), torch.zeros_like(self._step_count), self._step_count)
 
         return TensorDict(
