@@ -128,9 +128,22 @@ class MujocoTorchEnv(EnvBase):
         self._render_precomp = mujoco_torch.precompute_render_data(self.mx)
 
         _step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
-        if compile_step:
-            _step_fn = torch.compile(_step_fn)
-        self._physics_step = _step_fn
+        frame_skip = self.FRAME_SKIP
+        _vmap_step = torch.vmap(_step_fn)
+        if num_envs == 1:
+            def _multi_step(d):
+                for _ in range(frame_skip):
+                    d = _step_fn(d)
+                return d
+            self._physics_step = torch.compile(_multi_step) if compile_step else _multi_step
+            self._single_env = True
+        else:
+            def _vmap_multi_step(d):
+                for _ in range(frame_skip):
+                    d = _vmap_step(d)
+                return d
+            self._physics_step = torch.compile(_vmap_multi_step) if compile_step else _vmap_multi_step
+            self._single_env = False
 
     # ------------------------------------------------------------------
     # Subclass interface
@@ -239,11 +252,11 @@ class MujocoTorchEnv(EnvBase):
     # ------------------------------------------------------------------
 
     def _make_batch(self, n: int):
-        batch = torch.stack([self._dx0.clone() for _ in range(n)])
+        batch = self._dx0.expand(n).clone()
         noise = self.RESET_NOISE_SCALE
         if noise > 0:
-            batch.qpos = batch.qpos + torch.empty_like(batch.qpos).uniform_(-noise, noise)
-            batch.qvel = batch.qvel + torch.empty_like(batch.qvel).uniform_(-noise, noise)
+            batch.qpos.add_(torch.empty_like(batch.qpos).uniform_(-noise, noise))
+            batch.qvel.add_(torch.empty_like(batch.qvel).uniform_(-noise, noise))
         return batch
 
     def _reset(self, tensordict=None, **kwargs):
@@ -252,6 +265,7 @@ class MujocoTorchEnv(EnvBase):
             reset_mask = tensordict["_reset"].squeeze(-1)
 
         if reset_mask is None or not hasattr(self, "_dx"):
+            # Full reset (initial or forced)
             self._dx = self._make_batch(self.num_envs)
             self._step_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         else:
@@ -276,10 +290,11 @@ class MujocoTorchEnv(EnvBase):
 
         qpos_before = self._dx.qpos.clone()
 
-        self._dx = self._dx.replace(ctrl=ctrl)
-        step_fn = self._physics_step
-        for _ in range(self.FRAME_SKIP):
-            self._dx = step_fn(self._dx[0]).unsqueeze(0) if self.num_envs == 1 else torch.vmap(step_fn)(self._dx)
+        self._dx.update_(ctrl=ctrl)
+        if self._single_env:
+            self._dx = self._physics_step(self._dx[0]).unsqueeze(0)
+        else:
+            self._dx = self._physics_step(self._dx)
         self._step_count += 1
 
         reward = self._compute_reward(qpos_before, action)
@@ -287,9 +302,22 @@ class MujocoTorchEnv(EnvBase):
         truncated = (self._step_count >= self.max_episode_steps).unsqueeze(-1)
         done = terminated | truncated
 
+        # Build obs from the terminal state BEFORE resetting
+        obs = self._build_obs()
+
+        # Branchless reset: always compute reset candidate, select with torch.where.
+        # No control flow → fully compilable, no graph breaks.
+        noise = self.RESET_NOISE_SCALE
+        reset_dx = self._dx0.expand_as(self._dx).clone()
+        reset_dx.qpos = reset_dx.qpos + torch.empty_like(reset_dx.qpos).uniform_(-noise, noise)
+        reset_dx.qvel = reset_dx.qvel + torch.empty_like(reset_dx.qvel).uniform_(-noise, noise)
+        done_mask = done.squeeze(-1).unsqueeze(-1)
+        self._dx = self._dx.apply(lambda v, rv: torch.where(done_mask, rv, v), reset_dx)
+        self._step_count = torch.where(done.squeeze(-1), torch.zeros_like(self._step_count), self._step_count)
+
         return TensorDict(
             {
-                **self._build_obs(),
+                **obs,
                 "reward": reward,
                 "done": done,
                 "terminated": terminated,
