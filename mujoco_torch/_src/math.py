@@ -81,7 +81,7 @@ def safe_div(num: float | torch.Tensor, den: float | torch.Tensor) -> float | to
     return num / (den + mujoco.mjMINVAL * (den == 0))
 
 
-_INLINE_CHOLESKY_MAX_SIZE = 16
+_INLINE_CHOLESKY_MAX_SIZE = 32
 
 
 def small_cholesky(A: torch.Tensor) -> torch.Tensor:
@@ -92,6 +92,11 @@ def small_cholesky(A: torch.Tensor) -> torch.Tensor:
     Falls back to torch.linalg.cholesky for matrices larger than
     ``_INLINE_CHOLESKY_MAX_SIZE`` where cuSOLVER is more efficient.
 
+    The inline path clamps each diagonal pivot to ``1e-12``, making it robust
+    against numerically non-positive-definite inputs that can arise from
+    degenerate physics states (extreme penetrations, blown joint limits).
+    The fallback path adds a small diagonal regularisation for the same reason.
+
     Args:
       A: (n, n) symmetric positive definite matrix
 
@@ -101,6 +106,10 @@ def small_cholesky(A: torch.Tensor) -> torch.Tensor:
     n = A.shape[-1]
 
     if n > _INLINE_CHOLESKY_MAX_SIZE:
+        # Diagonal regularisation: guarantees positive-definiteness even for
+        # degenerate physics states.  Fully torch.compile friendly (no control
+        # flow, no error handling).
+        A = A + 1e-10 * torch.eye(n, dtype=A.dtype, device=A.device)
         return torch.linalg.cholesky(A)
 
     L = [[torch.zeros_like(A[0, 0]) for _ in range(n)] for _ in range(n)]
@@ -109,7 +118,7 @@ def small_cholesky(A: torch.Tensor) -> torch.Tensor:
         s = A[j, j]
         for k in range(j):
             s = s - L[j][k] * L[j][k]
-        L[j][j] = torch.sqrt(s)
+        L[j][j] = torch.sqrt(torch.clamp_min(s, 1e-12))
 
         for i in range(j + 1, n):
             s = A[i, j]
