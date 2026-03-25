@@ -309,9 +309,13 @@ class MujocoTorchEnv(EnvBase):
         truncated = (self._step_count >= self.max_episode_steps).unsqueeze(-1)
         done = terminated | truncated
 
-        # Fused auto-reset: reset done envs before building obs so the
-        # returned observation for done envs is the reset observation
-        # (matches TorchRL's maybe_reset behaviour).
+        # Build obs from the terminal state BEFORE resetting, so the returned
+        # observation matches the state that produced the reward.
+        obs = self._build_obs()
+
+        # Fused auto-reset: reset done envs AFTER building obs.
+        # maybe_reset will call _reset (which is a no-op with auto_reset)
+        # and _reset returns obs from the already-reset _dx state.
         if self.auto_reset:
             done_mask = done.squeeze(-1)
             if done_mask.any():
@@ -326,7 +330,7 @@ class MujocoTorchEnv(EnvBase):
 
         return TensorDict(
             {
-                **self._build_obs(),
+                **obs,
                 "reward": reward,
                 "done": done,
                 "terminated": terminated,
