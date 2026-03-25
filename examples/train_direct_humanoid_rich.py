@@ -40,7 +40,21 @@ class SmoothHumanoidRichEnv(HumanoidRichEnv):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         mx = self.mx
-        self._physics_step = lambda d: mujoco_torch.step(mx, d, fixed_iterations=True)
+        frame_skip = self.FRAME_SKIP
+        _step_fn = lambda d: mujoco_torch.step(mx, d, fixed_iterations=True)  # noqa: E731
+        if self.num_envs == 1:
+            def _multi_step(d):
+                for _ in range(frame_skip):
+                    d = _step_fn(d)
+                return d
+            self._physics_step = _multi_step
+        else:
+            _vmap_step = torch.vmap(_step_fn)
+            def _vmap_multi_step(d):
+                for _ in range(frame_skip):
+                    d = _vmap_step(d)
+                return d
+            self._physics_step = _vmap_multi_step
 
     def _compute_reward(self, qpos_before, action):
         forward_vel = (self._dx.qpos[..., 0] - qpos_before[..., 0]) / self._dt
