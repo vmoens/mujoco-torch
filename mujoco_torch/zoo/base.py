@@ -281,9 +281,58 @@ class MujocoTorchEnv(EnvBase):
         step_fn = self._physics_step
         for _ in range(self.FRAME_SKIP):
             self._dx = step_fn(self._dx[0]).unsqueeze(0) if self.num_envs == 1 else torch.vmap(step_fn)(self._dx)
+
+        # Physics health check: catch blow-ups at the source
+        _PHYS_THRESHOLD = 1e10
+        qpos = self._dx.qpos
+        qvel = self._dx.qvel
+        qpos_bad = qpos.isnan().any() or qpos.isinf().any() or (qpos.abs() > _PHYS_THRESHOLD).any()
+        qvel_bad = qvel.isnan().any() or qvel.isinf().any() or (qvel.abs() > _PHYS_THRESHOLD).any()
+        if qpos_bad or qvel_bad:
+            # Find which envs blew up
+            qpos_issue = qpos.abs().max(dim=-1).values  # [num_envs]
+            qvel_issue = qvel.abs().max(dim=-1).values
+            bad_envs = (qpos_issue > _PHYS_THRESHOLD) | qpos.isnan().any(-1) | (qvel_issue > _PHYS_THRESHOLD) | qvel.isnan().any(-1)
+            bad_idx = bad_envs.nonzero(as_tuple=True)[0]
+            msg = (
+                f"\n{'=' * 70}\n"
+                f"FATAL: Physics blow-up at step_count={self._step_count[bad_idx[0]].item()}\n"
+                f"  {bad_idx.numel()}/{self.num_envs} envs affected, first bad env idx={bad_idx[0].item()}\n"
+                f"  qpos range: [{qpos.min():.2e}, {qpos.max():.2e}]  nan={qpos.isnan().sum().item()}\n"
+                f"  qvel range: [{qvel.min():.2e}, {qvel.max():.2e}]  nan={qvel.isnan().sum().item()}\n"
+                f"  qpos_before range: [{qpos_before.min():.2e}, {qpos_before.max():.2e}]\n"
+                f"  action range: [{action.min():.2e}, {action.max():.2e}]\n"
+                f"  ctrl range: [{ctrl.min():.2e}, {ctrl.max():.2e}]\n"
+                f"  bad env qpos: {qpos[bad_idx[0]].cpu().tolist()}\n"
+                f"  bad env qvel: {qvel[bad_idx[0]].cpu().tolist()}\n"
+                f"  bad env qpos_before: {qpos_before[bad_idx[0]].cpu().tolist()}\n"
+                f"  bad env action: {action[bad_idx[0]].cpu().tolist()}\n"
+                f"{'=' * 70}"
+            )
+            raise RuntimeError(msg)
+
         self._step_count += 1
 
         reward = self._compute_reward(qpos_before, action)
+
+        # Reward health check
+        if reward.isnan().any() or reward.isinf().any() or (reward.abs() > _PHYS_THRESHOLD).any():
+            bad_mask = reward.squeeze(-1).isnan() | reward.squeeze(-1).isinf() | (reward.squeeze(-1).abs() > _PHYS_THRESHOLD)
+            bad_idx = bad_mask.nonzero(as_tuple=True)[0]
+            msg = (
+                f"\n{'=' * 70}\n"
+                f"FATAL: Extreme reward at step_count={self._step_count[bad_idx[0]].item()}\n"
+                f"  {bad_idx.numel()}/{self.num_envs} envs affected\n"
+                f"  reward range: [{reward.min():.2e}, {reward.max():.2e}]  nan={reward.isnan().sum().item()}\n"
+                f"  worst reward: {reward[bad_idx[0]].item():.2e}\n"
+                f"  bad env qpos: {self._dx.qpos[bad_idx[0]].cpu().tolist()}\n"
+                f"  bad env qvel: {self._dx.qvel[bad_idx[0]].cpu().tolist()}\n"
+                f"  bad env qpos_before: {qpos_before[bad_idx[0]].cpu().tolist()}\n"
+                f"  bad env action: {action[bad_idx[0]].cpu().tolist()}\n"
+                f"{'=' * 70}"
+            )
+            raise RuntimeError(msg)
+
         terminated = self._compute_terminated()
         truncated = (self._step_count >= self.max_episode_steps).unsqueeze(-1)
         done = terminated | truncated
