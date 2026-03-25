@@ -267,9 +267,11 @@ class MujocoTorchEnv(EnvBase):
             reset_mask = tensordict["_reset"].squeeze(-1)
 
         if reset_mask is None or not hasattr(self, "_dx"):
+            # Full reset (initial or forced)
             self._dx = self._make_batch(self.num_envs)
             self._step_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        else:
+        elif not self.auto_reset:
+            # Only do per-env reset if auto_reset is off (otherwise _step already did it)
             n_reset = int(reset_mask.sum())
             if n_reset > 0:
                 self._dx[reset_mask] = self._make_batch(n_reset)

@@ -97,9 +97,8 @@ def main():
     if args.fast:
         base._trust_step_output = True
         env._trust_step_output = True
-    if args.auto_reset:
-        base._skip_maybe_reset = True
-        env._skip_maybe_reset = True
+    # With auto_reset, _reset is a no-op (env already reset in _step).
+    # We keep maybe_reset so InitTracker/transforms work correctly.
 
     # -- Instrument EnvBase.step and step_and_maybe_reset at class level ---
     orig_envbase_step = EnvBase.step

@@ -268,9 +268,8 @@ def main():
     if args.fast_collector:
         base_env._trust_step_output = True
         env._trust_step_output = True
-    if args.auto_reset:
-        base_env._skip_maybe_reset = True
-        env._skip_maybe_reset = True
+    # Note: with auto_reset, _reset becomes a no-op (env already reset in _step).
+    # We still let TorchRL's maybe_reset run so InitTracker sets is_init correctly.
     mjt_logger.info(f"Env: {args.env} | batch_size={env.batch_size} | device={env.device}")
 
     eval_transforms = [RewardSum()]
