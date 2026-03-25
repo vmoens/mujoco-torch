@@ -46,6 +46,97 @@ from mujoco_torch.zoo import ENVS
 
 
 # ------------------------------------------------------------------
+# Numeric health checks — NaN, Inf, and extreme values
+# ------------------------------------------------------------------
+
+# Absolute threshold: any value beyond this is a physics blow-up, not a
+# legitimate reward or observation.
+_EXTREME_THRESHOLD = 1e10
+
+
+def _check_td_health(td, label, keys=None):
+    """Check a TensorDict for NaN, Inf, or extreme values.
+
+    Returns list of (key, nan_count, inf_count, extreme_count, shape, max_abs, min_val, max_val).
+    """
+    issues = []
+    items = td.items(include_nested=True) if keys is None else [(k, td[k]) for k in keys if k in td.keys(True)]
+    for key, val in items:
+        if not isinstance(val, torch.Tensor) or not val.is_floating_point():
+            continue
+        nan_count = val.isnan().sum().item()
+        inf_count = val.isinf().sum().item()
+        finite = val[val.isfinite()]
+        extreme_count = (finite.abs() > _EXTREME_THRESHOLD).sum().item() if finite.numel() > 0 else 0
+        if nan_count > 0 or inf_count > 0 or extreme_count > 0:
+            max_abs = finite.abs().max().item() if finite.numel() > 0 else float("nan")
+            min_val = finite.min().item() if finite.numel() > 0 else float("nan")
+            max_val = finite.max().item() if finite.numel() > 0 else float("nan")
+            issues.append((key, nan_count, inf_count, extreme_count, val.shape, max_abs, min_val, max_val))
+    return issues
+
+
+def _check_params_nan(module, label):
+    """Check module parameters and gradients for NaN/Inf."""
+    issues = []
+    for name, p in module.named_parameters():
+        if p.isnan().any():
+            issues.append((name, "param", p.isnan().sum().item(), p.shape))
+        if p.isinf().any():
+            issues.append((name, "param_inf", p.isinf().sum().item(), p.shape))
+        if p.grad is not None:
+            if p.grad.isnan().any():
+                issues.append((name, "grad", p.grad.isnan().sum().item(), p.grad.shape))
+            if p.grad.isinf().any():
+                issues.append((name, "grad_inf", p.grad.isinf().sum().item(), p.grad.shape))
+    return issues
+
+
+def _fatal(stage, collect_iter, collected_frames, detail, save_path=None, save_data=None):
+    """Print detailed diagnosis and crash."""
+    msg = [
+        "",
+        "=" * 70,
+        f"FATAL: Bad numerics at stage '{stage}'",
+        f"  collect_iter={collect_iter}  collected_frames={collected_frames}",
+        "=" * 70,
+    ]
+    if isinstance(detail, list):
+        for item in detail:
+            msg.append(f"  {item}")
+    else:
+        msg.append(f"  {detail}")
+    msg.append("=" * 70)
+    full_msg = "\n".join(msg)
+    print(full_msg, flush=True)
+
+    if save_path is not None and save_data is not None:
+        try:
+            torch.save(save_data, save_path)
+            print(f"  Diagnostic data saved to {save_path}", flush=True)
+        except Exception as e:
+            print(f"  Failed to save diagnostic: {e}", flush=True)
+
+    raise RuntimeError(full_msg)
+
+
+def _format_health_issues(issues):
+    """Format health check issues into human-readable lines."""
+    lines = []
+    for key, nan_c, inf_c, ext_c, shape, max_abs, min_val, max_val in issues:
+        parts = [f"{key} shape={shape}:"]
+        if nan_c:
+            parts.append(f"NaN={nan_c}")
+        if inf_c:
+            parts.append(f"Inf={inf_c}")
+        if ext_c:
+            parts.append(f"extreme(>{_EXTREME_THRESHOLD:.0e})={ext_c}")
+        parts.append(f"range=[{min_val:.2e}, {max_val:.2e}]")
+        lines.append(" ".join(parts))
+    return lines
+
+
+# ------------------------------------------------------------------
 # Environment factories
 # ------------------------------------------------------------------
 
@@ -273,75 +364,29 @@ def train(args):
     collected_frames = 0
     num_updates = 0
 
-    # Directory for saving degenerate physics states
-    bug_save_dir = Path("degenerate_states")
-    bug_save_dir.mkdir(exist_ok=True)
-    degenerate_saved = False
+    diag_dir = Path("nan_diagnostics")
+    diag_dir.mkdir(exist_ok=True)
+
+    check_keys = [
+        ("observation",), ("action",),
+        ("next", "observation"), ("next", "reward"), ("next", "done"),
+    ]
 
     for collect_iter, batch in enumerate(collector):
         collected_frames += batch.numel()
 
-        # --- Detect degenerate physics states ---
-        # batch shape: [num_envs, steps, ...] or [num_envs * steps, ...]
-        # Check for extreme rewards (physics blow-up)
-        if not degenerate_saved:
-            rewards = batch["next", "reward"]
-            reward_threshold = 1e6
-            extreme_mask = rewards.abs() > reward_threshold
-            if extreme_mask.any():
-                try:
-                    print(
-                        f"  [BUG] Detected degenerate reward at iter {collect_iter}! "
-                        f"Saving state...",
-                        flush=True,
-                    )
-                    # batch is [num_envs, steps, ...] from the collector
-                    # Find which env and step has the extreme reward
-                    if batch.ndim >= 2:
-                        # [num_envs, steps] layout
-                        env_idx, step_idx = torch.where(
-                            extreme_mask.squeeze(-1)
-                        )
-                        env_i = env_idx[0].item()
-                        step_i = step_idx[0].item()
-                        # Save 10 steps before the blow-up through the blow-up
-                        start = max(0, step_i - 10)
-                        end = min(step_i + 1, batch.shape[1])
-                        slice_td = batch[env_i, start:end].detach().cpu()
-                        # Also save context: the full env trajectory
-                        full_env_td = batch[env_i].detach().cpu()
-                    else:
-                        # Flat layout — find first extreme element
-                        flat_idx = torch.where(extreme_mask.squeeze(-1))[0]
-                        idx = flat_idx[0].item()
-                        start = max(0, idx - 10)
-                        end = min(idx + 1, batch.shape[0])
-                        slice_td = batch[start:end].detach().cpu()
-                        full_env_td = slice_td
-
-                    save_path = bug_save_dir / f"degenerate_iter{collect_iter}.pt"
-                    torch.save(
-                        {
-                            "slice": slice_td,
-                            "full_env_trajectory": full_env_td,
-                            "collect_iter": collect_iter,
-                            "env_idx": env_i if batch.ndim >= 2 else None,
-                            "step_idx": step_i if batch.ndim >= 2 else None,
-                            "extreme_reward": rewards[extreme_mask][0].item(),
-                            "args": vars(args),
-                        },
-                        save_path,
-                    )
-                    print(
-                        f"  [BUG] Saved to {save_path} "
-                        f"(env={env_i if batch.ndim >= 2 else 'flat'}, "
-                        f"step={step_i if batch.ndim >= 2 else idx}, "
-                        f"reward={rewards[extreme_mask][0].item():.2e})",
-                        flush=True,
-                    )
-                    degenerate_saved = True
-                except Exception as e:
-                    print(f"  [BUG] Failed to save degenerate state: {e}", flush=True)
+        # === Stage 1: Check collected batch for NaN / Inf / extreme values ===
+        batch_issues = _check_td_health(batch, "batch", keys=check_keys)
+        if batch_issues:
+            _fatal(
+                "collected_batch", collect_iter, collected_frames,
+                _format_health_issues(batch_issues),
+                save_path=diag_dir / f"batch_iter{collect_iter}.pt",
+                save_data={
+                    "batch": batch.detach().cpu(),
+                    "collect_iter": collect_iter,
+                },
+            )
 
         # Store in replay buffer
         buffer.extend(batch.reshape(-1))
@@ -356,13 +401,55 @@ def train(args):
             continue
 
         # --- Update ---
-        for _ in range(args.utd_ratio):
+        for update_idx in range(args.utd_ratio):
             sample = buffer.sample()
+
+            # === Stage 2: Check replay sample ===
+            sample_issues = _check_td_health(sample, "sample")
+            if sample_issues:
+                _fatal(
+                    "replay_sample", collect_iter, collected_frames,
+                    _format_health_issues(sample_issues),
+                    save_path=diag_dir / f"sample_iter{collect_iter}_u{update_idx}.pt",
+                    save_data={"sample": sample.detach().cpu()},
+                )
+
             loss_vals = loss_module(sample)
 
+            # === Stage 3: Check losses for NaN / Inf / extreme ===
+            loss_issues = []
+            for lk in ["loss_qvalue", "loss_actor", "loss_alpha"]:
+                v = loss_vals[lk]
+                if v.isnan().any() or v.isinf().any() or v.abs() > _EXTREME_THRESHOLD:
+                    loss_issues.append(f"{lk}={v.item():.6e}")
+            if loss_issues:
+                with torch.no_grad():
+                    actor_out = actor(sample)
+                    q_out = qvalue(sample)
+                obs = sample["observation"]
+                act = sample["action"]
+                rew = sample["next", "reward"]
+                _fatal(
+                    "loss_computation", collect_iter, collected_frames,
+                    loss_issues + [
+                        f"actor loc: [{actor_out['loc'].min():.2e}, {actor_out['loc'].max():.2e}]  nan={actor_out['loc'].isnan().sum().item()}",
+                        f"actor scale: [{actor_out['scale'].min():.2e}, {actor_out['scale'].max():.2e}]  nan={actor_out['scale'].isnan().sum().item()}",
+                        f"q_value: [{q_out['state_action_value'].min():.2e}, {q_out['state_action_value'].max():.2e}]  nan={q_out['state_action_value'].isnan().sum().item()}",
+                        f"alpha={loss_module.log_alpha.exp().item():.6e}  log_alpha={loss_module.log_alpha.item():.6e}",
+                        f"obs: [{obs.min():.2e}, {obs.max():.2e}]  nan={obs.isnan().sum().item()}  |obs|>1e6: {(obs.abs() > 1e6).sum().item()}",
+                        f"action: [{act.min():.2e}, {act.max():.2e}]  nan={act.isnan().sum().item()}",
+                        f"reward: [{rew.min():.2e}, {rew.max():.2e}]  nan={rew.isnan().sum().item()}  |r|>1e6: {(rew.abs() > 1e6).sum().item()}",
+                    ],
+                    save_path=diag_dir / f"loss_iter{collect_iter}_u{update_idx}.pt",
+                    save_data={
+                        "sample": sample.detach().cpu(),
+                        "loss_vals": {k: v.detach().cpu() for k, v in loss_vals.items()},
+                        "log_alpha": loss_module.log_alpha.detach().cpu(),
+                        "actor_out": {k: v.detach().cpu() for k, v in actor_out.items() if isinstance(v, torch.Tensor)},
+                    },
+                )
+
             # Zero all grads, backward all losses, then step
-            # (TorchRL SACLoss shares graph between losses, so we must
-            # not step any optimizer before all backwards are done)
             critic_optim.zero_grad()
             actor_optim.zero_grad()
             alpha_optim.zero_grad()
@@ -378,9 +465,34 @@ def train(args):
                 list(loss_module.actor_network_params.values(True, True)), 1.0,
             )
 
+            # === Stage 4: Check gradients ===
+            param_issues = _check_params_nan(loss_module, "loss_module")
+            if param_issues:
+                _fatal(
+                    "gradients", collect_iter, collected_frames,
+                    [f"{name} ({kind}): count={cnt} shape={s}" for name, kind, cnt, s in param_issues],
+                    save_path=diag_dir / f"grad_iter{collect_iter}_u{update_idx}.pt",
+                    save_data={
+                        "params": {n: p.detach().cpu() for n, p in loss_module.named_parameters()},
+                        "grads": {n: p.grad.detach().cpu() for n, p in loss_module.named_parameters() if p.grad is not None},
+                    },
+                )
+
             critic_optim.step()
             actor_optim.step()
             alpha_optim.step()
+
+            # === Stage 5: Check params after optimizer step ===
+            post_issues = _check_params_nan(loss_module, "post_step")
+            if post_issues:
+                _fatal(
+                    "post_optimizer_step", collect_iter, collected_frames,
+                    [f"{name} ({kind}): count={cnt} shape={s}" for name, kind, cnt, s in post_issues],
+                    save_path=diag_dir / f"param_iter{collect_iter}_u{update_idx}.pt",
+                    save_data={
+                        "params": {n: p.detach().cpu() for n, p in loss_module.named_parameters()},
+                    },
+                )
 
             # Target update
             target_updater.step()
