@@ -64,7 +64,6 @@ class MujocoTorchEnv(EnvBase):
         device=None,
         dtype=torch.float64,
         compile_step: bool = False,
-        auto_reset: bool = False,
         frame_skip: int | None = None,
         from_pixels: bool = False,
         pixel_only: bool = False,
@@ -73,7 +72,6 @@ class MujocoTorchEnv(EnvBase):
     ):
         if frame_skip is not None:
             self.FRAME_SKIP = frame_skip
-        self.auto_reset = auto_reset
         super().__init__(device=device, batch_size=torch.Size([num_envs]))
         self.dtype = dtype
         self.num_envs = num_envs
@@ -257,8 +255,7 @@ class MujocoTorchEnv(EnvBase):
             # Full reset (initial or forced)
             self._dx = self._make_batch(self.num_envs)
             self._step_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        elif not self.auto_reset:
-            # Only do per-env reset if auto_reset is off (otherwise _step already did it)
+        else:
             n_reset = int(reset_mask.sum())
             if n_reset > 0:
                 self._dx[reset_mask] = self._make_batch(n_reset)
@@ -291,24 +288,18 @@ class MujocoTorchEnv(EnvBase):
         truncated = (self._step_count >= self.max_episode_steps).unsqueeze(-1)
         done = terminated | truncated
 
-        # Build obs from the terminal state BEFORE resetting, so the returned
-        # observation matches the state that produced the reward.
+        # Build obs from the terminal state BEFORE resetting
         obs = self._build_obs()
 
-        # Fused auto-reset: reset done envs AFTER building obs.
-        # maybe_reset will call _reset (which is a no-op with auto_reset)
-        # and _reset returns obs from the already-reset _dx state.
-        if self.auto_reset:
-            done_mask = done.squeeze(-1)
-            if done_mask.any():
-                n_reset = done_mask.sum()
-                reset_batch = self._dx0.expand(n_reset).clone()
-                noise = self.RESET_NOISE_SCALE
-                if noise > 0:
-                    reset_batch.qpos.add_(torch.empty_like(reset_batch.qpos).uniform_(-noise, noise))
-                    reset_batch.qvel.add_(torch.empty_like(reset_batch.qvel).uniform_(-noise, noise))
-                self._dx[done_mask] = reset_batch
-                self._step_count[done_mask] = 0
+        # Branchless reset: always compute reset candidate, select with torch.where.
+        # No control flow → fully compilable, no graph breaks.
+        noise = self.RESET_NOISE_SCALE
+        reset_dx = self._dx0.expand_as(self._dx).clone()
+        reset_dx.qpos = reset_dx.qpos + torch.empty_like(reset_dx.qpos).uniform_(-noise, noise)
+        reset_dx.qvel = reset_dx.qvel + torch.empty_like(reset_dx.qvel).uniform_(-noise, noise)
+        done_mask = done.squeeze(-1).unsqueeze(-1)
+        self._dx = self._dx.apply(lambda v, rv: torch.where(done_mask, rv, v), reset_dx)
+        self._step_count = torch.where(done.squeeze(-1), torch.zeros_like(self._step_count), self._step_count)
 
         return TensorDict(
             {
