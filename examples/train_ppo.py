@@ -95,7 +95,6 @@ def make_eval_env(env_name, device, frame_skip, logger, obs_norm_td=None):
     if obs_norm_td is not None:
         obs_norm.loc = obs_norm_td["loc"]
         obs_norm.scale = obs_norm_td["scale"]
-        obs_norm.initialized = True
     return env
 
 
