@@ -41,7 +41,6 @@ from torchrl.record.loggers.wandb import WandbLogger
 
 from mujoco_torch.zoo import ENVS
 
-
 # ------------------------------------------------------------------
 # Environment factories
 # ------------------------------------------------------------------
@@ -76,7 +75,10 @@ def make_eval_env(env_name, device, frame_skip, logger, obs_norm_td=None):
             RewardSum(),
             PixelRenderTransform(out_keys=["pixels"]),
             VideoRecorder(
-                logger=logger, tag="eval_video", skip=1, make_grid=False,
+                logger=logger,
+                tag="eval_video",
+                skip=1,
+                make_grid=False,
             ),
         ),
     )
@@ -159,7 +161,9 @@ def run_eval(eval_env, actor, iteration, logger, max_steps=1000):
 
                 vid = torch.stack(t.obs, 0).unsqueeze(0).cpu()
                 log_dict["eval_video"] = wandb.Video(
-                    vid, fps=30, format="mp4",
+                    vid,
+                    fps=30,
+                    format="mp4",
                 )
             except Exception:
                 pass
@@ -181,7 +185,10 @@ def train(args):
 
     # --- Envs ---
     train_env = make_env(
-        args.env, args.num_envs, env_device, args.frame_skip,
+        args.env,
+        args.num_envs,
+        env_device,
+        args.frame_skip,
         compile_step=args.compile,
     )
     obs_dim = train_env.observation_spec["observation"].shape[-1]
@@ -218,7 +225,9 @@ def train(args):
     )
 
     optim = torch.optim.Adam(
-        loss_module.parameters(), lr=args.lr, eps=1e-5,
+        loss_module.parameters(),
+        lr=args.lr,
+        eps=1e-5,
     )
 
     # --- Collector ---
@@ -263,15 +272,12 @@ def train(args):
                 idx = perm[start : start + args.mini_batch_size]
                 mb = data[idx]
                 loss_vals = loss_module(mb)
-                total_loss = (
-                    loss_vals["loss_objective"]
-                    + loss_vals["loss_critic"]
-                    + loss_vals["loss_entropy"]
-                )
+                total_loss = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
                 optim.zero_grad()
                 total_loss.backward()
                 nn.utils.clip_grad_norm_(
-                    loss_module.parameters(), args.max_grad_norm,
+                    loss_module.parameters(),
+                    args.max_grad_norm,
                 )
                 optim.step()
 
@@ -282,16 +288,18 @@ def train(args):
         if mean_ep == mean_ep:  # not nan
             best_reward = max(best_reward, mean_ep)
 
-        logger.experiment.log({
-            "train/mean_ep_reward": mean_ep,
-            "train/best_ep_reward": best_reward,
-            "train/mean_step_reward": batch["next", "reward"].mean().item(),
-            "train/loss_objective": loss_vals["loss_objective"].item(),
-            "train/loss_critic": loss_vals["loss_critic"].item(),
-            "train/loss_entropy": loss_vals["loss_entropy"].item(),
-            "collected_frames": collected_frames,
-            "iteration": iteration,
-        })
+        logger.experiment.log(
+            {
+                "train/mean_ep_reward": mean_ep,
+                "train/best_ep_reward": best_reward,
+                "train/mean_step_reward": batch["next", "reward"].mean().item(),
+                "train/loss_objective": loss_vals["loss_objective"].item(),
+                "train/loss_critic": loss_vals["loss_critic"].item(),
+                "train/loss_entropy": loss_vals["loss_entropy"].item(),
+                "collected_frames": collected_frames,
+                "iteration": iteration,
+            }
+        )
 
         if (iteration + 1) % args.log_interval == 0 or iteration == 0:
             elapsed = time.perf_counter() - t0
@@ -309,8 +317,7 @@ def train(args):
 
     elapsed = time.perf_counter() - t0
     print(
-        f"Done. {collected_frames} frames in {elapsed:.0f}s. "
-        f"Best ep reward: {best_reward:.1f}",
+        f"Done. {collected_frames} frames in {elapsed:.0f}s. Best ep reward: {best_reward:.1f}",
     )
 
 
@@ -324,7 +331,10 @@ def main():
 
     # Env
     p.add_argument(
-        "--env", type=str, default="halfcheetah", choices=list(ENVS.keys()),
+        "--env",
+        type=str,
+        default="halfcheetah",
+        choices=list(ENVS.keys()),
     )
     p.add_argument("--num_envs", type=int, default=1024)
     p.add_argument("--frame_skip", type=int, default=5)
@@ -349,10 +359,8 @@ def main():
     p.add_argument("--eval_interval", type=int, default=20)
     p.add_argument("--wandb_project", type=str, default="mujoco-torch-zoo")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--device", type=str, default=None,
-                   help="Env/collection device (default: cuda)")
-    p.add_argument("--train_device", type=str, default=None,
-                   help="Training device (default: same as --device)")
+    p.add_argument("--device", type=str, default=None, help="Env/collection device (default: cuda)")
+    p.add_argument("--train_device", type=str, default=None, help="Training device (default: same as --device)")
     p.add_argument("--compile", action="store_true", default=False)
 
     args = p.parse_args()
