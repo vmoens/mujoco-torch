@@ -128,9 +128,17 @@ class MujocoTorchEnv(EnvBase):
         self._render_precomp = mujoco_torch.precompute_render_data(self.mx)
 
         _step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
+        _vmap_step = torch.vmap(_step_fn)
+        frame_skip = self.FRAME_SKIP
+
+        def _vmap_multi_step(d):
+            for _ in range(frame_skip):
+                d = _vmap_step(d)
+            return d
+
         if compile_step:
-            _step_fn = torch.compile(_step_fn)
-        self._physics_step = _step_fn
+            _vmap_multi_step = torch.compile(_vmap_multi_step)
+        self._physics_step = _vmap_multi_step
 
     # ------------------------------------------------------------------
     # Subclass interface
@@ -278,9 +286,7 @@ class MujocoTorchEnv(EnvBase):
         qpos_before = self._dx.qpos.clone()
 
         self._dx = self._dx.replace(ctrl=ctrl)
-        step_fn = self._physics_step
-        for _ in range(self.FRAME_SKIP):
-            self._dx = step_fn(self._dx[0]).unsqueeze(0) if self.num_envs == 1 else torch.vmap(step_fn)(self._dx)
+        self._dx = self._physics_step(self._dx)
 
         # Physics health check: catch blow-ups at the source
         _PHYS_THRESHOLD = 1e10
