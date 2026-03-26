@@ -645,7 +645,6 @@ def make_constraint(m: Model, d: Data) -> Data:
         offset += count
     efcs = tuple(efcs)
 
-
     efc = torch.cat(list(efcs))
     refsafe = precomp["refsafe"]
 

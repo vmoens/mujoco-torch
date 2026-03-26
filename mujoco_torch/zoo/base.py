@@ -131,17 +131,21 @@ class MujocoTorchEnv(EnvBase):
         frame_skip = self.FRAME_SKIP
         _vmap_step = torch.vmap(_step_fn)
         if num_envs == 1:
+
             def _multi_step(d):
                 for _ in range(frame_skip):
                     d = _step_fn(d)
                 return d
+
             self._physics_step = torch.compile(_multi_step) if compile_step else _multi_step
             self._single_env = True
         else:
+
             def _vmap_multi_step(d):
                 for _ in range(frame_skip):
                     d = _vmap_step(d)
                 return d
+
             self._physics_step = torch.compile(_vmap_multi_step) if compile_step else _vmap_multi_step
             self._single_env = False
 
