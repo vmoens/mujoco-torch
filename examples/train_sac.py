@@ -138,7 +138,7 @@ def _format_health_issues(issues):
 # ------------------------------------------------------------------
 
 
-def make_env(env_name, num_envs, device, frame_skip, compile_step=False, obs_norm_num_iter=1000):
+def make_env(env_name, num_envs, device, frame_skip, compile_step=False, obs_norm_num_iter=50):
     cls = ENVS[env_name]
     base = cls(num_envs=num_envs, device=device, frame_skip=frame_skip, compile_step=compile_step)
     env = TransformedEnv(
