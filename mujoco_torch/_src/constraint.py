@@ -645,6 +645,18 @@ def make_constraint(m: Model, d: Data) -> Data:
         offset += count
     efcs = tuple(efcs)
 
+    if not efcs:
+        _dev = d.qpos.device
+        z = torch.empty(0, device=_dev)
+        d.update_(
+            efc_J=torch.empty((0, m.nv), device=_dev),
+            efc_D=z,
+            efc_aref=z,
+            efc_frictionloss=z,
+            nefc=_ZERO_I32.get(torch.int32, _dev),
+        )
+        return d
+
     efc = torch.cat(list(efcs))
     refsafe = precomp["refsafe"]
 
