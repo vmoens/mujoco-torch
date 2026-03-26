@@ -8,7 +8,7 @@ import argparse
 import functools
 
 import torch
-from torch.profiler import profile, ProfilerActivity, record_function
+from torch.profiler import ProfilerActivity, profile, record_function
 
 from mujoco_torch.zoo import ENVS
 
@@ -75,8 +75,8 @@ def main():
     args = p.parse_args()
 
     # -- env ---------------------------------------------------------------
-    from torchrl.envs import TransformedEnv, EnvBase
-    from torchrl.envs.transforms import Compose, DoubleToFloat, StepCounter, RewardSum
+    from torchrl.envs import EnvBase, TransformedEnv
+    from torchrl.envs.transforms import Compose, DoubleToFloat, RewardSum, StepCounter
 
     cls = ENVS[args.env]
     base = cls(
@@ -145,9 +145,9 @@ def main():
     _instrument_env(base, env)
 
     # -- actor -------------------------------------------------------------
-    from torchrl.modules import MLP, NormalParamExtractor, ProbabilisticActor, TanhNormal
-    from tensordict.nn import TensorDictModule
     import torch.nn as nn
+    from tensordict.nn import TensorDictModule
+    from torchrl.modules import MLP, NormalParamExtractor, ProbabilisticActor, TanhNormal
 
     obs_dim = env.observation_spec["observation"].shape[-1]
     act_dim = env.action_spec.shape[-1]
@@ -162,9 +162,7 @@ def main():
         ),
         NormalParamExtractor(),
     )
-    actor_module = TensorDictModule(
-        actor_net, in_keys=["observation"], out_keys=["loc", "scale"]
-    )
+    actor_module = TensorDictModule(actor_net, in_keys=["observation"], out_keys=["loc", "scale"])
     actor = ProbabilisticActor(
         module=actor_module,
         in_keys=["loc", "scale"],
@@ -197,7 +195,7 @@ def main():
     it = iter(collector)
     for i in range(warmup_steps):
         _ = next(it)
-        print(f"  warmup step {i+1}/{warmup_steps}", flush=True)
+        print(f"  warmup step {i + 1}/{warmup_steps}", flush=True)
     torch.cuda.synchronize()
     print("Warmup done.", flush=True)
 
@@ -221,9 +219,7 @@ def main():
 
     # Print a compact summary
     print("\n=== Top 30 by CPU time ===")
-    print(
-        prof.key_averages().table(sort_by="cpu_time_total", row_limit=30)
-    )
+    print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=30))
 
     print("\nDone.")
 
