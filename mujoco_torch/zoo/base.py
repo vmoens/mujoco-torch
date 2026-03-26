@@ -292,7 +292,12 @@ class MujocoTorchEnv(EnvBase):
             # Find which envs blew up
             qpos_issue = qpos.abs().max(dim=-1).values  # [num_envs]
             qvel_issue = qvel.abs().max(dim=-1).values
-            bad_envs = (qpos_issue > _PHYS_THRESHOLD) | qpos.isnan().any(-1) | (qvel_issue > _PHYS_THRESHOLD) | qvel.isnan().any(-1)
+            bad_envs = (
+                (qpos_issue > _PHYS_THRESHOLD)
+                | qpos.isnan().any(-1)
+                | (qvel_issue > _PHYS_THRESHOLD)
+                | qvel.isnan().any(-1)
+            )
             bad_idx = bad_envs.nonzero(as_tuple=True)[0]
             msg = (
                 f"\n{'=' * 70}\n"
@@ -317,7 +322,9 @@ class MujocoTorchEnv(EnvBase):
 
         # Reward health check
         if reward.isnan().any() or reward.isinf().any() or (reward.abs() > _PHYS_THRESHOLD).any():
-            bad_mask = reward.squeeze(-1).isnan() | reward.squeeze(-1).isinf() | (reward.squeeze(-1).abs() > _PHYS_THRESHOLD)
+            bad_mask = (
+                reward.squeeze(-1).isnan() | reward.squeeze(-1).isinf() | (reward.squeeze(-1).abs() > _PHYS_THRESHOLD)
+            )
             bad_idx = bad_mask.nonzero(as_tuple=True)[0]
             msg = (
                 f"\n{'=' * 70}\n"

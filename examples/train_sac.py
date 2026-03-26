@@ -12,7 +12,6 @@ Usage::
 """
 
 import argparse
-import os
 import time
 from pathlib import Path
 
@@ -35,7 +34,6 @@ from torchrl.modules import (
     NormalParamExtractor,
     ProbabilisticActor,
     TanhNormal,
-    ValueOperator,
 )
 from torchrl.objectives import SACLoss
 from torchrl.objectives.utils import SoftUpdate
@@ -43,7 +41,6 @@ from torchrl.record import PixelRenderTransform, VideoRecorder
 from torchrl.record.loggers.wandb import WandbLogger
 
 from mujoco_torch.zoo import ENVS
-
 
 # ------------------------------------------------------------------
 # Numeric health checks — NaN, Inf, and extreme values
@@ -123,7 +120,7 @@ def _fatal(stage, collect_iter, collected_frames, detail, save_path=None, save_d
 def _format_health_issues(issues):
     """Format health check issues into human-readable lines."""
     lines = []
-    for key, nan_c, inf_c, ext_c, shape, max_abs, min_val, max_val in issues:
+    for key, nan_c, inf_c, ext_c, shape, _max_abs, min_val, max_val in issues:
         parts = [f"{key} shape={shape}:"]
         if nan_c:
             parts.append(f"NaN={nan_c}")
@@ -170,7 +167,10 @@ def make_eval_env(env_name, device, frame_skip, logger, obs_norm_td=None):
             RewardSum(),
             PixelRenderTransform(out_keys=["pixels"]),
             VideoRecorder(
-                logger=logger, tag="eval_video", skip=1, make_grid=False,
+                logger=logger,
+                tag="eval_video",
+                skip=1,
+                make_grid=False,
             ),
         ),
     )
@@ -265,7 +265,9 @@ def run_eval(eval_env, actor, iteration, logger, max_steps=1000):
 
                 vid = torch.stack(t.obs, 0).unsqueeze(0).cpu()
                 log_dict["eval_video"] = wandb.Video(
-                    vid, fps=30, format="mp4",
+                    vid,
+                    fps=30,
+                    format="mp4",
                 )
             except Exception:
                 pass
@@ -287,7 +289,10 @@ def train(args):
 
     # --- Envs ---
     train_env = make_env(
-        args.env, args.num_envs, env_device, args.frame_skip,
+        args.env,
+        args.num_envs,
+        env_device,
+        args.frame_skip,
         compile_step=args.compile,
     )
     obs_dim = train_env.observation_spec["observation"].shape[-1]
@@ -316,7 +321,8 @@ def train(args):
         action_spec=train_env.action_spec.to(train_device),
     )
     loss_module.make_value_estimator(
-        loss_module.default_value_estimator, gamma=args.gamma,
+        loss_module.default_value_estimator,
+        gamma=args.gamma,
     )
 
     # Target network soft-update
@@ -324,13 +330,16 @@ def train(args):
 
     # Separate optimizers (standard for SAC)
     actor_optim = torch.optim.Adam(
-        list(loss_module.actor_network_params.values(True, True)), lr=args.lr,
+        list(loss_module.actor_network_params.values(True, True)),
+        lr=args.lr,
     )
     critic_optim = torch.optim.Adam(
-        list(loss_module.qvalue_network_params.values(True, True)), lr=args.lr,
+        list(loss_module.qvalue_network_params.values(True, True)),
+        lr=args.lr,
     )
     alpha_optim = torch.optim.Adam(
-        [loss_module.log_alpha], lr=args.lr,
+        [loss_module.log_alpha],
+        lr=args.lr,
     )
 
     # --- Replay buffer (on train device) ---
@@ -368,8 +377,11 @@ def train(args):
     diag_dir.mkdir(exist_ok=True)
 
     check_keys = [
-        ("observation",), ("action",),
-        ("next", "observation"), ("next", "reward"), ("next", "done"),
+        ("observation",),
+        ("action",),
+        ("next", "observation"),
+        ("next", "reward"),
+        ("next", "done"),
     ]
 
     for collect_iter, batch in enumerate(collector):
@@ -379,7 +391,9 @@ def train(args):
         batch_issues = _check_td_health(batch, "batch", keys=check_keys)
         if batch_issues:
             _fatal(
-                "collected_batch", collect_iter, collected_frames,
+                "collected_batch",
+                collect_iter,
+                collected_frames,
                 _format_health_issues(batch_issues),
                 save_path=diag_dir / f"batch_iter{collect_iter}.pt",
                 save_data={
@@ -408,7 +422,9 @@ def train(args):
             sample_issues = _check_td_health(sample, "sample")
             if sample_issues:
                 _fatal(
-                    "replay_sample", collect_iter, collected_frames,
+                    "replay_sample",
+                    collect_iter,
+                    collected_frames,
                     _format_health_issues(sample_issues),
                     save_path=diag_dir / f"sample_iter{collect_iter}_u{update_idx}.pt",
                     save_data={"sample": sample.detach().cpu()},
@@ -430,15 +446,37 @@ def train(args):
                 act = sample["action"]
                 rew = sample["next", "reward"]
                 _fatal(
-                    "loss_computation", collect_iter, collected_frames,
-                    loss_issues + [
-                        f"actor loc: [{actor_out['loc'].min():.2e}, {actor_out['loc'].max():.2e}]  nan={actor_out['loc'].isnan().sum().item()}",
-                        f"actor scale: [{actor_out['scale'].min():.2e}, {actor_out['scale'].max():.2e}]  nan={actor_out['scale'].isnan().sum().item()}",
-                        f"q_value: [{q_out['state_action_value'].min():.2e}, {q_out['state_action_value'].max():.2e}]  nan={q_out['state_action_value'].isnan().sum().item()}",
+                    "loss_computation",
+                    collect_iter,
+                    collected_frames,
+                    loss_issues
+                    + [
+                        (
+                            f"actor loc: [{actor_out['loc'].min():.2e}, {actor_out['loc'].max():.2e}]"
+                            f"  nan={actor_out['loc'].isnan().sum().item()}"
+                        ),
+                        (
+                            f"actor scale: [{actor_out['scale'].min():.2e},"
+                            f" {actor_out['scale'].max():.2e}]"
+                            f"  nan={actor_out['scale'].isnan().sum().item()}"
+                        ),
+                        (
+                            f"q_value: [{q_out['state_action_value'].min():.2e},"
+                            f" {q_out['state_action_value'].max():.2e}]"
+                            f"  nan={q_out['state_action_value'].isnan().sum().item()}"
+                        ),
                         f"alpha={loss_module.log_alpha.exp().item():.6e}  log_alpha={loss_module.log_alpha.item():.6e}",
-                        f"obs: [{obs.min():.2e}, {obs.max():.2e}]  nan={obs.isnan().sum().item()}  |obs|>1e6: {(obs.abs() > 1e6).sum().item()}",
+                        (
+                            f"obs: [{obs.min():.2e}, {obs.max():.2e}]"
+                            f"  nan={obs.isnan().sum().item()}"
+                            f"  |obs|>1e6: {(obs.abs() > 1e6).sum().item()}"
+                        ),
                         f"action: [{act.min():.2e}, {act.max():.2e}]  nan={act.isnan().sum().item()}",
-                        f"reward: [{rew.min():.2e}, {rew.max():.2e}]  nan={rew.isnan().sum().item()}  |r|>1e6: {(rew.abs() > 1e6).sum().item()}",
+                        (
+                            f"reward: [{rew.min():.2e}, {rew.max():.2e}]"
+                            f"  nan={rew.isnan().sum().item()}"
+                            f"  |r|>1e6: {(rew.abs() > 1e6).sum().item()}"
+                        ),
                     ],
                     save_path=diag_dir / f"loss_iter{collect_iter}_u{update_idx}.pt",
                     save_data={
@@ -459,22 +497,28 @@ def train(args):
             loss_vals["loss_alpha"].backward()
 
             nn.utils.clip_grad_norm_(
-                list(loss_module.qvalue_network_params.values(True, True)), 1.0,
+                list(loss_module.qvalue_network_params.values(True, True)),
+                1.0,
             )
             nn.utils.clip_grad_norm_(
-                list(loss_module.actor_network_params.values(True, True)), 1.0,
+                list(loss_module.actor_network_params.values(True, True)),
+                1.0,
             )
 
             # === Stage 4: Check gradients ===
             param_issues = _check_params_nan(loss_module, "loss_module")
             if param_issues:
                 _fatal(
-                    "gradients", collect_iter, collected_frames,
+                    "gradients",
+                    collect_iter,
+                    collected_frames,
                     [f"{name} ({kind}): count={cnt} shape={s}" for name, kind, cnt, s in param_issues],
                     save_path=diag_dir / f"grad_iter{collect_iter}_u{update_idx}.pt",
                     save_data={
                         "params": {n: p.detach().cpu() for n, p in loss_module.named_parameters()},
-                        "grads": {n: p.grad.detach().cpu() for n, p in loss_module.named_parameters() if p.grad is not None},
+                        "grads": {
+                            n: p.grad.detach().cpu() for n, p in loss_module.named_parameters() if p.grad is not None
+                        },
                     },
                 )
 
@@ -486,7 +530,9 @@ def train(args):
             post_issues = _check_params_nan(loss_module, "post_step")
             if post_issues:
                 _fatal(
-                    "post_optimizer_step", collect_iter, collected_frames,
+                    "post_optimizer_step",
+                    collect_iter,
+                    collected_frames,
                     [f"{name} ({kind}): count={cnt} shape={s}" for name, kind, cnt, s in post_issues],
                     save_path=diag_dir / f"param_iter{collect_iter}_u{update_idx}.pt",
                     save_data={
@@ -502,25 +548,25 @@ def train(args):
         if (collect_iter + 1) % args.log_interval == 0:
             ep_done = batch["next", "done"].squeeze(-1)
             ep_rews = batch["next", "episode_reward"][ep_done]
-            mean_ep = (
-                ep_rews.mean().item() if ep_rews.numel() > 0 else float("nan")
-            )
+            mean_ep = ep_rews.mean().item() if ep_rews.numel() > 0 else float("nan")
             if mean_ep == mean_ep:
                 best_reward = max(best_reward, mean_ep)
 
             alpha = loss_module.log_alpha.exp().item()
 
-            logger.experiment.log({
-                "train/mean_ep_reward": mean_ep,
-                "train/best_ep_reward": best_reward,
-                "train/loss_actor": loss_vals["loss_actor"].item(),
-                "train/loss_qvalue": loss_vals["loss_qvalue"].item(),
-                "train/loss_alpha": loss_vals["loss_alpha"].item(),
-                "train/alpha": alpha,
-                "train/num_updates": num_updates,
-                "collected_frames": collected_frames,
-                "iteration": collect_iter,
-            })
+            logger.experiment.log(
+                {
+                    "train/mean_ep_reward": mean_ep,
+                    "train/best_ep_reward": best_reward,
+                    "train/loss_actor": loss_vals["loss_actor"].item(),
+                    "train/loss_qvalue": loss_vals["loss_qvalue"].item(),
+                    "train/loss_alpha": loss_vals["loss_alpha"].item(),
+                    "train/alpha": alpha,
+                    "train/num_updates": num_updates,
+                    "collected_frames": collected_frames,
+                    "iteration": collect_iter,
+                }
+            )
 
             elapsed = time.perf_counter() - t0
             fps = collected_frames / elapsed
@@ -537,8 +583,7 @@ def train(args):
 
     elapsed = time.perf_counter() - t0
     print(
-        f"Done. {collected_frames} frames in {elapsed:.0f}s. "
-        f"Best ep reward: {best_reward:.1f}",
+        f"Done. {collected_frames} frames in {elapsed:.0f}s. Best ep reward: {best_reward:.1f}",
     )
 
 
@@ -552,14 +597,18 @@ def main():
 
     # Env
     p.add_argument(
-        "--env", type=str, default="halfcheetah", choices=list(ENVS.keys()),
+        "--env",
+        type=str,
+        default="halfcheetah",
+        choices=list(ENVS.keys()),
     )
     p.add_argument("--num_envs", type=int, default=256)
     p.add_argument("--frame_skip", type=int, default=5)
 
     # Collection
-    p.add_argument("--frames_per_batch", type=int, default=None,
-                   help="Frames per collection batch (default: num_envs * 1000)")
+    p.add_argument(
+        "--frames_per_batch", type=int, default=None, help="Frames per collection batch (default: num_envs * 1000)"
+    )
     p.add_argument("--total_frames", type=int, default=3_000_000)
     p.add_argument("--learning_starts", type=int, default=25000)
 
@@ -576,10 +625,8 @@ def main():
     p.add_argument("--eval_interval", type=int, default=1000)
     p.add_argument("--wandb_project", type=str, default="mujoco-torch-zoo")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--device", type=str, default=None,
-                   help="Env/collection device (default: cuda)")
-    p.add_argument("--train_device", type=str, default=None,
-                   help="Training device (default: same as --device)")
+    p.add_argument("--device", type=str, default=None, help="Env/collection device (default: cuda)")
+    p.add_argument("--train_device", type=str, default=None, help="Training device (default: same as --device)")
     p.add_argument("--compile", action="store_true", default=False)
 
     args = p.parse_args()
