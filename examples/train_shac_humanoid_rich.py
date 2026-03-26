@@ -143,7 +143,6 @@ def _run_eval(eval_env, policy, iteration, logger, max_steps=500):
 
 def train(args):
     device = args.device
-    dtype = torch.float64
 
     train_env = SmoothHumanoidRichEnv(
         num_envs=args.num_envs,
