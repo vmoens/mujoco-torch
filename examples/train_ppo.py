@@ -93,8 +93,10 @@ def make_eval_env(env_name, device, frame_skip, logger, obs_norm_td=None):
         ),
     )
     if obs_norm_td is not None:
-        obs_norm.loc = obs_norm_td["loc"]
-        obs_norm.scale = obs_norm_td["scale"]
+        obs_norm.loc = obs_norm_td["loc"].clone()
+        obs_norm.scale = obs_norm_td["scale"].clone()
+        print(f"  Eval ObservationNorm: initialized={obs_norm.initialized} "
+              f"loc.shape={obs_norm.loc.shape} scale.shape={obs_norm.scale.shape}", flush=True)
     return env
 
 
@@ -217,6 +219,9 @@ def train(args):
     )
     # Share obs normalization stats from train env to eval env
     obs_norm_td = train_env.transform[1].state_dict()
+    print(f"  Train ObservationNorm state_dict keys={list(obs_norm_td.keys())}", flush=True)
+    for k, v in obs_norm_td.items():
+        print(f"    {k}: shape={v.shape} dtype={v.dtype} device={v.device}", flush=True)
     eval_env = make_eval_env(args.env, train_device, args.frame_skip, logger, obs_norm_td=obs_norm_td)
 
     # --- Models (on train device) ---
