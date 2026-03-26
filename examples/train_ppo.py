@@ -76,6 +76,11 @@ def make_eval_env(env_name, device, frame_skip, logger, obs_norm_td=None):
     cls = ENVS[env_name]
     base = cls(num_envs=1, device=device, frame_skip=frame_skip)
     obs_norm = ObservationNorm(in_keys=["observation"], standard_normal=True)
+    # Initialize obs_norm BEFORE adding PixelRenderTransform, which triggers
+    # a reset during construction to discover the observation spec.
+    if obs_norm_td is not None:
+        obs_norm.loc = obs_norm_td["loc"].clone()
+        obs_norm.scale = obs_norm_td["scale"].clone()
     env = TransformedEnv(
         base,
         Compose(
@@ -92,11 +97,6 @@ def make_eval_env(env_name, device, frame_skip, logger, obs_norm_td=None):
             ),
         ),
     )
-    if obs_norm_td is not None:
-        obs_norm.loc = obs_norm_td["loc"].clone()
-        obs_norm.scale = obs_norm_td["scale"].clone()
-        print(f"  Eval ObservationNorm: initialized={obs_norm.initialized} "
-              f"loc.shape={obs_norm.loc.shape} scale.shape={obs_norm.scale.shape}", flush=True)
     return env
 
 
