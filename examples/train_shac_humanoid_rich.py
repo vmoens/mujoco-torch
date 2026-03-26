@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import torch
 import torch.nn as nn
+from shac_loss import SHACLoss
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
 from torchrl.envs import TransformedEnv
@@ -34,14 +35,11 @@ from torchrl.modules import (
 )
 from torchrl.record import PixelRenderTransform, VideoRecorder
 from torchrl.record.loggers.wandb import WandbLogger
+from train_direct_humanoid_rich import SmoothHumanoidRichEnv
 
 import mujoco_torch
 from mujoco_torch._src.log import logger as mjt_logger
 from mujoco_torch.zoo.humanoid_rich import HumanoidRichEnv
-
-from shac_loss import SHACLoss
-from train_direct_humanoid_rich import SmoothHumanoidRichEnv
-
 
 # ------------------------------------------------------------------
 # Network builders
@@ -134,9 +132,7 @@ def _run_eval(eval_env, policy, iteration, logger, max_steps=500):
             t.count = 0
 
     logger.experiment.log(log_dict)
-    mjt_logger.info(
-        f"  [EVAL] iter={iteration + 1} episode_reward={ep_reward:.2f}"
-    )
+    mjt_logger.info(f"  [EVAL] iter={iteration + 1} episode_reward={ep_reward:.2f}")
     policy.train()
 
 
@@ -184,15 +180,16 @@ def train(args):
         Compose(
             PixelRenderTransform(out_keys=["pixels"]),
             VideoRecorder(
-                logger=logger, tag="eval_video", skip=1, make_grid=False,
+                logger=logger,
+                tag="eval_video",
+                skip=1,
+                make_grid=False,
             ),
             RewardSum(),
         ),
     )
 
-    mjt_logger.info(
-        f"SHAC (rich obs) | obs={obs_dim} act={act_dim} device={device}"
-    )
+    mjt_logger.info(f"SHAC (rich obs) | obs={obs_dim} act={act_dim} device={device}")
     mjt_logger.info(
         f"  horizon={args.horizon} frame_skip={args.frame_skip} "
         f"num_envs={args.num_envs} gamma={args.gamma} tau={args.tau}"
@@ -259,7 +256,8 @@ def train(args):
         loss_alpha = shac.alpha_loss(mean_lp)
         (loss_actor + loss_alpha).backward()
         actor_grad_norm = nn.utils.clip_grad_norm_(
-            actor.parameters(), args.grad_clip,
+            actor.parameters(),
+            args.grad_clip,
         )
         actor_optim.step()
         alpha_optim.step()
@@ -271,7 +269,8 @@ def train(args):
         loss_critic = shac.critic_loss(rollout.detach())
         loss_critic.backward()
         critic_grad_norm = nn.utils.clip_grad_norm_(
-            critic.parameters(), args.grad_clip,
+            critic.parameters(),
+            args.grad_clip,
         )
         critic_optim.step()
 
@@ -298,14 +297,10 @@ def train(args):
             "train/alpha": shac.alpha.detach().item(),
             "train/mean_log_prob": mean_lp.item(),
             "train/actor_grad_norm": (
-                actor_grad_norm.item()
-                if isinstance(actor_grad_norm, torch.Tensor)
-                else actor_grad_norm
+                actor_grad_norm.item() if isinstance(actor_grad_norm, torch.Tensor) else actor_grad_norm
             ),
             "train/critic_grad_norm": (
-                critic_grad_norm.item()
-                if isinstance(critic_grad_norm, torch.Tensor)
-                else critic_grad_norm
+                critic_grad_norm.item() if isinstance(critic_grad_norm, torch.Tensor) else critic_grad_norm
             ),
             "perf/forward_s": t_fwd,
             "perf/backward_s": t_bwd,
@@ -326,14 +321,15 @@ def train(args):
 
         if (iteration + 1) % args.eval_interval == 0 or iteration == 0:
             _run_eval(
-                eval_env, actor, iteration, logger, args.max_eval_steps,
+                eval_env,
+                actor,
+                iteration,
+                logger,
+                args.max_eval_steps,
             )
 
     elapsed = time.perf_counter() - t0
-    mjt_logger.info(
-        f"Training done. {args.num_iters} iters in {elapsed:.1f}s. "
-        f"Best mean reward: {best_reward:.2f}"
-    )
+    mjt_logger.info(f"Training done. {args.num_iters} iters in {elapsed:.1f}s. Best mean reward: {best_reward:.2f}")
 
 
 # ------------------------------------------------------------------
@@ -360,11 +356,15 @@ def main():
 
     parser.add_argument("--batchnorm", action="store_true", default=True)
     parser.add_argument(
-        "--no_batchnorm", dest="batchnorm", action="store_false",
+        "--no_batchnorm",
+        dest="batchnorm",
+        action="store_false",
     )
 
     parser.add_argument(
-        "--smooth_collisions", action="store_true", default=True,
+        "--smooth_collisions",
+        action="store_true",
+        default=True,
     )
     parser.add_argument(
         "--no_smooth_collisions",
@@ -374,13 +374,17 @@ def main():
     parser.add_argument("--cfd", action="store_true", default=True)
     parser.add_argument("--no_cfd", dest="cfd", action="store_false")
     parser.add_argument(
-        "--adaptive_integration", action="store_true", default=False,
+        "--adaptive_integration",
+        action="store_true",
+        default=False,
     )
 
     parser.add_argument("--eval_interval", type=int, default=50)
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument(
-        "--wandb_project", type=str, default="mujoco-torch-zoo",
+        "--wandb_project",
+        type=str,
+        default="mujoco-torch-zoo",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default=None)

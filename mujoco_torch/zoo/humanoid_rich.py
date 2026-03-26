@@ -20,7 +20,6 @@ from torchrl.data import Unbounded
 from mujoco_torch.zoo.base import register_env
 from mujoco_torch.zoo.humanoid import HumanoidEnv
 
-
 # Dimensions: nbody=17, skip world body → 16 bodies
 # cinert: 16 * 10 = 160
 # cvel:   16 * 6  = 96
@@ -36,7 +35,9 @@ class HumanoidRichEnv(HumanoidEnv):
     def _obs_spec_dict(num_envs, dtype, device):
         return {
             "observation": Unbounded(
-                shape=(num_envs, _RICH_OBS_DIM), dtype=dtype, device=device,
+                shape=(num_envs, _RICH_OBS_DIM),
+                dtype=dtype,
+                device=device,
             ),
         }
 
@@ -51,6 +52,7 @@ class HumanoidRichEnv(HumanoidEnv):
 
         return {
             "observation": torch.cat(
-                [qpos[..., 2:], qvel, cinert, cvel, qfrc_actuator], dim=-1,
+                [qpos[..., 2:], qvel, cinert, cvel, qfrc_actuator],
+                dim=-1,
             ),
         }
