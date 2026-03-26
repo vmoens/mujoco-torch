@@ -59,7 +59,7 @@ def make_env(env_name, num_envs, device, frame_skip, compile_step=False, obs_nor
             RewardSum(),
         ),
     )
-    env.transform[1].init_stats(obs_norm_num_iter)
+    env.transform[1].init_stats(obs_norm_num_iter, reduce_dim=(0, 1), cat_dim=0)
     return env
 
 
