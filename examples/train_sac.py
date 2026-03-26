@@ -138,9 +138,9 @@ def _format_health_issues(issues):
 # ------------------------------------------------------------------
 
 
-def make_env(env_name, num_envs, device, frame_skip, compile_step=False, obs_norm_num_iter=50):
+def make_env(env_name, num_envs, device, frame_skip, compile_step=False, compile_kwargs=None, obs_norm_num_iter=50):
     cls = ENVS[env_name]
-    base = cls(num_envs=num_envs, device=device, frame_skip=frame_skip, compile_step=compile_step)
+    base = cls(num_envs=num_envs, device=device, frame_skip=frame_skip, compile_step=compile_step, compile_kwargs=compile_kwargs)
     env = TransformedEnv(
         base,
         Compose(
@@ -299,12 +299,16 @@ def train(args):
     train_device = args.train_device or env_device
 
     # --- Envs ---
+    compile_kwargs = {}
+    if args.compile_mode:
+        compile_kwargs["mode"] = args.compile_mode
     train_env = make_env(
         args.env,
         args.num_envs,
         env_device,
         args.frame_skip,
         compile_step=args.compile,
+        compile_kwargs=compile_kwargs or None,
     )
     obs_dim = train_env.observation_spec["observation"].shape[-1]
     act_dim = train_env.action_spec.shape[-1]
@@ -639,6 +643,8 @@ def main():
     p.add_argument("--device", type=str, default=None, help="Env/collection device (default: cuda)")
     p.add_argument("--train_device", type=str, default=None, help="Training device (default: same as --device)")
     p.add_argument("--compile", action="store_true", default=False)
+    p.add_argument("--compile_mode", type=str, default=None,
+                   help="torch.compile mode (e.g. 'reduce-overhead', 'max-autotune')")
 
     args = p.parse_args()
     torch.manual_seed(args.seed)
