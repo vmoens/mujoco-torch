@@ -153,7 +153,14 @@ def make_env(env_name, num_envs, device, frame_skip, compile_step=False, obs_nor
     print(f"  ObservationNorm: computing stats ({obs_norm_num_iter} rollouts, {num_envs} envs)...", flush=True)
     t_init = time.perf_counter()
     env.transform[1].init_stats(obs_norm_num_iter, reduce_dim=(0, 1), cat_dim=0)
-    print(f"  ObservationNorm: done in {time.perf_counter() - t_init:.1f}s  loc=[{env.transform[1].loc.min():.2f}, {env.transform[1].loc.max():.2f}]  scale=[{env.transform[1].scale.min():.2f}, {env.transform[1].scale.max():.2f}]", flush=True)
+    obs_norm = env.transform[1]
+    elapsed = time.perf_counter() - t_init
+    print(
+        f"  ObservationNorm: done in {elapsed:.1f}s"
+        f"  loc=[{obs_norm.loc.min():.2f}, {obs_norm.loc.max():.2f}]"
+        f"  scale=[{obs_norm.scale.min():.2f}, {obs_norm.scale.max():.2f}]",
+        flush=True,
+    )
     return env
 
 
@@ -180,7 +187,6 @@ def make_eval_env(env_name, device, frame_skip, logger, obs_norm_td=None):
     if obs_norm_td is not None:
         obs_norm.loc = obs_norm_td["loc"]
         obs_norm.scale = obs_norm_td["scale"]
-        obs_norm.initialized = True
     return env
 
 
