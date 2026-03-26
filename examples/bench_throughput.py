@@ -74,20 +74,20 @@ def bench_env_step(env, num_steps=200):
     from tensordict import TensorDict
 
     # Reset to get initial state
-    td = env.reset()
+    env.reset()
     # Create a dummy action
     action = torch.zeros(env.num_envs, env.action_spec.shape[-1], dtype=env.dtype, device=env.device)
 
     # Warmup
     for _ in range(5):
         td_in = TensorDict({"action": action}, batch_size=env.batch_size, device=env.device)
-        td_out = env._step(td_in)
+        env._step(td_in)
     torch.cuda.synchronize()
 
     t0 = time.perf_counter()
     for _ in range(num_steps):
         td_in = TensorDict({"action": action}, batch_size=env.batch_size, device=env.device)
-        td_out = env._step(td_in)
+        env._step(td_in)
     torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
 
@@ -101,19 +101,19 @@ def bench_env_step_with_frameskip(env, num_steps=200):
     """env._step() accounts for frame_skip — report physics steps/sec."""
     from tensordict import TensorDict
 
-    td = env.reset()
+    env.reset()
     action = torch.zeros(env.num_envs, env.action_spec.shape[-1], dtype=env.dtype, device=env.device)
 
     # Warmup
     for _ in range(5):
         td_in = TensorDict({"action": action}, batch_size=env.batch_size, device=env.device)
-        td_out = env._step(td_in)
+        env._step(td_in)
     torch.cuda.synchronize()
 
     t0 = time.perf_counter()
     for _ in range(num_steps):
         td_in = TensorDict({"action": action}, batch_size=env.batch_size, device=env.device)
-        td_out = env._step(td_in)
+        env._step(td_in)
     torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
 
