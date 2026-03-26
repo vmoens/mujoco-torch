@@ -46,6 +46,9 @@ class MujocoTorchEnv(EnvBase):
         frame_skip: number of physics steps per agent action.  Defaults to
             the class-level ``FRAME_SKIP`` (1 for the base, higher for
             subclasses).
+        compile_kwargs: extra keyword arguments forwarded to ``torch.compile``
+            (e.g. ``mode``, ``backend``, ``fullgraph``).  Ignored when
+            ``compile_step`` is False.
         from_pixels: if ``True``, include rendered pixel observations.
         pixel_only: if ``True``, drop state observations and return only pixels.
             Requires ``from_pixels=True``.
@@ -64,6 +67,7 @@ class MujocoTorchEnv(EnvBase):
         device=None,
         dtype=torch.float64,
         compile_step: bool = False,
+        compile_kwargs: dict | None = None,
         frame_skip: int | None = None,
         from_pixels: bool = False,
         pixel_only: bool = False,
@@ -137,7 +141,7 @@ class MujocoTorchEnv(EnvBase):
             return d
 
         if compile_step:
-            _vmap_multi_step = torch.compile(_vmap_multi_step)
+            _vmap_multi_step = torch.compile(_vmap_multi_step, **(compile_kwargs or {}))
         self._physics_step = _vmap_multi_step
 
     # ------------------------------------------------------------------
