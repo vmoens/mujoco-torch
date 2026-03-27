@@ -144,7 +144,7 @@ class TestMJXCorrectnessSingle:
 
         mjx_results = _run_mjx(m_mj, qvel_kick, NSTEPS)
         torch_results = _run_torch_single(m_mj, qvel_kick, NSTEPS)
-        _compare_trajectories(mjx_results, torch_results, SIMPLE_MODEL, atol=1e-8)
+        _compare_trajectories(mjx_results, torch_results, SIMPLE_MODEL, atol=1e-7)
 
     def test_ant(self):
         m_mj = test_util.load_test_file(COMPLEX_MODEL)

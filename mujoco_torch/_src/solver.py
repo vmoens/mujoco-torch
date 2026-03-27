@@ -397,29 +397,51 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
             hi_next = point_fn(hi.alpha - hi.deriv_0 / hi.deriv_1)
             mid = point_fn(0.5 * (lo.alpha + hi.alpha))
 
-            swap_lo_next = (lo.deriv_0 > 0) | (lo.deriv_0 < lo_next.deriv_0)
-            lo = torch.utils._pytree.tree_map(lambda x, y: torch.where(swap_lo_next, y, x), lo, lo_next)
-            swap_lo_mid = (mid.deriv_0 < 0) & (lo.deriv_0 < mid.deriv_0)
-            lo = torch.utils._pytree.tree_map(lambda x, y: torch.where(swap_lo_mid, y, x), lo, mid)
+            # in_bracket: candidate narrows the bracket toward zero derivative.
+            # Matches MuJoCo C's updateBracket / MJX's in_bracket logic.
+            _tree_where = torch.utils._pytree.tree_map
+            in_bracket = lambda x, y: ((x < y) & (y < 0)) | ((x > y) & (y > 0))
+            # not_bracketed: both endpoints have same-sign derivatives.
+            # MuJoCo C uses a one-sided Newton phase for this case; we
+            # emulate it by also accepting candidates that cross zero
+            # (forming a proper bracket).
+            not_bracketed = (lo.deriv_0 < 0) == (hi.deriv_0 < 0)
 
-            swap_hi_next = (hi.deriv_0 < 0) | (hi.deriv_0 > hi_next.deriv_0)
-            hi = torch.utils._pytree.tree_map(lambda x, y: torch.where(swap_hi_next, y, x), hi, hi_next)
-            swap_hi_mid = (mid.deriv_0 > 0) & (hi.deriv_0 > mid.deriv_0)
-            hi = torch.utils._pytree.tree_map(lambda x, y: torch.where(swap_hi_mid, y, x), hi, mid)
+            def _swap(current_d0, cand_d0, other_d0):
+                """Accept candidate if it narrows bracket or forms one."""
+                return in_bracket(current_d0, cand_d0) | (not_bracketed & (torch.abs(cand_d0) < torch.abs(current_d0)))
 
-            swap = swap_lo_next | swap_lo_mid | swap_hi_next | swap_hi_mid
+            swap_lo_next = _swap(lo.deriv_0, lo_next.deriv_0, hi.deriv_0)
+            lo = _tree_where(lambda x, y: torch.where(swap_lo_next, y, x), lo, lo_next)
+            swap_lo_mid = _swap(lo.deriv_0, mid.deriv_0, hi.deriv_0)
+            lo = _tree_where(lambda x, y: torch.where(swap_lo_mid, y, x), lo, mid)
+            swap_lo_hi_next = _swap(lo.deriv_0, hi_next.deriv_0, hi.deriv_0)
+            lo = _tree_where(lambda x, y: torch.where(swap_lo_hi_next, y, x), lo, hi_next)
+
+            swap_hi_next = _swap(hi.deriv_0, hi_next.deriv_0, lo.deriv_0)
+            hi = _tree_where(lambda x, y: torch.where(swap_hi_next, y, x), hi, hi_next)
+            swap_hi_mid = _swap(hi.deriv_0, mid.deriv_0, lo.deriv_0)
+            hi = _tree_where(lambda x, y: torch.where(swap_hi_mid, y, x), hi, mid)
+            swap_hi_lo_next = _swap(hi.deriv_0, lo_next.deriv_0, lo.deriv_0)
+            hi = _tree_where(lambda x, y: torch.where(swap_hi_lo_next, y, x), hi, lo_next)
+
+            swap = swap_lo_next | swap_lo_mid | swap_lo_hi_next
+            swap = swap | swap_hi_next | swap_hi_mid | swap_hi_lo_next
             return (_LSContext(lo=lo, hi=hi, swap=swap, ls_iter=ls_ctx.ls_iter + 1),)
 
         # initialize interval
         p0 = point_fn(ctx.qacc.new_zeros(()))
-        lo = point_fn(p0.alpha - p0.deriv_0 / p0.deriv_1)
-        lesser_fn = lambda x, y: torch.where(lo.deriv_0 < p0.deriv_0, x, y)
-        hi = torch.utils._pytree.tree_map(lesser_fn, p0, lo)
-        lo = torch.utils._pytree.tree_map(lesser_fn, lo, p0)
+        p1 = point_fn(p0.alpha - p0.deriv_0 / p0.deriv_1)
+        # Early convergence: if Newton step already satisfies gtol, skip
+        # bracket search (matches MuJoCo C PrimalSearch behaviour).
+        early_converged = torch.abs(p1.deriv_0) < gtol
+        lesser_fn = lambda x, y: torch.where(p1.deriv_0 < p0.deriv_0, x, y)
+        hi = torch.utils._pytree.tree_map(lesser_fn, p0, p1)
+        lo = torch.utils._pytree.tree_map(lesser_fn, p1, p0)
         ls_ctx = _LSContext(
             lo=lo,
             hi=hi,
-            swap=ctx.qacc.new_ones((), dtype=torch.bool),
+            swap=~early_converged,
             ls_iter=ctx.qacc.new_zeros((), dtype=torch.long),
         )
         if fixed_iterations:
