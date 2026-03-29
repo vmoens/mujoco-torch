@@ -88,7 +88,7 @@ class SHACLoss(nn.Module):
 
         # Discounted return: sum_{t=0}^{T-1} gamma^t * r_t
         discounts = torch.tensor(
-            [self.gamma ** t for t in range(T)],
+            [self.gamma**t for t in range(T)],
             device=rewards.device,
             dtype=rewards.dtype,
         )
@@ -98,7 +98,7 @@ class SHACLoss(nn.Module):
         final_obs = rollout_td[-1]["next"]
         with torch.no_grad():
             v_terminal = self.target_value_network(final_obs)["state_value"]  # [B, 1]
-        bootstrap = (self.gamma ** T) * v_terminal
+        bootstrap = (self.gamma**T) * v_terminal
 
         # Entropy bonus: -alpha * mean(log_prob) per step
         mean_log_prob = log_probs.mean()
