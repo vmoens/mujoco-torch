@@ -46,7 +46,13 @@ from mujoco_torch.zoo.humanoid_rich import HumanoidRichEnv
 # ------------------------------------------------------------------
 
 
-def _make_actor(obs_dim: int, act_dim: int, device, use_batchnorm: bool = True):
+def _make_actor(
+    obs_dim: int,
+    act_dim: int,
+    device,
+    use_batchnorm: bool = True,
+    dropout_p: float = 0.1,
+):
     layers = []
     if use_batchnorm:
         layers.append(nn.BatchNorm1d(obs_dim, device=device))
@@ -54,8 +60,9 @@ def _make_actor(obs_dim: int, act_dim: int, device, use_batchnorm: bool = True):
         MLP(
             in_features=obs_dim,
             out_features=2 * act_dim,
-            num_cells=[256, 256],
+            num_cells=[256, 256, 256, 256],
             activation_class=nn.ELU,
+            dropout=dropout_p,
             device=device,
         ),
     )
@@ -76,7 +83,12 @@ def _make_actor(obs_dim: int, act_dim: int, device, use_batchnorm: bool = True):
     )
 
 
-def _make_critic(obs_dim: int, device, use_batchnorm: bool = True):
+def _make_critic(
+    obs_dim: int,
+    device,
+    use_batchnorm: bool = True,
+    dropout_p: float = 0.1,
+):
     layers = []
     if use_batchnorm:
         layers.append(nn.BatchNorm1d(obs_dim, device=device))
@@ -84,8 +96,9 @@ def _make_critic(obs_dim: int, device, use_batchnorm: bool = True):
         MLP(
             in_features=obs_dim,
             out_features=1,
-            num_cells=[256, 256],
+            num_cells=[256, 256, 256, 256],
             activation_class=nn.ELU,
+            dropout=dropout_p,
             device=device,
         ),
     )
@@ -153,8 +166,19 @@ def train(args):
     obs_dim = train_env.observation_spec["observation"].shape[-1]
     act_dim = train_env.action_spec.shape[-1]
 
-    actor = _make_actor(obs_dim, act_dim, device, use_batchnorm=args.batchnorm)
-    critic = _make_critic(obs_dim, device, use_batchnorm=args.batchnorm)
+    actor = _make_actor(
+        obs_dim,
+        act_dim,
+        device,
+        use_batchnorm=args.batchnorm,
+        dropout_p=args.dropout,
+    )
+    critic = _make_critic(
+        obs_dim,
+        device,
+        use_batchnorm=args.batchnorm,
+        dropout_p=args.dropout,
+    )
 
     shac = SHACLoss(
         actor_network=actor,
@@ -214,6 +238,10 @@ def train(args):
             cfd=args.cfd,
             adaptive_integration=args.adaptive_integration,
         ):
+            # SHACLoss expects a differentiable trajectory laid out as [T, B, ...]
+            # with a per-step `sample_log_prob` key. `env.rollout()` returns
+            # env-major [B, T, ...] data, so we keep the explicit loop here
+            # instead of adding a transpose/key-normalisation pass.
             for _t in range(args.horizon):
                 td = actor(td)
                 next_td = train_env.step(td)
@@ -352,6 +380,7 @@ def main():
     parser.add_argument("--tau", type=float, default=0.005)
     parser.add_argument("--num_iters", type=int, default=5000)
     parser.add_argument("--grad_clip", type=float, default=1.0)
+    parser.add_argument("--dropout", type=float, default=0.1)
 
     parser.add_argument("--batchnorm", action="store_true", default=True)
     parser.add_argument(

@@ -78,7 +78,13 @@ class SmoothHumanoidRichEnv(HumanoidRichEnv):
 # ------------------------------------------------------------------
 
 
-def _make_policy(obs_dim: int, act_dim: int, device, use_batchnorm: bool = True):
+def _make_policy(
+    obs_dim: int,
+    act_dim: int,
+    device,
+    use_batchnorm: bool = True,
+    dropout_p: float = 0.1,
+):
     layers = []
     if use_batchnorm:
         layers.append(nn.BatchNorm1d(obs_dim, device=device))
@@ -86,8 +92,9 @@ def _make_policy(obs_dim: int, act_dim: int, device, use_batchnorm: bool = True)
         MLP(
             in_features=obs_dim,
             out_features=act_dim,
-            num_cells=[256, 256],
+            num_cells=[256, 256, 256, 256],
             activation_class=nn.ELU,
+            dropout=dropout_p,
             device=device,
         ),
     )
@@ -145,16 +152,25 @@ def train(args):
     device = args.device
     dtype = torch.float64
 
-    train_env = SmoothHumanoidRichEnv(
-        num_envs=args.num_envs,
-        device=device,
-        frame_skip=args.frame_skip,
+    train_env = TransformedEnv(
+        SmoothHumanoidRichEnv(
+            num_envs=args.num_envs,
+            device=device,
+            frame_skip=args.frame_skip,
+        ),
+        RewardSum(),
     )
 
     obs_dim = train_env.observation_spec["observation"].shape[-1]
     act_dim = train_env.action_spec.shape[-1]
 
-    policy = _make_policy(obs_dim, act_dim, device, use_batchnorm=args.batchnorm)
+    policy = _make_policy(
+        obs_dim,
+        act_dim,
+        device,
+        use_batchnorm=args.batchnorm,
+        dropout_p=args.dropout,
+    )
 
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -186,7 +202,7 @@ def train(args):
 
     mjt_logger.info(f"Direct backprop (rich obs) | obs={obs_dim} act={act_dim} device={device}")
     mjt_logger.info(
-        f"  horizon={args.horizon} frame_skip={args.frame_skip} num_envs={args.num_envs} dt={train_env._dt}"
+        f"  horizon={args.horizon} frame_skip={args.frame_skip} num_envs={args.num_envs} dt={train_env.base_env._dt}"
     )
 
     t0 = time.perf_counter()
@@ -213,11 +229,14 @@ def train(args):
             cfd=args.cfd,
             adaptive_integration=args.adaptive_integration,
         ):
-            for _t in range(args.horizon):
-                td = policy(td)
-                next_td = train_env.step(td)
-                total_reward = total_reward + next_td["next", "reward"]
-                td = next_td["next"]
+            rollout = train_env.rollout(
+                max_steps=args.horizon,
+                policy=policy,
+                auto_reset=False,
+                break_when_any_done=False,
+                tensordict=td,
+            )
+            total_reward = rollout["next", "episode_reward"][:, -1].unsqueeze(-1)
 
         loss = -total_reward.mean()
 
@@ -299,6 +318,7 @@ def main():
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--num_iters", type=int, default=5000)
     parser.add_argument("--grad_clip", type=float, default=1.0)
+    parser.add_argument("--dropout", type=float, default=0.1)
 
     parser.add_argument("--batchnorm", action="store_true", default=True)
     parser.add_argument(
