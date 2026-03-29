@@ -9,8 +9,8 @@ Usage::
     python examples/humanoid_accuracy_test.py
 """
 
-import numpy as np
 import mujoco
+import numpy as np
 import torch
 
 import mujoco_torch
@@ -36,7 +36,7 @@ CTRL_COST_WEIGHT = 0.1
 def compute_reward_np(qpos_before, qpos_after, action, dt):
     """Compute humanoid reward using numpy (reference implementation)."""
     forward_vel = (qpos_after[0] - qpos_before[0]) / dt
-    ctrl_cost = CTRL_COST_WEIGHT * np.sum(action ** 2)
+    ctrl_cost = CTRL_COST_WEIGHT * np.sum(action**2)
     z = qpos_after[2]
     healthy = HEALTHY_REWARD if (HEALTHY_Z_LOW <= z <= HEALTHY_Z_HIGH) else 0.0
     reward = forward_vel + healthy - ctrl_cost
@@ -46,7 +46,7 @@ def compute_reward_np(qpos_before, qpos_after, action, dt):
 def compute_reward_torch(qpos_before, qpos_after, action, dt):
     """Compute humanoid reward using torch (matching zoo implementation)."""
     forward_vel = (qpos_after[..., 0] - qpos_before[..., 0]) / dt
-    ctrl_cost = CTRL_COST_WEIGHT * (action ** 2).sum(dim=-1)
+    ctrl_cost = CTRL_COST_WEIGHT * (action**2).sum(dim=-1)
     z = qpos_after[..., 2]
     healthy_reward = torch.where(
         (z >= HEALTHY_Z_LOW) & (z <= HEALTHY_Z_HIGH),
@@ -74,12 +74,14 @@ def run_mujoco_c(m_mj, qpos_init, qvel_init, actions, frame_skip):
         d_mj.ctrl[:] = actions[t]
         for _ in range(frame_skip):
             mujoco.mj_step(m_mj, d_mj)
-        results.append({
-            "qpos_before": qpos_before,
-            "qpos": d_mj.qpos.copy(),
-            "qvel": d_mj.qvel.copy(),
-            "time": d_mj.time,
-        })
+        results.append(
+            {
+                "qpos_before": qpos_before,
+                "qpos": d_mj.qpos.copy(),
+                "qvel": d_mj.qvel.copy(),
+                "time": d_mj.time,
+            }
+        )
     return results
 
 
@@ -102,12 +104,14 @@ def run_mujoco_torch_single(m_mj, qpos_init, qvel_init, actions, frame_skip):
         dx = dx.replace(ctrl=ctrl)
         for _ in range(frame_skip):
             dx = step_fn(dx)
-        results.append({
-            "qpos_before": qpos_before.numpy(),
-            "qpos": dx.qpos.numpy().copy(),
-            "qvel": dx.qvel.numpy().copy(),
-            "time": float(dx.time),
-        })
+        results.append(
+            {
+                "qpos_before": qpos_before.numpy(),
+                "qpos": dx.qpos.numpy().copy(),
+                "qvel": dx.qvel.numpy().copy(),
+                "time": float(dx.time),
+            }
+        )
     return results
 
 
@@ -133,12 +137,14 @@ def run_mujoco_torch_vmap(m_mj, qpos_init, qvel_init, actions, frame_skip, batch
         dx = dx.replace(ctrl=ctrl)
         for _ in range(frame_skip):
             dx = vmap_step(dx)
-        results.append({
-            "qpos_before": qpos_before[0].numpy(),
-            "qpos": dx.qpos[0].numpy().copy(),
-            "qvel": dx.qvel[0].numpy().copy(),
-            "time": float(dx.time[0]),
-        })
+        results.append(
+            {
+                "qpos_before": qpos_before[0].numpy(),
+                "qpos": dx.qpos[0].numpy().copy(),
+                "qvel": dx.qvel[0].numpy().copy(),
+                "time": float(dx.time[0]),
+            }
+        )
     return results
 
 
@@ -164,7 +170,10 @@ def compare_results(ref_results, test_results, label, atol=1e-6):
             all_ok = False
 
     status = "PASS" if all_ok else "FAIL"
-    print(f"  [{status}] {label}: max_qpos_err={max_qpos_err:.2e}, max_qvel_err={max_qvel_err:.2e}, max_time_err={max_time_err:.2e}")
+    print(
+        f"  [{status}] {label}: max_qpos_err={max_qpos_err:.2e}, "
+        f"max_qvel_err={max_qvel_err:.2e}, max_time_err={max_time_err:.2e}"
+    )
     return all_ok, max_qpos_err, max_qvel_err
 
 
@@ -251,7 +260,7 @@ def test_action_effect(m_mj):
     ratio = t_diff / max(c_diff, 1e-15)
     print(f"  Effect ratio (torch/C): {ratio:.4f}")
     if abs(ratio - 1.0) > 0.1:
-        print(f"  WARNING: Action effect differs by {abs(ratio-1)*100:.1f}%")
+        print(f"  WARNING: Action effect differs by {abs(ratio - 1) * 100:.1f}%")
 
     return ok
 
@@ -279,7 +288,8 @@ def test_random_states(m_mj):
         torch_single = run_mujoco_torch_single(m_mj, qpos_init, qvel_init, actions, FRAME_SKIP)
 
         ok, qe, ve = compare_results(
-            ref, torch_single,
+            ref,
+            torch_single,
             f"State {s}: MuJoCo C vs mujoco-torch",
             atol=1e-5,
         )
@@ -308,7 +318,10 @@ def test_reward_match(m_mj):
     for i, (step_result, action) in enumerate(zip(ref, actions)):
         # Numpy reward
         r_np, fv_np, h_np, cc_np = compute_reward_np(
-            step_result["qpos_before"], step_result["qpos"], action, dt,
+            step_result["qpos_before"],
+            step_result["qpos"],
+            action,
+            dt,
         )
         # Torch reward
         qb = torch.from_numpy(step_result["qpos_before"])
@@ -345,7 +358,7 @@ def test_forward_velocity(m_mj):
     # Apply constant action (hip flexion to try walking)
     actions = np.zeros((100, m_mj.nu))
     # hip_y_right (index 5, gear=120), hip_y_left (index 11, gear=120)
-    actions[:, 5] = 0.5   # hip_y_right
+    actions[:, 5] = 0.5  # hip_y_right
     actions[:, 11] = -0.5  # hip_y_left (alternating)
 
     ref_c = run_mujoco_c(m_mj, qpos_init, qvel_init, actions, FRAME_SKIP)
@@ -365,7 +378,7 @@ def test_forward_velocity(m_mj):
     for t_idx in [0, 9, 19, 49, 99]:
         fv_c = (ref_c[t_idx]["qpos"][0] - ref_c[t_idx]["qpos_before"][0]) / dt
         fv_t = (ref_t[t_idx]["qpos"][0] - ref_t[t_idx]["qpos_before"][0]) / dt
-        print(f"  Step {t_idx:3d}: fwd_vel C={fv_c:8.4f}, torch={fv_t:8.4f}, diff={abs(fv_c-fv_t):.2e}")
+        print(f"  Step {t_idx:3d}: fwd_vel C={fv_c:8.4f}, torch={fv_t:8.4f}, diff={abs(fv_c - fv_t):.2e}")
 
     x_diff = abs(x_c[-1] - x_t[-1])
     print(f"  Final x diff between backends: {x_diff:.2e}")
@@ -383,8 +396,10 @@ def test_xml_patching_effect():
     print("\n=== TEST 7: XML patching (zoo) doesn't change dynamics ===")
     rng = np.random.RandomState(SEED + 300)
 
-    from mujoco_torch.zoo.humanoid import HumanoidEnv
     from etils import epath
+
+    from mujoco_torch.zoo.humanoid import HumanoidEnv
+
     _TEST_DATA = epath.resource_path("mujoco_torch") / "test_data"
     raw_xml = (_TEST_DATA / "humanoid.xml").read_text()
     patched_xml = HumanoidEnv._patch_xml(raw_xml)
@@ -422,10 +437,11 @@ def test_zoo_env_vs_manual(m_mj):
 
     # Create zoo env with 1 env
     from mujoco_torch.zoo.humanoid import HumanoidEnv
+
     env = HumanoidEnv(num_envs=1, device="cpu", frame_skip=FRAME_SKIP)
 
     # Reset and get initial state
-    td = env.reset()
+    env.reset()
     qpos_init = env._dx.qpos[0].numpy().copy()
     qvel_init = env._dx.qvel[0].numpy().copy()
 
@@ -436,6 +452,7 @@ def test_zoo_env_vs_manual(m_mj):
 
     # Also run MuJoCo C with the patched model (since zoo patches the XML)
     from etils import epath
+
     _TEST_DATA = epath.resource_path("mujoco_torch") / "test_data"
     raw_xml = (_TEST_DATA / "humanoid.xml").read_text()
     patched_xml = HumanoidEnv._patch_xml(raw_xml)
@@ -446,6 +463,7 @@ def test_zoo_env_vs_manual(m_mj):
     # Step zoo env
     all_ok = True
     from tensordict import TensorDict
+
     for t in range(len(actions)):
         action_t = torch.from_numpy(actions[t]).unsqueeze(0)
         td_in = TensorDict({"action": action_t}, batch_size=[1])
@@ -459,7 +477,10 @@ def test_zoo_env_vs_manual(m_mj):
 
         # Also check reward
         r_np, fv_np, h_np, cc_np = compute_reward_np(
-            ref_c[t]["qpos_before"], ref_c[t]["qpos"], actions[t], dt,
+            ref_c[t]["qpos_before"],
+            ref_c[t]["qpos"],
+            actions[t],
+            dt,
         )
         r_zoo = td_out["reward"][0, 0].item()
         r_err = abs(r_np - r_zoo)

@@ -28,7 +28,6 @@ import mujoco_torch
 from mujoco_torch._src.log import logger as mjt_logger
 from mujoco_torch.zoo.humanoid_rich import HumanoidRichEnv
 
-
 # ------------------------------------------------------------------
 # Differentiable training env
 # ------------------------------------------------------------------
@@ -43,36 +42,35 @@ class SmoothHumanoidRichEnv(HumanoidRichEnv):
         frame_skip = self.FRAME_SKIP
         _step_fn = lambda d: mujoco_torch.step(mx, d, fixed_iterations=True)  # noqa: E731
         if self.num_envs == 1:
+
             def _multi_step(d):
                 for _ in range(frame_skip):
                     d = _step_fn(d)
                 return d
+
             self._physics_step = _multi_step
         else:
             _vmap_step = torch.vmap(_step_fn)
+
             def _vmap_multi_step(d):
                 for _ in range(frame_skip):
                     d = _vmap_step(d)
                 return d
+
             self._physics_step = _vmap_multi_step
 
     def _compute_reward(self, qpos_before, action):
         forward_vel = (self._dx.qpos[..., 0] - qpos_before[..., 0]) / self._dt
-        ctrl_cost = self.CTRL_COST_WEIGHT * (action ** 2).sum(dim=-1)
+        ctrl_cost = self.CTRL_COST_WEIGHT * (action**2).sum(dim=-1)
 
         z = self._dx.qpos[..., 2]
-        soft_healthy = (
-            torch.sigmoid(10.0 * (z - self.HEALTHY_Z_LOW))
-            * torch.sigmoid(10.0 * (self.HEALTHY_Z_HIGH - z))
-        )
+        soft_healthy = torch.sigmoid(10.0 * (z - self.HEALTHY_Z_LOW)) * torch.sigmoid(10.0 * (self.HEALTHY_Z_HIGH - z))
         # Multiplicative: forward velocity only counts while upright (dm_control style)
         reward = soft_healthy * (forward_vel + self.HEALTHY_REWARD) - ctrl_cost
         return reward.unsqueeze(-1).to(self.dtype)
 
     def _compute_terminated(self):
-        return torch.zeros(
-            *self.batch_size, 1, dtype=torch.bool, device=self.device
-        )
+        return torch.zeros(*self.batch_size, 1, dtype=torch.bool, device=self.device)
 
 
 # ------------------------------------------------------------------
@@ -134,9 +132,7 @@ def _run_eval(eval_env, policy, iteration, logger, max_steps=500):
             t.count = 0
 
     logger.experiment.log(log_dict)
-    mjt_logger.info(
-        f"  [EVAL] iter={iteration + 1} episode_reward={ep_reward:.2f}"
-    )
+    mjt_logger.info(f"  [EVAL] iter={iteration + 1} episode_reward={ep_reward:.2f}")
     policy.train()
 
 
@@ -162,7 +158,9 @@ def train(args):
 
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.num_iters, eta_min=args.lr * 0.01,
+        optimizer,
+        T_max=args.num_iters,
+        eta_min=args.lr * 0.01,
     )
 
     logger = WandbLogger(
@@ -177,18 +175,18 @@ def train(args):
         Compose(
             PixelRenderTransform(out_keys=["pixels"]),
             VideoRecorder(
-                logger=logger, tag="eval_video", skip=1, make_grid=False,
+                logger=logger,
+                tag="eval_video",
+                skip=1,
+                make_grid=False,
             ),
             RewardSum(),
         ),
     )
 
+    mjt_logger.info(f"Direct backprop (rich obs) | obs={obs_dim} act={act_dim} device={device}")
     mjt_logger.info(
-        f"Direct backprop (rich obs) | obs={obs_dim} act={act_dim} device={device}"
-    )
-    mjt_logger.info(
-        f"  horizon={args.horizon} frame_skip={args.frame_skip} "
-        f"num_envs={args.num_envs} dt={train_env._dt}"
+        f"  horizon={args.horizon} frame_skip={args.frame_skip} num_envs={args.num_envs} dt={train_env._dt}"
     )
 
     t0 = time.perf_counter()
@@ -199,7 +197,10 @@ def train(args):
         td = train_env.reset()
 
         total_reward = torch.zeros(
-            args.num_envs, 1, device=device, dtype=dtype,
+            args.num_envs,
+            1,
+            device=device,
+            dtype=dtype,
         )
 
         if use_cuda:
@@ -231,7 +232,8 @@ def train(args):
         optimizer.zero_grad()
         loss.backward()
         grad_norm = nn.utils.clip_grad_norm_(
-            policy.parameters(), args.grad_clip,
+            policy.parameters(),
+            args.grad_clip,
         )
         optimizer.step()
         scheduler.step()
@@ -248,11 +250,7 @@ def train(args):
             "train/max_reward": total_reward.detach().max().item(),
             "train/best_mean_reward": best_reward,
             "train/loss": loss.detach().item(),
-            "train/grad_norm": (
-                grad_norm.item()
-                if isinstance(grad_norm, torch.Tensor)
-                else grad_norm
-            ),
+            "train/grad_norm": (grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm),
             "train/lr": scheduler.get_last_lr()[0],
             "perf/forward_s": t_fwd,
             "perf/backward_s": t_bwd,
@@ -272,14 +270,15 @@ def train(args):
 
         if (iteration + 1) % args.eval_interval == 0 or iteration == 0:
             _run_eval(
-                eval_env, policy, iteration, logger, args.max_eval_steps,
+                eval_env,
+                policy,
+                iteration,
+                logger,
+                args.max_eval_steps,
             )
 
     elapsed = time.perf_counter() - t0
-    mjt_logger.info(
-        f"Training done. {args.num_iters} iters in {elapsed:.1f}s. "
-        f"Best mean reward: {best_reward:.2f}"
-    )
+    mjt_logger.info(f"Training done. {args.num_iters} iters in {elapsed:.1f}s. Best mean reward: {best_reward:.2f}")
 
 
 # ------------------------------------------------------------------
@@ -303,11 +302,15 @@ def main():
 
     parser.add_argument("--batchnorm", action="store_true", default=True)
     parser.add_argument(
-        "--no_batchnorm", dest="batchnorm", action="store_false",
+        "--no_batchnorm",
+        dest="batchnorm",
+        action="store_false",
     )
 
     parser.add_argument(
-        "--smooth_collisions", action="store_true", default=True,
+        "--smooth_collisions",
+        action="store_true",
+        default=True,
     )
     parser.add_argument(
         "--no_smooth_collisions",
@@ -317,13 +320,17 @@ def main():
     parser.add_argument("--cfd", action="store_true", default=True)
     parser.add_argument("--no_cfd", dest="cfd", action="store_false")
     parser.add_argument(
-        "--adaptive_integration", action="store_true", default=False,
+        "--adaptive_integration",
+        action="store_true",
+        default=False,
     )
 
     parser.add_argument("--eval_interval", type=int, default=50)
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument(
-        "--wandb_project", type=str, default="mujoco-torch-zoo",
+        "--wandb_project",
+        type=str,
+        default="mujoco-torch-zoo",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default=None)
