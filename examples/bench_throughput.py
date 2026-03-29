@@ -12,6 +12,7 @@ import argparse
 import time
 
 import torch
+
 import mujoco_torch
 from mujoco_torch.zoo import ENVS
 
@@ -73,21 +74,20 @@ def bench_env_step(env, num_steps=200):
     from tensordict import TensorDict
 
     # Reset to get initial state
-    td = env.reset()
+    env.reset()
     # Create a dummy action
-    action = torch.zeros(env.num_envs, env.action_spec.shape[-1],
-                        dtype=env.dtype, device=env.device)
+    action = torch.zeros(env.num_envs, env.action_spec.shape[-1], dtype=env.dtype, device=env.device)
 
     # Warmup
     for _ in range(5):
         td_in = TensorDict({"action": action}, batch_size=env.batch_size, device=env.device)
-        td_out = env._step(td_in)
+        env._step(td_in)
     torch.cuda.synchronize()
 
     t0 = time.perf_counter()
     for _ in range(num_steps):
         td_in = TensorDict({"action": action}, batch_size=env.batch_size, device=env.device)
-        td_out = env._step(td_in)
+        env._step(td_in)
     torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
 
@@ -101,20 +101,19 @@ def bench_env_step_with_frameskip(env, num_steps=200):
     """env._step() accounts for frame_skip — report physics steps/sec."""
     from tensordict import TensorDict
 
-    td = env.reset()
-    action = torch.zeros(env.num_envs, env.action_spec.shape[-1],
-                        dtype=env.dtype, device=env.device)
+    env.reset()
+    action = torch.zeros(env.num_envs, env.action_spec.shape[-1], dtype=env.dtype, device=env.device)
 
     # Warmup
     for _ in range(5):
         td_in = TensorDict({"action": action}, batch_size=env.batch_size, device=env.device)
-        td_out = env._step(td_in)
+        env._step(td_in)
     torch.cuda.synchronize()
 
     t0 = time.perf_counter()
     for _ in range(num_steps):
         td_in = TensorDict({"action": action}, batch_size=env.batch_size, device=env.device)
-        td_out = env._step(td_in)
+        env._step(td_in)
     torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
 
@@ -126,29 +125,33 @@ def bench_env_step_with_frameskip(env, num_steps=200):
 
 def _make_actor(env, device):
     """Build a small stochastic actor for benchmarking."""
-    from torchrl.modules import MLP, NormalParamExtractor, ProbabilisticActor, TanhNormal
-    from tensordict.nn import TensorDictModule
     import torch.nn as nn
+    from tensordict.nn import TensorDictModule
+    from torchrl.modules import MLP, NormalParamExtractor, ProbabilisticActor, TanhNormal
 
     obs_dim = env.observation_spec["observation"].shape[-1]
     act_dim = env.action_spec.shape[-1]
 
     actor_net = nn.Sequential(
-        MLP(in_features=obs_dim, out_features=2 * act_dim,
-            num_cells=[256, 256], activation_class=nn.ReLU, device=device),
+        MLP(
+            in_features=obs_dim, out_features=2 * act_dim, num_cells=[256, 256], activation_class=nn.ReLU, device=device
+        ),
         NormalParamExtractor(),
     )
     actor_module = TensorDictModule(actor_net, in_keys=["observation"], out_keys=["loc", "scale"])
     return ProbabilisticActor(
-        module=actor_module, in_keys=["loc", "scale"], out_keys=["action"],
-        distribution_class=TanhNormal, return_log_prob=True,
+        module=actor_module,
+        in_keys=["loc", "scale"],
+        out_keys=["action"],
+        distribution_class=TanhNormal,
+        return_log_prob=True,
     )
 
 
 def _make_env(env_name, num_envs, device, frame_skip, compile_step, fast=False):
     """Build a TransformedEnv, optionally with fast-path flags."""
     from torchrl.envs import TransformedEnv
-    from torchrl.envs.transforms import Compose, DoubleToFloat, StepCounter, RewardSum
+    from torchrl.envs.transforms import Compose, DoubleToFloat, RewardSum, StepCounter
 
     cls = ENVS[env_name]
     base = cls(num_envs=num_envs, device=device, frame_skip=frame_skip, compile_step=compile_step)
@@ -236,18 +239,20 @@ def main():
     p.add_argument("--frame_skip", type=int, default=5)
     p.add_argument("--device", default="cuda")
     p.add_argument("--num_steps", type=int, default=200)
-    p.add_argument("--collector_only", action="store_true",
-                   help="Skip raw physics tests, only run collector benchmarks")
+    p.add_argument(
+        "--collector_only", action="store_true", help="Skip raw physics tests, only run collector benchmarks"
+    )
     args = p.parse_args()
 
-    print(f"\n=== Throughput benchmark: {args.env}, {args.num_envs} envs, "
-          f"frame_skip={args.frame_skip}, device={args.device} ===\n")
+    print(
+        f"\n=== Throughput benchmark: {args.env}, {args.num_envs} envs, "
+        f"frame_skip={args.frame_skip}, device={args.device} ===\n"
+    )
 
     if not args.collector_only:
         # Create base env (no compile)
         cls = ENVS[args.env]
-        env_eager = cls(num_envs=args.num_envs, device=args.device,
-                        frame_skip=args.frame_skip, compile_step=False)
+        env_eager = cls(num_envs=args.num_envs, device=args.device, frame_skip=args.frame_skip, compile_step=False)
 
         print("[1] Raw physics (no compile)")
         bench_raw_physics(env_eager, args.num_steps)
@@ -256,9 +261,8 @@ def main():
 
         del env_eager
 
-        print(f"\n[2] Compiled physics")
-        env_compiled = cls(num_envs=args.num_envs, device=args.device,
-                           frame_skip=args.frame_skip, compile_step=True)
+        print("\n[2] Compiled physics")
+        env_compiled = cls(num_envs=args.num_envs, device=args.device, frame_skip=args.frame_skip, compile_step=True)
         bench_compiled_physics(env_compiled, args.num_steps)
         bench_env_step(env_compiled, args.num_steps)
         bench_env_step_with_frameskip(env_compiled, args.num_steps)
@@ -267,17 +271,14 @@ def main():
 
     nf = args.num_envs * 200
 
-    print(f"\n[3] Collector (compiled, standard)")
-    bench_collector(args.env, args.num_envs, args.device, args.frame_skip,
-                    compile_step=True, num_frames=nf)
+    print("\n[3] Collector (compiled, standard)")
+    bench_collector(args.env, args.num_envs, args.device, args.frame_skip, compile_step=True, num_frames=nf)
 
-    print(f"\n[4] Collector (compiled, fast flags)")
-    bench_collector_fast(args.env, args.num_envs, args.device, args.frame_skip,
-                         compile_step=True, num_frames=nf)
+    print("\n[4] Collector (compiled, fast flags)")
+    bench_collector_fast(args.env, args.num_envs, args.device, args.frame_skip, compile_step=True, num_frames=nf)
 
-    print(f"\n[5] Collector (eager, fast flags)")
-    bench_collector_fast(args.env, args.num_envs, args.device, args.frame_skip,
-                         compile_step=False, num_frames=nf)
+    print("\n[5] Collector (eager, fast flags)")
+    bench_collector_fast(args.env, args.num_envs, args.device, args.frame_skip, compile_step=False, num_frames=nf)
 
     print("\nDone.")
 

@@ -409,9 +409,7 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
 
             def _swap(current_d0, cand_d0, other_d0):
                 """Accept candidate if it narrows bracket or forms one."""
-                return in_bracket(current_d0, cand_d0) | (
-                    not_bracketed & (torch.abs(cand_d0) < torch.abs(current_d0))
-                )
+                return in_bracket(current_d0, cand_d0) | (not_bracketed & (torch.abs(cand_d0) < torch.abs(current_d0)))
 
             swap_lo_next = _swap(lo.deriv_0, lo_next.deriv_0, hi.deriv_0)
             lo = _tree_where(lambda x, y: torch.where(swap_lo_next, y, x), lo, lo_next)

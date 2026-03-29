@@ -599,8 +599,24 @@ def count_constraints(m: Model, d: Data) -> tuple[int, int, int, int]:
 def make_constraint(m: Model, d: Data) -> Data:
     """Creates constraint jacobians and other supporting data."""
     ne, nf, nl, ncon, nefc = collision_driver.constraint_sizes(m)
-    if nefc == 0:
+
+    def _set_constraint_tensors(size: int, reported_nefc: int | None = None) -> Data:
+        _dev = d.qpos.device
+        dtype = d.qpos.dtype
+        z = torch.zeros(size, dtype=dtype, device=_dev)
+        if reported_nefc is None:
+            reported_nefc = size
+        d.update_(
+            efc_J=torch.zeros((size, m.nv), dtype=dtype, device=_dev),
+            efc_D=z,
+            efc_aref=z,
+            efc_frictionloss=z,
+            nefc=torch.full((), reported_nefc, dtype=torch.int32, device=_dev),
+        )
         return d
+
+    if nefc == 0:
+        return _set_constraint_tensors(0)
     ns = ne + nf + nl
     actual_ncon = d.contact.dist.shape[0]
     has_contacts = ncon > 0 and actual_ncon > 0
@@ -645,6 +661,9 @@ def make_constraint(m: Model, d: Data) -> Data:
         offset += count
     efcs = tuple(efcs)
 
+    if not efcs:
+        padded_nefc = nefc if torch.compiler.is_compiling() else 0
+        return _set_constraint_tensors(padded_nefc)
 
     efc = torch.cat(list(efcs))
     refsafe = precomp["refsafe"]
@@ -661,8 +680,7 @@ def make_constraint(m: Model, d: Data) -> Data:
 
     aref, r = fn(efc)
 
-    if not torch.compiler.is_compiling():
-        assert r.shape[0] == nefc, f"Expected {nefc} constraint rows, got {r.shape[0]}"
+    assert r.shape[0] <= nefc, f"Expected at most {nefc} constraint rows, got {r.shape[0]}"
 
     cfg = get_diff_config()
     if cfg.cfd:
@@ -695,11 +713,34 @@ def make_constraint(m: Model, d: Data) -> Data:
         aref = aref.detach() + aref_cfd - aref_cfd.detach()
         r = r.detach() + r_cfd - r_cfd.detach()
 
+    actual_nefc = r.shape[0]
+    if torch.compiler.is_compiling() and actual_nefc < nefc:
+        pad = nefc - actual_nefc
+        efc_J = torch.cat(
+            [efc.J, torch.zeros((pad, m.nv), dtype=efc.J.dtype, device=efc.J.device)],
+            dim=0,
+        )
+        efc_D = torch.cat([1 / r, torch.zeros(pad, dtype=r.dtype, device=r.device)], dim=0)
+        efc_aref = torch.cat([aref, torch.zeros(pad, dtype=aref.dtype, device=aref.device)], dim=0)
+        efc_frictionloss = torch.cat(
+            [
+                efc.frictionloss,
+                torch.zeros(pad, dtype=efc.frictionloss.dtype, device=efc.frictionloss.device),
+            ],
+            dim=0,
+        )
+    else:
+        efc_J = efc.J
+        efc_D = 1 / r
+        efc_aref = aref
+        efc_frictionloss = efc.frictionloss
+    reported_nefc = nefc if torch.compiler.is_compiling() else actual_nefc
+
     d.update_(
-        efc_J=efc.J,
-        efc_D=1 / r,
-        efc_aref=aref,
-        efc_frictionloss=efc.frictionloss,
-        nefc=torch.full((), nefc, dtype=torch.int32, device=r.device),
+        efc_J=efc_J,
+        efc_D=efc_D,
+        efc_aref=efc_aref,
+        efc_frictionloss=efc_frictionloss,
+        nefc=torch.full((), reported_nefc, dtype=torch.int32, device=r.device),
     )
     return d

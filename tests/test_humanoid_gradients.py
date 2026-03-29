@@ -14,15 +14,10 @@ import torch
 
 import mujoco_torch
 from mujoco_torch import mujoco_logger as logger
-from mujoco_torch._src.log import logger as mjt_logger
 
 torch.set_default_dtype(torch.float64)
 
-_XML_PATH = str(
-    mujoco_torch._src.__file__.replace("__init__.py", "")
-    .replace("_src/", "")
-    + "test_data/humanoid.xml"
-)
+_XML_PATH = str(mujoco_torch._src.__file__.replace("__init__.py", "").replace("_src/", "") + "test_data/humanoid.xml")
 
 
 def _make_humanoid():
@@ -105,11 +100,8 @@ def test_smooth_reward_gradcheck():
 
         forward_vel = (d.qpos[0] - qpos_before[0]) / dt
         z = d.qpos[2]
-        soft_healthy = (
-            torch.sigmoid(10.0 * (z - 1.0))
-            * torch.sigmoid(10.0 * (2.0 - z))
-        )
-        ctrl_cost = 0.1 * (action ** 2).sum()
+        soft_healthy = torch.sigmoid(10.0 * (z - 1.0)) * torch.sigmoid(10.0 * (2.0 - z))
+        ctrl_cost = 0.1 * (action**2).sum()
         reward = forward_vel + 5.0 * soft_healthy - ctrl_cost
         return reward.unsqueeze(0)
 

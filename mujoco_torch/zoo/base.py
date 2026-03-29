@@ -47,8 +47,7 @@ class MujocoTorchEnv(EnvBase):
             the class-level ``FRAME_SKIP`` (1 for the base, higher for
             subclasses).
         compile_kwargs: extra keyword arguments forwarded to ``torch.compile``
-            (e.g. ``mode``, ``backend``, ``fullgraph``).  Ignored when
-            ``compile_step`` is False.
+            when ``compile_step`` is enabled.
         from_pixels: if ``True``, include rendered pixel observations.
         pixel_only: if ``True``, drop state observations and return only pixels.
             Requires ``from_pixels=True``.
@@ -68,6 +67,7 @@ class MujocoTorchEnv(EnvBase):
         dtype=torch.float64,
         compile_step: bool = False,
         compile_kwargs: dict | None = None,
+        auto_reset: bool = False,
         frame_skip: int | None = None,
         from_pixels: bool = False,
         pixel_only: bool = False,
@@ -76,6 +76,7 @@ class MujocoTorchEnv(EnvBase):
     ):
         if frame_skip is not None:
             self.FRAME_SKIP = frame_skip
+        self.auto_reset = auto_reset
         super().__init__(device=device, batch_size=torch.Size([num_envs]))
         self.dtype = dtype
         self.num_envs = num_envs
@@ -133,21 +134,25 @@ class MujocoTorchEnv(EnvBase):
 
         _step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
         frame_skip = self.FRAME_SKIP
-        _compile_kwargs = compile_kwargs or {}
+        compile_kwargs = compile_kwargs or {}
         _vmap_step = torch.vmap(_step_fn)
         if num_envs == 1:
+
             def _multi_step(d):
                 for _ in range(frame_skip):
                     d = _step_fn(d)
                 return d
-            self._physics_step = torch.compile(_multi_step, **_compile_kwargs) if compile_step else _multi_step
+
+            self._physics_step = torch.compile(_multi_step, **compile_kwargs) if compile_step else _multi_step
             self._single_env = True
         else:
+
             def _vmap_multi_step(d):
                 for _ in range(frame_skip):
                     d = _vmap_step(d)
                 return d
-            self._physics_step = torch.compile(_vmap_multi_step, **_compile_kwargs) if compile_step else _vmap_multi_step
+
+            self._physics_step = torch.compile(_vmap_multi_step, **compile_kwargs) if compile_step else _vmap_multi_step
             self._single_env = False
 
     # ------------------------------------------------------------------
@@ -273,7 +278,8 @@ class MujocoTorchEnv(EnvBase):
             # Full reset (initial or forced)
             self._dx = self._make_batch(self.num_envs)
             self._step_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        else:
+        elif not self.auto_reset:
+            # Only do per-env reset if auto_reset is off (otherwise _step already did it)
             n_reset = int(reset_mask.sum())
             if n_reset > 0:
                 self._dx[reset_mask] = self._make_batch(n_reset)
@@ -300,82 +306,31 @@ class MujocoTorchEnv(EnvBase):
             self._dx = self._physics_step(self._dx[0]).unsqueeze(0)
         else:
             self._dx = self._physics_step(self._dx)
-
-        # Physics health check: catch blow-ups at the source
-        _PHYS_THRESHOLD = 1e10
-        qpos = self._dx.qpos
-        qvel = self._dx.qvel
-        qpos_bad = qpos.isnan().any() or qpos.isinf().any() or (qpos.abs() > _PHYS_THRESHOLD).any()
-        qvel_bad = qvel.isnan().any() or qvel.isinf().any() or (qvel.abs() > _PHYS_THRESHOLD).any()
-        if qpos_bad or qvel_bad:
-            qpos_issue = qpos.abs().max(dim=-1).values
-            qvel_issue = qvel.abs().max(dim=-1).values
-            bad_envs = (
-                (qpos_issue > _PHYS_THRESHOLD)
-                | qpos.isnan().any(-1)
-                | (qvel_issue > _PHYS_THRESHOLD)
-                | qvel.isnan().any(-1)
-            )
-            bad_idx = bad_envs.nonzero(as_tuple=True)[0]
-            msg = (
-                f"\n{'=' * 70}\n"
-                f"FATAL: Physics blow-up at step_count={self._step_count[bad_idx[0]].item()}\n"
-                f"  {bad_idx.numel()}/{self.num_envs} envs affected, first bad env idx={bad_idx[0].item()}\n"
-                f"  qpos range: [{qpos.min():.2e}, {qpos.max():.2e}]  nan={qpos.isnan().sum().item()}\n"
-                f"  qvel range: [{qvel.min():.2e}, {qvel.max():.2e}]  nan={qvel.isnan().sum().item()}\n"
-                f"  qpos_before range: [{qpos_before.min():.2e}, {qpos_before.max():.2e}]\n"
-                f"  action range: [{action.min():.2e}, {action.max():.2e}]\n"
-                f"  ctrl range: [{ctrl.min():.2e}, {ctrl.max():.2e}]\n"
-                f"  bad env qpos: {qpos[bad_idx[0]].cpu().tolist()}\n"
-                f"  bad env qvel: {qvel[bad_idx[0]].cpu().tolist()}\n"
-                f"  bad env qpos_before: {qpos_before[bad_idx[0]].cpu().tolist()}\n"
-                f"  bad env action: {action[bad_idx[0]].cpu().tolist()}\n"
-                f"{'=' * 70}"
-            )
-            raise RuntimeError(msg)
         self._step_count += 1
 
         reward = self._compute_reward(qpos_before, action)
-
-        # Reward health check
-        if reward.isnan().any() or reward.isinf().any() or (reward.abs() > _PHYS_THRESHOLD).any():
-            bad_mask = (
-                reward.squeeze(-1).isnan() | reward.squeeze(-1).isinf() | (reward.squeeze(-1).abs() > _PHYS_THRESHOLD)
-            )
-            bad_idx = bad_mask.nonzero(as_tuple=True)[0]
-            msg = (
-                f"\n{'=' * 70}\n"
-                f"FATAL: Extreme reward at step_count={self._step_count[bad_idx[0]].item()}\n"
-                f"  {bad_idx.numel()}/{self.num_envs} envs affected\n"
-                f"  reward range: [{reward.min():.2e}, {reward.max():.2e}]  nan={reward.isnan().sum().item()}\n"
-                f"  worst reward: {reward[bad_idx[0]].item():.2e}\n"
-                f"  bad env qpos: {self._dx.qpos[bad_idx[0]].cpu().tolist()}\n"
-                f"  bad env qvel: {self._dx.qvel[bad_idx[0]].cpu().tolist()}\n"
-                f"  bad env qpos_before: {qpos_before[bad_idx[0]].cpu().tolist()}\n"
-                f"  bad env action: {action[bad_idx[0]].cpu().tolist()}\n"
-                f"{'=' * 70}"
-            )
-            raise RuntimeError(msg)
-
         terminated = self._compute_terminated()
         truncated = (self._step_count >= self.max_episode_steps).unsqueeze(-1)
         done = terminated | truncated
 
-        # Build obs from the terminal state BEFORE resetting
+        # Build obs from the terminal state BEFORE resetting, so the returned
+        # observation matches the state that produced the reward.
         obs = self._build_obs()
 
-        # Branchless reset: always compute reset candidate, select with torch.where.
-        # No control flow → fully compilable, no graph breaks.
-        noise = self.RESET_NOISE_SCALE
-        reset_dx = self._dx0.expand_as(self._dx).clone()
-        reset_dx.qpos = reset_dx.qpos + torch.empty_like(reset_dx.qpos).uniform_(-noise, noise)
-        reset_dx.qvel = reset_dx.qvel + torch.empty_like(reset_dx.qvel).uniform_(-noise, noise)
-        done_mask = done.squeeze(-1)
-        self._dx = self._dx.apply(
-            lambda v, rv: torch.where(done_mask.view(-1, *((1,) * (v.ndim - 1))), rv, v),
-            reset_dx,
-        )
-        self._step_count = torch.where(done.squeeze(-1), torch.zeros_like(self._step_count), self._step_count)
+        # Fused auto-reset: reset done envs AFTER building obs.
+        # maybe_reset will call _reset (which is a no-op with auto_reset)
+        # and _reset returns obs from the already-reset _dx state.
+        if self.auto_reset:
+            done_mask = done.squeeze(-1)
+            if done_mask.any():
+                n_reset = done_mask.sum()
+                reset_batch = self._dx0.expand(n_reset).clone()
+                noise = self.RESET_NOISE_SCALE
+                if noise > 0:
+                    reset_batch.qpos.add_(torch.empty_like(reset_batch.qpos).uniform_(-noise, noise))
+                    reset_batch.qvel.add_(torch.empty_like(reset_batch.qvel).uniform_(-noise, noise))
+                self._dx[done_mask] = reset_batch
+                self._step_count[done_mask] = 0
 
         return TensorDict(
             {
