@@ -108,6 +108,7 @@ def make_eval_env(env_name, device, frame_skip, logger, obs_norm_td=None):
                 tag="eval_video",
                 skip=1,
                 make_grid=False,
+                fps=30,
             ),
         ),
     )
@@ -184,18 +185,10 @@ def run_eval(eval_env, actor, iteration, logger, max_steps=1000):
     for t in eval_env.transform:
         if isinstance(t, VideoRecorder) and t.obs:
             try:
-                import wandb
-
-                vid = torch.stack(t.obs, 0).unsqueeze(0).cpu()
-                log_dict["eval_video"] = wandb.Video(
-                    vid,
-                    fps=30,
-                    format="mp4",
-                )
+                t.iter = iteration
+                t.dump()
             except Exception:
                 pass
-            t.obs = []
-            t.count = 0
 
     logger.experiment.log(log_dict)
     return ep_reward
