@@ -73,7 +73,8 @@ def make_env(
         ),
     )
     if obs_norm_td is not None:
-        env.transform[1].load_state_dict(obs_norm_td)
+        env.transform[1].loc = obs_norm_td["loc"].clone()
+        env.transform[1].scale = obs_norm_td["scale"].clone()
     return env
 
 
