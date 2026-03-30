@@ -53,7 +53,7 @@ def make_env(
     frame_skip,
     compile_step=False,
     compile_kwargs=None,
-    obs_norm_num_iter=50,
+    obs_norm_td=None,
 ):
     cls = ENVS[env_name]
     base = cls(
@@ -72,9 +72,18 @@ def make_env(
             RewardSum(),
         ),
     )
-    print(f"  ObservationNorm: computing stats ({obs_norm_num_iter} rollouts, {num_envs} envs)...", flush=True)
+    if obs_norm_td is not None:
+        env.transform[1].load_state_dict(obs_norm_td)
+    return env
+
+
+def init_obs_norm_stats(env, num_iter):
+    print(
+        f"  ObservationNorm: computing stats ({num_iter} rollouts, {env.batch_size[0]} envs)...",
+        flush=True,
+    )
     t_init = time.perf_counter()
-    env.transform[1].init_stats(obs_norm_num_iter, reduce_dim=(0, 1), cat_dim=0)
+    env.transform[1].init_stats(num_iter, reduce_dim=(0, 1), cat_dim=0)
     obs_norm = env.transform[1]
     elapsed = time.perf_counter() - t_init
     print(
@@ -83,7 +92,7 @@ def make_env(
         f"  scale=[{obs_norm.scale.min():.2f}, {obs_norm.scale.max():.2f}]",
         flush=True,
     )
-    return env
+    return obs_norm.state_dict()
 
 
 def make_eval_env(env_name, device, frame_skip, logger, obs_norm_td=None):
@@ -207,6 +216,19 @@ def train(args):
     compile_kwargs = {}
     if args.compile_mode:
         compile_kwargs["mode"] = args.compile_mode
+
+    # Bootstrap ObservationNorm eagerly, then rebuild the real training env
+    # with compilation enabled for steady-state collection/training.
+    init_env = make_env(
+        args.env,
+        args.num_envs,
+        env_device,
+        args.frame_skip,
+        compile_step=False,
+    )
+    obs_norm_td = init_obs_norm_stats(init_env, 50)
+    init_env.close()
+
     train_env = make_env(
         args.env,
         args.num_envs,
@@ -214,6 +236,7 @@ def train(args):
         args.frame_skip,
         compile_step=args.compile,
         compile_kwargs=compile_kwargs or None,
+        obs_norm_td=obs_norm_td,
     )
     obs_dim = train_env.observation_spec["observation"].shape[-1]
     act_dim = train_env.action_spec.shape[-1]
@@ -224,8 +247,7 @@ def train(args):
         project=args.wandb_project,
         config=vars(args),
     )
-    # Share obs normalization stats from train env to eval env
-    obs_norm_td = train_env.transform[1].state_dict()
+    # Share obs normalization stats from the eager bootstrap to eval env.
     print(f"  Train ObservationNorm state_dict keys={list(obs_norm_td.keys())}", flush=True)
     for k, v in obs_norm_td.items():
         print(f"    {k}: shape={v.shape} dtype={v.dtype} device={v.device}", flush=True)
