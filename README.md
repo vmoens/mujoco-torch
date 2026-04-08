@@ -165,7 +165,7 @@ physics simulation.
 python zoo/train_sac.py --env halfcheetah --num_envs 64 --total_steps 500000
 
 # PPO
-python zoo/train_ppo.py --env halfcheetah --num_envs 64 --total_steps 500000
+python examples/train_ppo.py --env halfcheetah --num_envs 64 --total_frames 500000
 
 # With torch.compile for GPU
 python zoo/train_sac.py --env ant --compile --num_envs 8192 --device cuda

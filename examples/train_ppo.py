@@ -12,12 +12,18 @@ Usage::
 """
 
 import argparse
+import logging
+import os
+import queue
+import threading
 import time
+from functools import partial
 
 import torch
 import torch.nn as nn
 from tensordict.nn import TensorDictModule
-from torchrl.collectors import SyncDataCollector
+from torchrl._utils import logger as torchrl_logger
+from torchrl.collectors import MultiaSyncDataCollector, SyncDataCollector
 from torchrl.envs import TransformedEnv
 from torchrl.envs.transforms import (
     Compose,
@@ -40,6 +46,9 @@ from torchrl.record import PixelRenderTransform, VideoRecorder
 from torchrl.record.loggers.wandb import WandbLogger
 
 from mujoco_torch.zoo import ENVS
+
+if os.environ.get("MUJOCO_TORCH_TORCHRL_DEBUG"):
+    torchrl_logger.setLevel(logging.DEBUG)
 
 # ------------------------------------------------------------------
 # Environment factories
@@ -73,8 +82,8 @@ def make_env(
         ),
     )
     if obs_norm_td is not None:
-        env.transform[1].loc = obs_norm_td["loc"].clone()
-        env.transform[1].scale = obs_norm_td["scale"].clone()
+        env.transform[1].loc = obs_norm_td["loc"].to(device).clone()
+        env.transform[1].scale = obs_norm_td["scale"].to(device).clone()
     return env
 
 
@@ -96,15 +105,29 @@ def init_obs_norm_stats(env, num_iter):
     return obs_norm.state_dict()
 
 
-def make_eval_env(env_name, device, frame_skip, logger, obs_norm_td=None):
+def make_eval_env(
+    env_name,
+    device,
+    frame_skip,
+    logger,
+    obs_norm_td=None,
+    compile_step=False,
+    compile_kwargs=None,
+):
     cls = ENVS[env_name]
-    base = cls(num_envs=1, device=device, frame_skip=frame_skip)
+    base = cls(
+        num_envs=1,
+        device=device,
+        frame_skip=frame_skip,
+        compile_step=compile_step,
+        compile_kwargs=compile_kwargs,
+    )
     obs_norm = ObservationNorm(in_keys=["observation"], standard_normal=True)
     # Initialize obs_norm BEFORE adding PixelRenderTransform, which triggers
     # a reset during construction to discover the observation spec.
     if obs_norm_td is not None:
-        obs_norm.loc = obs_norm_td["loc"].clone()
-        obs_norm.scale = obs_norm_td["scale"].clone()
+        obs_norm.loc = obs_norm_td["loc"].to(device).clone()
+        obs_norm.scale = obs_norm_td["scale"].to(device).clone()
     env = TransformedEnv(
         base,
         Compose(
@@ -130,12 +153,12 @@ def make_eval_env(env_name, device, frame_skip, logger, obs_norm_td=None):
 # ------------------------------------------------------------------
 
 
-def make_actor(obs_dim, act_dim, device):
+def make_actor(obs_dim, act_dim, device, hidden_size=256, num_layers=2):
     actor_net = nn.Sequential(
         MLP(
             in_features=obs_dim,
             out_features=2 * act_dim,
-            num_cells=[256, 256],
+            num_cells=[hidden_size] * num_layers,
             activation_class=nn.Tanh,
             device=device,
         ),
@@ -155,12 +178,12 @@ def make_actor(obs_dim, act_dim, device):
     )
 
 
-def make_critic(obs_dim, device):
+def make_critic(obs_dim, device, hidden_size=256, num_layers=2):
     return ValueOperator(
         module=MLP(
             in_features=obs_dim,
             out_features=1,
-            num_cells=[256, 256],
+            num_cells=[hidden_size] * num_layers,
             activation_class=nn.Tanh,
             device=device,
         ),
@@ -168,12 +191,23 @@ def make_critic(obs_dim, device):
     )
 
 
+def _parse_device_list(spec):
+    return [item.strip() for item in spec.split(",") if item.strip()]
+
+
+def _linear_schedule(start, end, step, duration):
+    if end is None or duration is None or duration <= 0:
+        return start
+    frac = min(max(step / duration, 0.0), 1.0)
+    return start + frac * (end - start)
+
+
 # ------------------------------------------------------------------
 # Eval
 # ------------------------------------------------------------------
 
 
-def run_eval(eval_env, actor, iteration, logger, max_steps=1000):
+def run_eval(eval_env, actor, global_step, logger, max_steps=1000):
     actor.eval()
     with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
         rollout = eval_env.rollout(
@@ -189,19 +223,189 @@ def run_eval(eval_env, actor, iteration, logger, max_steps=1000):
     log_dict = {
         "eval/episode_reward": ep_reward,
         "eval/mean_step_reward": rollout["next", "reward"].mean().item(),
-        "iteration": iteration,
+        "global_step": global_step,
     }
 
     for t in eval_env.transform:
         if isinstance(t, VideoRecorder) and t.obs:
             try:
-                t.iter = iteration
-                t.dump()
+                import wandb
+
+                vid = torch.stack(t.obs, 0).unsqueeze(0).cpu()
+                log_dict["eval/video"] = wandb.Video(
+                    vid,
+                    fps=30,
+                    format="mp4",
+                )
             except Exception:
                 pass
+            t.obs = []
+            t.count = 0
 
     logger.experiment.log(log_dict)
     return ep_reward
+
+
+def collect_eval_result(eval_env, actor, global_step, max_steps=1000):
+    actor.eval()
+    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
+        rollout = eval_env.rollout(
+            max_steps=max_steps,
+            policy=actor,
+            auto_reset=True,
+            break_when_any_done=True,
+        )
+    actor.train()
+
+    result = {
+        "eval/episode_reward": rollout["next", "episode_reward"][:, -1].mean().item(),
+        "eval/mean_step_reward": rollout["next", "reward"].mean().item(),
+        "global_step": global_step,
+    }
+
+    for t in eval_env.transform:
+        if isinstance(t, VideoRecorder) and t.obs:
+            result["video_frames"] = torch.stack(t.obs, 0).unsqueeze(0).cpu()
+            t.obs = []
+            t.count = 0
+            break
+
+    return result
+
+
+def log_eval_result(logger, result):
+    log_dict = dict(result)
+    video = log_dict.pop("video_frames", None)
+    if video is not None:
+        try:
+            import wandb
+
+            log_dict["eval/video"] = wandb.Video(
+                video,
+                fps=30,
+                format="mp4",
+            )
+        except Exception:
+            pass
+    logger.experiment.log(log_dict)
+    return log_dict["eval/episode_reward"]
+
+
+class AsyncEvaluator:
+    def __init__(
+        self,
+        *,
+        env_name,
+        device,
+        frame_skip,
+        logger,
+        obs_norm_td,
+        obs_dim,
+        act_dim,
+        hidden_size,
+        num_layers,
+        compile_step,
+        compile_kwargs,
+        max_steps=1000,
+    ):
+        self.device = device
+        self.max_steps = max_steps
+        self._request_q = queue.Queue(maxsize=1)
+        self._result_q = queue.Queue(maxsize=1)
+        self._busy = threading.Event()
+        self._thread = threading.Thread(
+            target=self._worker,
+            kwargs={
+                "env_name": env_name,
+                "device": device,
+                "frame_skip": frame_skip,
+                "logger": logger,
+                "obs_norm_td": obs_norm_td,
+                "obs_dim": obs_dim,
+                "act_dim": act_dim,
+                "hidden_size": hidden_size,
+                "num_layers": num_layers,
+                "compile_step": compile_step,
+                "compile_kwargs": compile_kwargs,
+            },
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _worker(
+        self,
+        *,
+        env_name,
+        device,
+        frame_skip,
+        logger,
+        obs_norm_td,
+        obs_dim,
+        act_dim,
+        hidden_size,
+        num_layers,
+        compile_step,
+        compile_kwargs,
+    ):
+        eval_env = make_eval_env(
+            env_name,
+            device,
+            frame_skip,
+            logger,
+            obs_norm_td=obs_norm_td,
+            compile_step=compile_step,
+            compile_kwargs=compile_kwargs,
+        )
+        eval_actor = make_actor(
+            obs_dim,
+            act_dim,
+            device,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+        )
+        while True:
+            task = self._request_q.get()
+            if task is None:
+                break
+            weights, global_step = task
+            eval_actor.load_state_dict(weights)
+            result = collect_eval_result(
+                eval_env,
+                eval_actor,
+                global_step,
+                max_steps=self.max_steps,
+            )
+            self._result_q.put(result)
+        eval_env.close()
+
+    def trigger(self, actor, global_step):
+        if self.pending:
+            return False
+        self._busy.set()
+        weights = {key: value.detach().to(self.device).clone() for key, value in actor.state_dict().items()}
+        self._request_q.put_nowait((weights, global_step))
+        return True
+
+    def poll(self):
+        try:
+            result = self._result_q.get_nowait()
+            self._busy.clear()
+            return result
+        except queue.Empty:
+            return None
+
+    def wait(self):
+        result = self._result_q.get()
+        self._busy.clear()
+        return result
+
+    @property
+    def pending(self):
+        return self._busy.is_set()
+
+    def shutdown(self):
+        self._request_q.put(None)
+        self._thread.join()
 
 
 # ------------------------------------------------------------------
@@ -248,15 +452,55 @@ def train(args):
         project=args.wandb_project,
         config=vars(args),
     )
+    logger.experiment.define_metric("global_step")
+    for metric in ("reward/*", "loss/*", "perf/*", "eval/*", "inference/*", "training/*"):
+        logger.experiment.define_metric(metric, step_metric="global_step")
     # Share obs normalization stats from the eager bootstrap to eval env.
     print(f"  Train ObservationNorm state_dict keys={list(obs_norm_td.keys())}", flush=True)
     for k, v in obs_norm_td.items():
         print(f"    {k}: shape={v.shape} dtype={v.dtype} device={v.device}", flush=True)
-    eval_env = make_eval_env(args.env, train_device, args.frame_skip, logger, obs_norm_td=obs_norm_td)
-
     # --- Models (on train device) ---
-    actor = make_actor(obs_dim, act_dim, train_device)
-    critic = make_critic(obs_dim, train_device)
+    actor = make_actor(
+        obs_dim,
+        act_dim,
+        train_device,
+        hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
+    )
+    critic = make_critic(
+        obs_dim,
+        train_device,
+        hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
+    )
+
+    eval_device = args.eval_device or train_device
+    evaluator = None
+    eval_env = None
+    if args.async_eval:
+        evaluator = AsyncEvaluator(
+            env_name=args.env,
+            device=eval_device,
+            frame_skip=args.frame_skip,
+            logger=logger,
+            obs_norm_td=obs_norm_td,
+            obs_dim=obs_dim,
+            act_dim=act_dim,
+            hidden_size=args.hidden_size,
+            num_layers=args.num_layers,
+            compile_step=args.compile,
+            compile_kwargs=compile_kwargs or None,
+        )
+    else:
+        eval_env = make_eval_env(
+            args.env,
+            eval_device,
+            args.frame_skip,
+            logger,
+            obs_norm_td=obs_norm_td,
+            compile_step=args.compile,
+            compile_kwargs=compile_kwargs or None,
+        )
 
     # --- GAE ---
     adv_module = GAE(
@@ -281,21 +525,62 @@ def train(args):
     )
 
     # --- Collector ---
-    # Env runs on env_device; collected data is stored on train_device
-    collector = SyncDataCollector(
-        train_env,
-        actor,
-        frames_per_batch=args.frames_per_batch,
-        total_frames=args.total_frames,
-        device=env_device,
-        storing_device=train_device,
-    )
+    # Env runs on env_device; collected data is stored on train_device.
+    if args.collector_mode == "sync":
+        collector = SyncDataCollector(
+            train_env,
+            actor,
+            frames_per_batch=args.frames_per_batch,
+            total_frames=args.total_frames,
+            device=env_device,
+            storing_device=train_device,
+        )
+    elif args.collector_mode == "multiasync":
+        if not args.collector_devices:
+            raise ValueError("--collector_devices is required for --collector_mode multiasync")
+        collector_devices = _parse_device_list(args.collector_devices)
+        num_workers = len(collector_devices)
+        if args.num_envs % num_workers:
+            raise ValueError("num_envs must be divisible by the number of collector devices")
+        if args.frames_per_batch % num_workers:
+            raise ValueError("frames_per_batch must be divisible by the number of collector devices")
+
+        num_envs_per_worker = args.num_envs // num_workers
+        frames_per_batch_per_worker = args.frames_per_batch // num_workers
+        env_fns = [
+            partial(
+                make_env,
+                args.env,
+                num_envs_per_worker,
+                device,
+                args.frame_skip,
+                compile_step=args.compile,
+                compile_kwargs=compile_kwargs or None,
+                obs_norm_td=obs_norm_td,
+            )
+            for device in collector_devices
+        ]
+        collector = MultiaSyncDataCollector(
+            env_fns,
+            actor,
+            frames_per_batch=[frames_per_batch_per_worker] * num_workers,
+            total_frames=args.total_frames,
+            storing_device=train_device,
+            env_device=collector_devices,
+            policy_device=collector_devices,
+            update_at_each_batch=False,
+            cat_results="stack",
+        )
+    else:
+        raise ValueError(f"Unknown collector_mode: {args.collector_mode}")
 
     print(
         f"PPO [{args.env}] obs={obs_dim} act={act_dim}\n"
         f"  env_device={env_device} train_device={train_device}\n"
         f"  num_envs={args.num_envs} frames_per_batch={args.frames_per_batch} "
         f"total_frames={args.total_frames}\n"
+        f"  collector_mode={args.collector_mode}"
+        f"{f' collector_devices={args.collector_devices}' if args.collector_devices else ''}\n"
         f"  gamma={args.gamma} gae_lambda={args.gae_lambda} "
         f"clip={args.clip_epsilon} epochs={args.num_epochs}",
         flush=True,
@@ -304,11 +589,39 @@ def train(args):
     t0 = time.perf_counter()
     best_reward = float("-inf")
     collected_frames = 0
+    prev_iter_end = t0
 
     for iteration, batch in enumerate(collector):
-        collected_frames += batch.numel()
+        iter_start = time.perf_counter()
+        collection_time = iter_start - prev_iter_end
+        batch_frames = batch.numel()
+        collected_frames += batch_frames
+
+        current_lr = _linear_schedule(
+            args.lr,
+            args.lr_final,
+            collected_frames,
+            args.lr_anneal_frames,
+        )
+        for group in optim.param_groups:
+            group["lr"] = current_lr
+
+        current_entropy_coeff = _linear_schedule(
+            args.entropy_coeff,
+            args.entropy_coeff_final,
+            collected_frames,
+            args.entropy_anneal_frames,
+        )
+        loss_module.entropy_coeff.copy_(
+            torch.as_tensor(
+                current_entropy_coeff,
+                device=loss_module.entropy_coeff.device,
+                dtype=loss_module.entropy_coeff.dtype,
+            )
+        )
 
         # --- GAE ---
+        train_start = time.perf_counter()
         with torch.no_grad():
             adv_module(batch)
         adv = batch["advantage"]
@@ -316,6 +629,7 @@ def train(args):
 
         # --- PPO epochs ---
         data = batch.reshape(-1)
+        sgd_steps = 0
         for _ in range(args.num_epochs):
             perm = torch.randperm(data.shape[0], device=train_device)
             for start in range(0, data.shape[0], args.mini_batch_size):
@@ -330,6 +644,9 @@ def train(args):
                     args.max_grad_norm,
                 )
                 optim.step()
+                sgd_steps += 1
+        train_time = time.perf_counter() - train_start
+        collector.update_policy_weights_()
 
         # --- Logging ---
         ep_done = batch["next", "done"].squeeze(-1)
@@ -338,34 +655,78 @@ def train(args):
         if mean_ep == mean_ep:  # not nan
             best_reward = max(best_reward, mean_ep)
 
+        eval_time = 0.0
+        should_eval = (iteration + 1) % args.eval_interval == 0 or iteration == 0
+        if should_eval:
+            if evaluator is not None:
+                eval_start = time.perf_counter()
+                queued = evaluator.trigger(actor, collected_frames)
+                eval_time = time.perf_counter() - eval_start
+                if queued:
+                    print(f"    [EVAL] queued on {eval_device}", flush=True)
+            else:
+                eval_start = time.perf_counter()
+                eval_r = run_eval(eval_env, actor, collected_frames, logger)
+                eval_time = time.perf_counter() - eval_start
+                print(f"    [EVAL] ep_reward={eval_r:.1f}", flush=True)
+
+        if evaluator is not None:
+            eval_result = evaluator.poll()
+            if eval_result is not None:
+                eval_r = log_eval_result(logger, eval_result)
+                print(f"    [EVAL DONE] step={eval_result['global_step']} ep_reward={eval_r:.1f}", flush=True)
+
+        iter_end = time.perf_counter()
+        iter_time = iter_end - iter_start
+        total_elapsed = iter_end - t0
+        prev_iter_end = iter_end
+
         logger.experiment.log(
             {
-                "train/mean_ep_reward": mean_ep,
-                "train/best_ep_reward": best_reward,
-                "train/mean_step_reward": batch["next", "reward"].mean().item(),
-                "train/loss_objective": loss_vals["loss_objective"].item(),
-                "train/loss_critic": loss_vals["loss_critic"].item(),
-                "train/loss_entropy": loss_vals["loss_entropy"].item(),
-                "collected_frames": collected_frames,
-                "iteration": iteration,
+                "reward/episode_reward": mean_ep,
+                "reward/best_episode_reward": best_reward,
+                "reward/mean_step_reward": batch["next", "reward"].mean().item(),
+                "loss/objective": loss_vals["loss_objective"].item(),
+                "loss/critic": loss_vals["loss_critic"].item(),
+                "loss/entropy": loss_vals["loss_entropy"].item(),
+                "perf/fps": collected_frames / total_elapsed,
+                "perf/iter_time_s": iter_time,
+                "perf/collection_frac": collection_time / iter_time if iter_time > 0 else 0.0,
+                "perf/training_frac": train_time / iter_time if iter_time > 0 else 0.0,
+                "perf/eval_frac": eval_time / iter_time if iter_time > 0 else 0.0,
+                "inference/time_s": collection_time,
+                "inference/fps": batch_frames / collection_time if collection_time > 0 else 0.0,
+                "training/time_s": train_time,
+                "training/sgd_steps": sgd_steps,
+                "training/sgd_steps_per_s": sgd_steps / train_time if train_time > 0 else 0.0,
+                "training/frames_per_s_equiv": batch_frames / train_time if train_time > 0 else 0.0,
+                "training/lr": current_lr,
+                "training/entropy_coeff": current_entropy_coeff,
+                "eval/time_s": eval_time,
+                "global_step": collected_frames,
             }
         )
 
         if (iteration + 1) % args.log_interval == 0 or iteration == 0:
-            elapsed = time.perf_counter() - t0
-            fps = collected_frames / elapsed
+            fps = collected_frames / total_elapsed
             print(
                 f"  iter {iteration + 1} | frames={collected_frames} | "
                 f"ep_reward={mean_ep:.1f} | best={best_reward:.1f} | "
-                f"fps={fps:.0f}",
+                f"fps={fps:.0f} | lr={current_lr:.2e} | ent={current_entropy_coeff:.3g} | "
+                f"collect={collection_time:.2f}s | train={train_time:.2f}s",
                 flush=True,
             )
 
-        if (iteration + 1) % args.eval_interval == 0 or iteration == 0:
-            eval_r = run_eval(eval_env, actor, iteration, logger)
-            print(f"    [EVAL] ep_reward={eval_r:.1f}", flush=True)
-
     elapsed = time.perf_counter() - t0
+    if evaluator is not None:
+        if evaluator.pending:
+            final_result = evaluator.wait()
+            log_eval_result(logger, final_result)
+        evaluator.shutdown()
+    elif eval_env is not None:
+        eval_env.close()
+    train_env.close()
+    collector.shutdown()
     print(
         f"Done. {collected_frames} frames in {elapsed:.0f}s. Best ep reward: {best_reward:.1f}",
     )
@@ -395,14 +756,20 @@ def main():
 
     # PPO
     p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument("--lr_final", type=float, default=None)
+    p.add_argument("--lr_anneal_frames", type=int, default=None)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--gae_lambda", type=float, default=0.95)
     p.add_argument("--clip_epsilon", type=float, default=0.2)
     p.add_argument("--entropy_coeff", type=float, default=0.01)
+    p.add_argument("--entropy_coeff_final", type=float, default=None)
+    p.add_argument("--entropy_anneal_frames", type=int, default=None)
     p.add_argument("--critic_coeff", type=float, default=0.5)
     p.add_argument("--num_epochs", type=int, default=10)
     p.add_argument("--mini_batch_size", type=int, default=4096)
     p.add_argument("--max_grad_norm", type=float, default=0.5)
+    p.add_argument("--hidden_size", type=int, default=256)
+    p.add_argument("--num_layers", type=int, default=2)
 
     # Logging
     p.add_argument("--log_interval", type=int, default=5)
@@ -411,7 +778,11 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", type=str, default=None, help="Env/collection device (default: cuda)")
     p.add_argument("--train_device", type=str, default=None, help="Training device (default: same as --device)")
+    p.add_argument("--eval_device", type=str, default=None, help="Evaluation device (default: same as --train_device)")
     p.add_argument("--compile", action="store_true", default=False)
+    p.add_argument("--collector_mode", choices=["sync", "multiasync"], default="sync")
+    p.add_argument("--collector_devices", type=str, default=None)
+    p.add_argument("--async_eval", action="store_true", default=False)
     p.add_argument(
         "--compile_mode", type=str, default=None, help="torch.compile mode (e.g. 'reduce-overhead', 'max-autotune')"
     )
