@@ -150,12 +150,16 @@ def train_sac(env, args, logger, eval_env=None):
         batch_size=args.batch_size,
     )
 
+    collector_kwargs = {}
+    if args.fast_collector:
+        collector_kwargs["update_traj_ids"] = False
     collector = SyncDataCollector(
         env,
         policy=actor,
         frames_per_batch=args.num_envs,
         total_frames=args.total_steps,
         init_random_frames=args.warmup,
+        **collector_kwargs,
     )
 
     num_updates = max(1, int(args.num_envs * args.utd_ratio))
@@ -226,6 +230,7 @@ def main():
     parser.add_argument("--total_steps", type=int, default=1_000_000)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--compile", action="store_true", help="torch.compile the physics step")
+    parser.add_argument("--fast_collector", action="store_true", help="Enable fast collector flags")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log_interval", type=int, default=10)
 
@@ -254,10 +259,14 @@ def main():
 
     env_cls = ENVS[args.env]
     env_kwargs = {"device": args.device, "compile_step": args.compile}
+    base_env = env_cls(num_envs=args.num_envs, **env_kwargs)
     env = TransformedEnv(
-        env_cls(num_envs=args.num_envs, **env_kwargs),
+        base_env,
         Compose(InitTracker(), RewardSum()),
     )
+    if args.fast_collector:
+        base_env._trust_step_output = True
+        env._trust_step_output = True
     mjt_logger.info(f"Env: {args.env} | batch_size={env.batch_size} | device={env.device}")
 
     eval_transforms = [RewardSum()]
@@ -266,8 +275,9 @@ def main():
             PixelRenderTransform(out_keys=["pixels"]),
             VideoRecorder(logger=logger, tag="eval_video", skip=1, make_grid=False),
         ] + eval_transforms
+    eval_env_kwargs = {"device": args.device, "compile_step": False}
     eval_env = TransformedEnv(
-        env_cls(num_envs=1, **env_kwargs),
+        env_cls(num_envs=1, **eval_env_kwargs),
         Compose(*eval_transforms),
     )
 
