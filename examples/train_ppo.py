@@ -24,6 +24,7 @@ import torch.nn as nn
 from tensordict.nn import TensorDictModule
 from torchrl._utils import logger as torchrl_logger
 from torchrl.collectors import MultiaSyncDataCollector, SyncDataCollector
+from torchrl.data import LazyTensorStorage, ReplayBuffer, SamplerWithoutReplacement
 from torchrl.envs import TransformedEnv
 from torchrl.envs.transforms import (
     Compose,
@@ -45,6 +46,7 @@ from torchrl.objectives.value import GAE
 from torchrl.record import PixelRenderTransform, VideoRecorder
 from torchrl.record.loggers.wandb import WandbLogger
 
+from mujoco_torch._src.log import logger as mjt_logger
 from mujoco_torch.zoo import ENVS
 
 if os.environ.get("MUJOCO_TORCH_TORCHRL_DEBUG"):
@@ -88,19 +90,15 @@ def make_env(
 
 
 def init_obs_norm_stats(env, num_iter):
-    print(
-        f"  ObservationNorm: computing stats ({num_iter} rollouts, {env.batch_size[0]} envs)...",
-        flush=True,
-    )
+    mjt_logger.info(f"  ObservationNorm: computing stats ({num_iter} rollouts, {env.batch_size[0]} envs)...")
     t_init = time.perf_counter()
     env.transform[1].init_stats(num_iter, reduce_dim=(0, 1), cat_dim=0)
     obs_norm = env.transform[1]
     elapsed = time.perf_counter() - t_init
-    print(
+    mjt_logger.info(
         f"  ObservationNorm: done in {elapsed:.1f}s"
         f"  loc=[{obs_norm.loc.min():.2f}, {obs_norm.loc.max():.2f}]"
-        f"  scale=[{obs_norm.scale.min():.2f}, {obs_norm.scale.max():.2f}]",
-        flush=True,
+        f"  scale=[{obs_norm.scale.min():.2f}, {obs_norm.scale.max():.2f}]"
     )
     return obs_norm.state_dict()
 
@@ -153,7 +151,7 @@ def make_eval_env(
 # ------------------------------------------------------------------
 
 
-def make_actor(obs_dim, act_dim, device, hidden_size=256, num_layers=2):
+def make_actor(obs_dim, act_dim, device, hidden_size=256, num_layers=4):
     actor_net = nn.Sequential(
         MLP(
             in_features=obs_dim,
@@ -178,7 +176,7 @@ def make_actor(obs_dim, act_dim, device, hidden_size=256, num_layers=2):
     )
 
 
-def make_critic(obs_dim, device, hidden_size=256, num_layers=2):
+def make_critic(obs_dim, device, hidden_size=256, num_layers=4):
     return ValueOperator(
         module=MLP(
             in_features=obs_dim,
@@ -193,6 +191,12 @@ def make_critic(obs_dim, device, hidden_size=256, num_layers=2):
 
 def _parse_device_list(spec):
     return [item.strip() for item in spec.split(",") if item.strip()]
+
+
+def _resolve_collector_mode(mode):
+    if mode == "multiasync":
+        return "semi-async"
+    return mode
 
 
 def _linear_schedule(start, end, step, duration):
@@ -229,18 +233,10 @@ def run_eval(eval_env, actor, global_step, logger, max_steps=1000):
     for t in eval_env.transform:
         if isinstance(t, VideoRecorder) and t.obs:
             try:
-                import wandb
-
-                vid = torch.stack(t.obs, 0).unsqueeze(0).cpu()
-                log_dict["eval/video"] = wandb.Video(
-                    vid,
-                    fps=30,
-                    format="mp4",
-                )
+                t.iter = global_step
+                t.dump()
             except Exception:
                 pass
-            t.obs = []
-            t.count = 0
 
     logger.experiment.log(log_dict)
     return ep_reward
@@ -265,30 +261,19 @@ def collect_eval_result(eval_env, actor, global_step, max_steps=1000):
 
     for t in eval_env.transform:
         if isinstance(t, VideoRecorder) and t.obs:
-            result["video_frames"] = torch.stack(t.obs, 0).unsqueeze(0).cpu()
-            t.obs = []
-            t.count = 0
+            try:
+                t.iter = global_step
+                t.dump()
+            except Exception:
+                pass
             break
 
     return result
 
 
 def log_eval_result(logger, result):
-    log_dict = dict(result)
-    video = log_dict.pop("video_frames", None)
-    if video is not None:
-        try:
-            import wandb
-
-            log_dict["eval/video"] = wandb.Video(
-                video,
-                fps=30,
-                format="mp4",
-            )
-        except Exception:
-            pass
-    logger.experiment.log(log_dict)
-    return log_dict["eval/episode_reward"]
+    logger.experiment.log(result)
+    return result["eval/episode_reward"]
 
 
 class AsyncEvaluator:
@@ -416,6 +401,7 @@ class AsyncEvaluator:
 def train(args):
     env_device = args.device
     train_device = args.train_device or env_device
+    collector_mode = _resolve_collector_mode(args.collector_mode)
 
     # --- Envs ---
     compile_kwargs = {}
@@ -456,9 +442,9 @@ def train(args):
     for metric in ("reward/*", "loss/*", "perf/*", "eval/*", "inference/*", "training/*"):
         logger.experiment.define_metric(metric, step_metric="global_step")
     # Share obs normalization stats from the eager bootstrap to eval env.
-    print(f"  Train ObservationNorm state_dict keys={list(obs_norm_td.keys())}", flush=True)
+    mjt_logger.info(f"  Train ObservationNorm state_dict keys={list(obs_norm_td.keys())}")
     for k, v in obs_norm_td.items():
-        print(f"    {k}: shape={v.shape} dtype={v.dtype} device={v.device}", flush=True)
+        mjt_logger.info(f"    {k}: shape={v.shape} dtype={v.dtype} device={v.device}")
     # --- Models (on train device) ---
     actor = make_actor(
         obs_dim,
@@ -516,6 +502,7 @@ def train(args):
         clip_epsilon=args.clip_epsilon,
         entropy_coeff=args.entropy_coeff,
         critic_coeff=args.critic_coeff,
+        normalize_advantage=True,
     )
 
     optim = torch.optim.Adam(
@@ -523,10 +510,15 @@ def train(args):
         lr=args.lr,
         eps=1e-5,
     )
+    replay_buffer = ReplayBuffer(
+        storage=LazyTensorStorage(max_size=args.frames_per_batch, device=train_device),
+        sampler=SamplerWithoutReplacement(),
+        batch_size=args.mini_batch_size,
+    )
 
     # --- Collector ---
     # Env runs on env_device; collected data is stored on train_device.
-    if args.collector_mode == "sync":
+    if collector_mode == "sync":
         collector = SyncDataCollector(
             train_env,
             actor,
@@ -535,9 +527,9 @@ def train(args):
             device=env_device,
             storing_device=train_device,
         )
-    elif args.collector_mode == "multiasync":
+    elif collector_mode == "semi-async":
         if not args.collector_devices:
-            raise ValueError("--collector_devices is required for --collector_mode multiasync")
+            raise ValueError("--collector_devices is required for --collector_mode semi-async")
         collector_devices = _parse_device_list(args.collector_devices)
         num_workers = len(collector_devices)
         if args.num_envs % num_workers:
@@ -571,19 +563,20 @@ def train(args):
             update_at_each_batch=False,
             cat_results="stack",
         )
+    elif collector_mode == "full-async":
+        raise NotImplementedError("full-async collector mode is not implemented yet")
     else:
         raise ValueError(f"Unknown collector_mode: {args.collector_mode}")
 
-    print(
+    mjt_logger.info(
         f"PPO [{args.env}] obs={obs_dim} act={act_dim}\n"
         f"  env_device={env_device} train_device={train_device}\n"
         f"  num_envs={args.num_envs} frames_per_batch={args.frames_per_batch} "
         f"total_frames={args.total_frames}\n"
-        f"  collector_mode={args.collector_mode}"
+        f"  collector_mode={collector_mode}"
         f"{f' collector_devices={args.collector_devices}' if args.collector_devices else ''}\n"
         f"  gamma={args.gamma} gae_lambda={args.gae_lambda} "
-        f"clip={args.clip_epsilon} epochs={args.num_epochs}",
-        flush=True,
+        f"clip={args.clip_epsilon} epochs={args.num_epochs}"
     )
 
     t0 = time.perf_counter()
@@ -622,19 +615,14 @@ def train(args):
 
         # --- GAE ---
         train_start = time.perf_counter()
-        with torch.no_grad():
-            adv_module(batch)
-        adv = batch["advantage"]
-        batch["advantage"] = (adv - adv.mean()) / (adv.std() + 1e-8)
-
         # --- PPO epochs ---
-        data = batch.reshape(-1)
         sgd_steps = 0
         for _ in range(args.num_epochs):
-            perm = torch.randperm(data.shape[0], device=train_device)
-            for start in range(0, data.shape[0], args.mini_batch_size):
-                idx = perm[start : start + args.mini_batch_size]
-                mb = data[idx]
+            with torch.no_grad():
+                adv_module(batch)
+            replay_buffer.empty()
+            replay_buffer.extend(batch.reshape(-1))
+            for mb in replay_buffer:
                 loss_vals = loss_module(mb)
                 total_loss = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
                 optim.zero_grad()
@@ -663,18 +651,18 @@ def train(args):
                 queued = evaluator.trigger(actor, collected_frames)
                 eval_time = time.perf_counter() - eval_start
                 if queued:
-                    print(f"    [EVAL] queued on {eval_device}", flush=True)
+                    mjt_logger.info(f"    [EVAL] queued on {eval_device}")
             else:
                 eval_start = time.perf_counter()
                 eval_r = run_eval(eval_env, actor, collected_frames, logger)
                 eval_time = time.perf_counter() - eval_start
-                print(f"    [EVAL] ep_reward={eval_r:.1f}", flush=True)
+                mjt_logger.info(f"    [EVAL] ep_reward={eval_r:.1f}")
 
         if evaluator is not None:
             eval_result = evaluator.poll()
             if eval_result is not None:
                 eval_r = log_eval_result(logger, eval_result)
-                print(f"    [EVAL DONE] step={eval_result['global_step']} ep_reward={eval_r:.1f}", flush=True)
+                mjt_logger.info(f"    [EVAL DONE] step={eval_result['global_step']} ep_reward={eval_r:.1f}")
 
         iter_end = time.perf_counter()
         iter_time = iter_end - iter_start
@@ -709,12 +697,11 @@ def train(args):
 
         if (iteration + 1) % args.log_interval == 0 or iteration == 0:
             fps = collected_frames / total_elapsed
-            print(
+            mjt_logger.info(
                 f"  iter {iteration + 1} | frames={collected_frames} | "
                 f"ep_reward={mean_ep:.1f} | best={best_reward:.1f} | "
                 f"fps={fps:.0f} | lr={current_lr:.2e} | ent={current_entropy_coeff:.3g} | "
-                f"collect={collection_time:.2f}s | train={train_time:.2f}s",
-                flush=True,
+                f"collect={collection_time:.2f}s | train={train_time:.2f}s"
             )
 
     elapsed = time.perf_counter() - t0
@@ -727,7 +714,7 @@ def train(args):
         eval_env.close()
     train_env.close()
     collector.shutdown()
-    print(
+    mjt_logger.info(
         f"Done. {collected_frames} frames in {elapsed:.0f}s. Best ep reward: {best_reward:.1f}",
     )
 
@@ -769,7 +756,7 @@ def main():
     p.add_argument("--mini_batch_size", type=int, default=4096)
     p.add_argument("--max_grad_norm", type=float, default=0.5)
     p.add_argument("--hidden_size", type=int, default=256)
-    p.add_argument("--num_layers", type=int, default=2)
+    p.add_argument("--num_layers", type=int, default=4)
 
     # Logging
     p.add_argument("--log_interval", type=int, default=5)
@@ -780,7 +767,11 @@ def main():
     p.add_argument("--train_device", type=str, default=None, help="Training device (default: same as --device)")
     p.add_argument("--eval_device", type=str, default=None, help="Evaluation device (default: same as --train_device)")
     p.add_argument("--compile", action="store_true", default=False)
-    p.add_argument("--collector_mode", choices=["sync", "multiasync"], default="sync")
+    p.add_argument(
+        "--collector_mode",
+        choices=["sync", "semi-async", "full-async", "multiasync"],
+        default="sync",
+    )
     p.add_argument("--collector_devices", type=str, default=None)
     p.add_argument("--async_eval", action="store_true", default=False)
     p.add_argument(
