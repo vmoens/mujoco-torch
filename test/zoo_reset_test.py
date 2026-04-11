@@ -69,12 +69,10 @@ def _make_env(*, auto_reset):
     env._step = MethodType(MujocoTorchEnv._step, env)
     env._prepare_ctrl = MethodType(MujocoTorchEnv._prepare_ctrl, env)
     env._build_obs = lambda: {"observation": env._dx.qpos[..., :1].to(env.dtype)}
-    env._compute_reward = (
-        lambda qpos_before, action: torch.zeros(*env.batch_size, 1, dtype=env.dtype, device=env.device)
+    env._compute_reward = lambda qpos_before, action: torch.zeros(
+        *env.batch_size, 1, dtype=env.dtype, device=env.device
     )
-    env._compute_terminated = (
-        lambda: torch.zeros(*env.batch_size, 1, dtype=torch.bool, device=env.device)
-    )
+    env._compute_terminated = lambda: torch.zeros(*env.batch_size, 1, dtype=torch.bool, device=env.device)
     return env
 
 
