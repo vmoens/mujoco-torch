@@ -5,6 +5,7 @@ import torch
 from tensordict import TensorDict
 
 pytest.importorskip("mujoco")
+pytest.importorskip("torchrl")
 
 import tensordict._unbatched as _ub
 
