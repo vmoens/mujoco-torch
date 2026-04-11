@@ -261,8 +261,14 @@ class MujocoTorchEnv(EnvBase):
     # TorchRL interface
     # ------------------------------------------------------------------
 
+    def _cast_batch_dtype(self, batch):
+        return batch.apply(
+            lambda value: value.to(self.dtype) if value.is_floating_point() else value,
+            call_on_nested=True,
+        )
+
     def _make_batch(self, n: int):
-        batch = self._dx0.expand(n).clone()
+        batch = self._cast_batch_dtype(self._dx0.expand(n).clone())
         noise = self.RESET_NOISE_SCALE
         if noise > 0:
             batch.qpos.add_(torch.empty_like(batch.qpos).uniform_(-noise, noise))
@@ -323,13 +329,7 @@ class MujocoTorchEnv(EnvBase):
         if self.auto_reset:
             done_mask = done.squeeze(-1)
             if done_mask.any():
-                n_reset = done_mask.sum()
-                reset_batch = self._dx0.expand(n_reset).clone()
-                noise = self.RESET_NOISE_SCALE
-                if noise > 0:
-                    reset_batch.qpos.add_(torch.empty_like(reset_batch.qpos).uniform_(-noise, noise))
-                    reset_batch.qvel.add_(torch.empty_like(reset_batch.qvel).uniform_(-noise, noise))
-                self._dx[done_mask] = reset_batch
+                self._dx[done_mask] = self._make_batch(int(done_mask.sum()))
                 self._step_count[done_mask] = 0
 
         return TensorDict(
