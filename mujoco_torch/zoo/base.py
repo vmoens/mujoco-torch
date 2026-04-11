@@ -130,6 +130,8 @@ class MujocoTorchEnv(EnvBase):
         # Run one step so all dtypes match what vmap(step) produces.
         dx0 = mujoco_torch.step(self.mx, dx0)
         self._dx0 = dx0
+        self._sim_dtype = self._dx0.qpos.dtype
+        self._ctrl_dtype = self._dx0.ctrl.dtype
         self._render_precomp = mujoco_torch.precompute_render_data(self.mx)
 
         _step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
@@ -197,7 +199,7 @@ class MujocoTorchEnv(EnvBase):
         Override for partial actuation (e.g. satellite CMGs where rotors
         are held at constant speed and only gimbals are agent-controlled).
         """
-        return action
+        return action.to(self._ctrl_dtype)
 
     def _build_obs(self) -> dict:
         """Build the full observation dict, optionally including pixels."""
@@ -261,14 +263,8 @@ class MujocoTorchEnv(EnvBase):
     # TorchRL interface
     # ------------------------------------------------------------------
 
-    def _cast_batch_dtype(self, batch):
-        return batch.apply(
-            lambda value: value.to(self.dtype) if value.is_floating_point() else value,
-            call_on_nested=True,
-        )
-
     def _make_batch(self, n: int):
-        batch = self._cast_batch_dtype(self._dx0.expand(n).clone())
+        batch = self._dx0.expand(n).clone()
         noise = self.RESET_NOISE_SCALE
         if noise > 0:
             batch.qpos.add_(torch.empty_like(batch.qpos).uniform_(-noise, noise))
