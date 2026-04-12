@@ -130,6 +130,8 @@ class MujocoTorchEnv(EnvBase):
         # Run one step so all dtypes match what vmap(step) produces.
         dx0 = mujoco_torch.step(self.mx, dx0)
         self._dx0 = dx0
+        self._sim_dtype = self._dx0.qpos.dtype
+        self._ctrl_dtype = self._dx0.ctrl.dtype
         self._render_precomp = mujoco_torch.precompute_render_data(self.mx)
 
         _step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
@@ -197,7 +199,7 @@ class MujocoTorchEnv(EnvBase):
         Override for partial actuation (e.g. satellite CMGs where rotors
         are held at constant speed and only gimbals are agent-controlled).
         """
-        return action
+        return action.to(self._ctrl_dtype)
 
     def _build_obs(self) -> dict:
         """Build the full observation dict, optionally including pixels."""
@@ -323,13 +325,7 @@ class MujocoTorchEnv(EnvBase):
         if self.auto_reset:
             done_mask = done.squeeze(-1)
             if done_mask.any():
-                n_reset = done_mask.sum()
-                reset_batch = self._dx0.expand(n_reset).clone()
-                noise = self.RESET_NOISE_SCALE
-                if noise > 0:
-                    reset_batch.qpos.add_(torch.empty_like(reset_batch.qpos).uniform_(-noise, noise))
-                    reset_batch.qvel.add_(torch.empty_like(reset_batch.qvel).uniform_(-noise, noise))
-                self._dx[done_mask] = reset_batch
+                self._dx[done_mask] = self._make_batch(int(done_mask.sum()))
                 self._step_count[done_mask] = 0
 
         return TensorDict(

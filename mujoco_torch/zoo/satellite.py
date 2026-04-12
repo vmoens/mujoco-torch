@@ -98,10 +98,10 @@ class _SatelliteBase(MujocoTorchEnv):
         rotor_ctrl = torch.full(
             (*self.batch_size, self.N_GIMBALS),
             self.ROTOR_SPEED,
-            dtype=self.dtype,
+            dtype=self._ctrl_dtype,
             device=self.device,
         )
-        return torch.cat([action, rotor_ctrl], dim=-1)
+        return torch.cat([action.to(self._ctrl_dtype), rotor_ctrl], dim=-1)
 
     def _make_batch(self, n):
         batch = super()._make_batch(n)
