@@ -14,8 +14,6 @@ Usage::
 import argparse
 import logging
 import os
-import queue
-import threading
 import time
 from functools import partial
 
@@ -23,7 +21,7 @@ import torch
 import torch.nn as nn
 from tensordict.nn import TensorDictModule
 from torchrl._utils import logger as torchrl_logger
-from torchrl.collectors import MultiaSyncDataCollector, SyncDataCollector
+from torchrl.collectors import Evaluator, MultiaSyncDataCollector, SyncDataCollector, aSyncDataCollector
 from torchrl.data import LazyTensorStorage, ReplayBuffer, SamplerWithoutReplacement
 from torchrl.envs import TransformedEnv
 from torchrl.envs.transforms import (
@@ -33,7 +31,6 @@ from torchrl.envs.transforms import (
     RewardSum,
     StepCounter,
 )
-from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.modules import (
     MLP,
     NormalParamExtractor,
@@ -207,193 +204,6 @@ def _linear_schedule(start, end, step, duration):
 
 
 # ------------------------------------------------------------------
-# Eval
-# ------------------------------------------------------------------
-
-
-def run_eval(eval_env, actor, global_step, logger, max_steps=1000):
-    actor.eval()
-    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
-        rollout = eval_env.rollout(
-            max_steps=max_steps,
-            policy=actor,
-            auto_reset=True,
-            break_when_any_done=True,
-        )
-    actor.train()
-
-    ep_reward = rollout["next", "episode_reward"][:, -1].mean().item()
-
-    log_dict = {
-        "eval/episode_reward": ep_reward,
-        "eval/mean_step_reward": rollout["next", "reward"].mean().item(),
-        "global_step": global_step,
-    }
-
-    for t in eval_env.transform:
-        if isinstance(t, VideoRecorder) and t.obs:
-            try:
-                t.iter = global_step
-                t.dump()
-            except Exception:
-                pass
-
-    logger.experiment.log(log_dict)
-    return ep_reward
-
-
-def collect_eval_result(eval_env, actor, global_step, max_steps=1000):
-    actor.eval()
-    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
-        rollout = eval_env.rollout(
-            max_steps=max_steps,
-            policy=actor,
-            auto_reset=True,
-            break_when_any_done=True,
-        )
-    actor.train()
-
-    result = {
-        "eval/episode_reward": rollout["next", "episode_reward"][:, -1].mean().item(),
-        "eval/mean_step_reward": rollout["next", "reward"].mean().item(),
-        "global_step": global_step,
-    }
-
-    for t in eval_env.transform:
-        if isinstance(t, VideoRecorder) and t.obs:
-            try:
-                t.iter = global_step
-                t.dump()
-            except Exception:
-                pass
-            break
-
-    return result
-
-
-def log_eval_result(logger, result):
-    logger.experiment.log(result)
-    return result["eval/episode_reward"]
-
-
-class AsyncEvaluator:
-    def __init__(
-        self,
-        *,
-        env_name,
-        device,
-        frame_skip,
-        logger,
-        obs_norm_td,
-        obs_dim,
-        act_dim,
-        hidden_size,
-        num_layers,
-        compile_step,
-        compile_kwargs,
-        max_steps=1000,
-    ):
-        self.device = device
-        self.max_steps = max_steps
-        self._request_q = queue.Queue(maxsize=1)
-        self._result_q = queue.Queue(maxsize=1)
-        self._busy = threading.Event()
-        self._thread = threading.Thread(
-            target=self._worker,
-            kwargs={
-                "env_name": env_name,
-                "device": device,
-                "frame_skip": frame_skip,
-                "logger": logger,
-                "obs_norm_td": obs_norm_td,
-                "obs_dim": obs_dim,
-                "act_dim": act_dim,
-                "hidden_size": hidden_size,
-                "num_layers": num_layers,
-                "compile_step": compile_step,
-                "compile_kwargs": compile_kwargs,
-            },
-            daemon=True,
-        )
-        self._thread.start()
-
-    def _worker(
-        self,
-        *,
-        env_name,
-        device,
-        frame_skip,
-        logger,
-        obs_norm_td,
-        obs_dim,
-        act_dim,
-        hidden_size,
-        num_layers,
-        compile_step,
-        compile_kwargs,
-    ):
-        eval_env = make_eval_env(
-            env_name,
-            device,
-            frame_skip,
-            logger,
-            obs_norm_td=obs_norm_td,
-            compile_step=compile_step,
-            compile_kwargs=compile_kwargs,
-        )
-        eval_actor = make_actor(
-            obs_dim,
-            act_dim,
-            device,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-        )
-        while True:
-            task = self._request_q.get()
-            if task is None:
-                break
-            weights, global_step = task
-            eval_actor.load_state_dict(weights)
-            result = collect_eval_result(
-                eval_env,
-                eval_actor,
-                global_step,
-                max_steps=self.max_steps,
-            )
-            self._result_q.put(result)
-        eval_env.close()
-
-    def trigger(self, actor, global_step):
-        if self.pending:
-            return False
-        self._busy.set()
-        weights = {key: value.detach().to(self.device).clone() for key, value in actor.state_dict().items()}
-        self._request_q.put_nowait((weights, global_step))
-        return True
-
-    def poll(self):
-        try:
-            result = self._result_q.get_nowait()
-            self._busy.clear()
-            return result
-        except queue.Empty:
-            return None
-
-    def wait(self):
-        result = self._result_q.get()
-        self._busy.clear()
-        return result
-
-    @property
-    def pending(self):
-        return self._busy.is_set()
-
-    def shutdown(self):
-        self._request_q.put(None)
-        self._thread.join()
-
-
-# ------------------------------------------------------------------
 # Training
 # ------------------------------------------------------------------
 
@@ -461,32 +271,28 @@ def train(args):
     )
 
     eval_device = args.eval_device or train_device
-    evaluator = None
-    eval_env = None
-    if args.async_eval:
-        evaluator = AsyncEvaluator(
-            env_name=args.env,
-            device=eval_device,
-            frame_skip=args.frame_skip,
-            logger=logger,
-            obs_norm_td=obs_norm_td,
-            obs_dim=obs_dim,
-            act_dim=act_dim,
-            hidden_size=args.hidden_size,
-            num_layers=args.num_layers,
-            compile_step=args.compile,
-            compile_kwargs=compile_kwargs or None,
-        )
-    else:
-        eval_env = make_eval_env(
-            args.env,
-            eval_device,
-            args.frame_skip,
-            logger,
-            obs_norm_td=obs_norm_td,
-            compile_step=args.compile,
-            compile_kwargs=compile_kwargs or None,
-        )
+    eval_env = make_eval_env(
+        args.env,
+        eval_device,
+        args.frame_skip,
+        logger,
+        obs_norm_td=obs_norm_td,
+        compile_step=args.compile,
+        compile_kwargs=compile_kwargs or None,
+    )
+    eval_actor = make_actor(
+        obs_dim,
+        act_dim,
+        eval_device,
+        hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
+    )
+    evaluator = Evaluator(
+        eval_env,
+        eval_actor,
+        max_steps=1000,
+        logger=logger,
+    )
 
     # --- GAE ---
     adv_module = GAE(
@@ -518,6 +324,7 @@ def train(args):
 
     # --- Collector ---
     # Env runs on env_device; collected data is stored on train_device.
+    async_replay_buffer = None
     if collector_mode == "sync":
         collector = SyncDataCollector(
             train_env,
@@ -564,7 +371,42 @@ def train(args):
             cat_results="stack",
         )
     elif collector_mode == "full-async":
-        raise NotImplementedError("full-async collector mode is not implemented yet")
+        collector_device = args.collector_devices
+        if collector_device is None:
+            collector_device = env_device
+        elif "," in collector_device:
+            collector_device = _parse_device_list(collector_device)[0]
+
+        async_replay_buffer = ReplayBuffer(
+            storage=LazyTensorStorage(
+                max_size=max(args.frames_per_batch * 2, args.num_envs * 10),
+                ndim=2,
+                shared_init=True,
+            ),
+            sampler=SamplerWithoutReplacement(),
+            shared=True,
+        )
+        collector = aSyncDataCollector(
+            partial(
+                make_env,
+                args.env,
+                args.num_envs,
+                collector_device,
+                args.frame_skip,
+                compile_step=args.compile,
+                compile_kwargs=compile_kwargs or None,
+                obs_norm_td=obs_norm_td,
+            ),
+            actor,
+            replay_buffer=async_replay_buffer,
+            frames_per_batch=args.frames_per_batch,
+            total_frames=args.total_frames,
+            storing_device="cpu",
+            env_device=collector_device,
+            policy_device=collector_device,
+            update_at_each_batch=False,
+            local_init_rb=True,
+        )
     else:
         raise ValueError(f"Unknown collector_mode: {args.collector_mode}")
 
@@ -584,134 +426,257 @@ def train(args):
     collected_frames = 0
     prev_iter_end = t0
 
-    for iteration, batch in enumerate(collector):
-        iter_start = time.perf_counter()
-        collection_time = iter_start - prev_iter_end
-        batch_frames = batch.numel()
-        collected_frames += batch_frames
+    if collector_mode == "full-async":
+        collector.start()
+        last_write_count = 0
+        iteration = -1
+        while collected_frames < args.total_frames:
+            iteration += 1
+            wait_start = time.perf_counter()
+            while True:
+                write_count = int(collector.getattr_rb("write_count"))
+                if write_count - last_write_count >= args.frames_per_batch:
+                    break
+                if write_count >= args.total_frames and write_count > last_write_count:
+                    break
+                time.sleep(0.01)
 
-        current_lr = _linear_schedule(
-            args.lr,
-            args.lr_final,
-            collected_frames,
-            args.lr_anneal_frames,
-        )
-        for group in optim.param_groups:
-            group["lr"] = current_lr
+            iter_start = time.perf_counter()
+            collection_time = iter_start - wait_start
+            batch_frames = max(1, min(write_count - last_write_count, args.frames_per_batch))
+            last_write_count = write_count
+            collected_frames = min(write_count, args.total_frames)
+            batch = async_replay_buffer.sample(batch_size=args.frames_per_batch).to(train_device)
 
-        current_entropy_coeff = _linear_schedule(
-            args.entropy_coeff,
-            args.entropy_coeff_final,
-            collected_frames,
-            args.entropy_anneal_frames,
-        )
-        loss_module.entropy_coeff.copy_(
-            torch.as_tensor(
-                current_entropy_coeff,
-                device=loss_module.entropy_coeff.device,
-                dtype=loss_module.entropy_coeff.dtype,
+            current_lr = _linear_schedule(
+                args.lr,
+                args.lr_final,
+                collected_frames,
+                args.lr_anneal_frames,
             )
-        )
+            for group in optim.param_groups:
+                group["lr"] = current_lr
 
-        # --- GAE ---
-        train_start = time.perf_counter()
-        # --- PPO epochs ---
-        sgd_steps = 0
-        for _ in range(args.num_epochs):
-            with torch.no_grad():
-                adv_module(batch)
-            replay_buffer.empty()
-            replay_buffer.extend(batch.reshape(-1))
-            for mb in replay_buffer:
-                loss_vals = loss_module(mb)
-                total_loss = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
-                optim.zero_grad()
-                total_loss.backward()
-                nn.utils.clip_grad_norm_(
-                    loss_module.parameters(),
-                    args.max_grad_norm,
+            current_entropy_coeff = _linear_schedule(
+                args.entropy_coeff,
+                args.entropy_coeff_final,
+                collected_frames,
+                args.entropy_anneal_frames,
+            )
+            loss_module.entropy_coeff.copy_(
+                torch.as_tensor(
+                    current_entropy_coeff,
+                    device=loss_module.entropy_coeff.device,
+                    dtype=loss_module.entropy_coeff.dtype,
                 )
-                optim.step()
-                sgd_steps += 1
-        train_time = time.perf_counter() - train_start
-        collector.update_policy_weights_()
-
-        # --- Logging ---
-        ep_done = batch["next", "done"].squeeze(-1)
-        ep_rews = batch["next", "episode_reward"][ep_done]
-        mean_ep = ep_rews.mean().item() if ep_rews.numel() > 0 else float("nan")
-        if mean_ep == mean_ep:  # not nan
-            best_reward = max(best_reward, mean_ep)
-
-        eval_time = 0.0
-        should_eval = (iteration + 1) % args.eval_interval == 0 or iteration == 0
-        if should_eval:
-            if evaluator is not None:
-                eval_start = time.perf_counter()
-                queued = evaluator.trigger(actor, collected_frames)
-                eval_time = time.perf_counter() - eval_start
-                if queued:
-                    mjt_logger.info(f"    [EVAL] queued on {eval_device}")
-            else:
-                eval_start = time.perf_counter()
-                eval_r = run_eval(eval_env, actor, collected_frames, logger)
-                eval_time = time.perf_counter() - eval_start
-                mjt_logger.info(f"    [EVAL] ep_reward={eval_r:.1f}")
-
-        if evaluator is not None:
-            eval_result = evaluator.poll()
-            if eval_result is not None:
-                eval_r = log_eval_result(logger, eval_result)
-                mjt_logger.info(f"    [EVAL DONE] step={eval_result['global_step']} ep_reward={eval_r:.1f}")
-
-        iter_end = time.perf_counter()
-        iter_time = iter_end - iter_start
-        total_elapsed = iter_end - t0
-        prev_iter_end = iter_end
-
-        logger.experiment.log(
-            {
-                "reward/episode_reward": mean_ep,
-                "reward/best_episode_reward": best_reward,
-                "reward/mean_step_reward": batch["next", "reward"].mean().item(),
-                "loss/objective": loss_vals["loss_objective"].item(),
-                "loss/critic": loss_vals["loss_critic"].item(),
-                "loss/entropy": loss_vals["loss_entropy"].item(),
-                "perf/fps": collected_frames / total_elapsed,
-                "perf/iter_time_s": iter_time,
-                "perf/collection_frac": collection_time / iter_time if iter_time > 0 else 0.0,
-                "perf/training_frac": train_time / iter_time if iter_time > 0 else 0.0,
-                "perf/eval_frac": eval_time / iter_time if iter_time > 0 else 0.0,
-                "inference/time_s": collection_time,
-                "inference/fps": batch_frames / collection_time if collection_time > 0 else 0.0,
-                "training/time_s": train_time,
-                "training/sgd_steps": sgd_steps,
-                "training/sgd_steps_per_s": sgd_steps / train_time if train_time > 0 else 0.0,
-                "training/frames_per_s_equiv": batch_frames / train_time if train_time > 0 else 0.0,
-                "training/lr": current_lr,
-                "training/entropy_coeff": current_entropy_coeff,
-                "eval/time_s": eval_time,
-                "global_step": collected_frames,
-            }
-        )
-
-        if (iteration + 1) % args.log_interval == 0 or iteration == 0:
-            fps = collected_frames / total_elapsed
-            mjt_logger.info(
-                f"  iter {iteration + 1} | frames={collected_frames} | "
-                f"ep_reward={mean_ep:.1f} | best={best_reward:.1f} | "
-                f"fps={fps:.0f} | lr={current_lr:.2e} | ent={current_entropy_coeff:.3g} | "
-                f"collect={collection_time:.2f}s | train={train_time:.2f}s"
             )
+
+            train_start = time.perf_counter()
+            sgd_steps = 0
+            for _ in range(args.num_epochs):
+                with torch.no_grad():
+                    adv_module(batch)
+                replay_buffer.empty()
+                replay_buffer.extend(batch.reshape(-1))
+                for mb in replay_buffer:
+                    loss_vals = loss_module(mb)
+                    total_loss = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
+                    optim.zero_grad()
+                    total_loss.backward()
+                    nn.utils.clip_grad_norm_(
+                        loss_module.parameters(),
+                        args.max_grad_norm,
+                    )
+                    optim.step()
+                    sgd_steps += 1
+            train_time = time.perf_counter() - train_start
+            collector.update_policy_weights_()
+
+            ep_done = batch["next", "done"].squeeze(-1)
+            ep_rews = batch["next", "episode_reward"][ep_done]
+            mean_ep = ep_rews.mean().item() if ep_rews.numel() > 0 else float("nan")
+            if mean_ep == mean_ep:
+                best_reward = max(best_reward, mean_ep)
+
+            eval_time = 0.0
+            should_eval = (iteration + 1) % args.eval_interval == 0 or iteration == 0
+            if should_eval:
+                if args.async_eval:
+                    eval_start = time.perf_counter()
+                    evaluator.trigger_eval(actor, step=collected_frames)
+                    eval_time = time.perf_counter() - eval_start
+                    mjt_logger.info(f"    [EVAL] queued on {eval_device}")
+                else:
+                    eval_start = time.perf_counter()
+                    eval_metrics = evaluator.evaluate(actor, step=collected_frames)
+                    eval_time = time.perf_counter() - eval_start
+                    mjt_logger.info(f"    [EVAL] ep_reward={eval_metrics['eval/reward']:.1f}")
+
+            if args.async_eval:
+                eval_result = evaluator.poll()
+                if eval_result is not None:
+                    mjt_logger.info(f"    [EVAL DONE] step={eval_result['eval/step']} ep_reward={eval_result['eval/reward']:.1f}")
+
+            iter_end = time.perf_counter()
+            iter_time = iter_end - iter_start
+            total_elapsed = iter_end - t0
+
+            logger.experiment.log(
+                {
+                    "reward/episode_reward": mean_ep,
+                    "reward/best_episode_reward": best_reward,
+                    "reward/mean_step_reward": batch["next", "reward"].mean().item(),
+                    "loss/objective": loss_vals["loss_objective"].item(),
+                    "loss/critic": loss_vals["loss_critic"].item(),
+                    "loss/entropy": loss_vals["loss_entropy"].item(),
+                    "perf/fps": collected_frames / total_elapsed,
+                    "perf/iter_time_s": iter_time,
+                    "perf/collection_frac": collection_time / iter_time if iter_time > 0 else 0.0,
+                    "perf/training_frac": train_time / iter_time if iter_time > 0 else 0.0,
+                    "perf/eval_frac": eval_time / iter_time if iter_time > 0 else 0.0,
+                    "inference/time_s": collection_time,
+                    "inference/fps": batch_frames / collection_time if collection_time > 0 else 0.0,
+                    "training/time_s": train_time,
+                    "training/sgd_steps": sgd_steps,
+                    "training/sgd_steps_per_s": sgd_steps / train_time if train_time > 0 else 0.0,
+                    "training/frames_per_s_equiv": batch_frames / train_time if train_time > 0 else 0.0,
+                    "training/lr": current_lr,
+                    "training/entropy_coeff": current_entropy_coeff,
+                    "eval/time_s": eval_time,
+                    "global_step": collected_frames,
+                }
+            )
+
+            if (iteration + 1) % args.log_interval == 0 or iteration == 0:
+                fps = collected_frames / total_elapsed
+                mjt_logger.info(
+                    f"  iter {iteration + 1} | frames={collected_frames} | "
+                    f"ep_reward={mean_ep:.1f} | best={best_reward:.1f} | "
+                    f"fps={fps:.0f} | lr={current_lr:.2e} | ent={current_entropy_coeff:.3g} | "
+                    f"collect={collection_time:.2f}s | train={train_time:.2f}s"
+                )
+    else:
+        for iteration, batch in enumerate(collector):
+            iter_start = time.perf_counter()
+            collection_time = iter_start - prev_iter_end
+            batch_frames = batch.numel()
+            collected_frames += batch_frames
+
+            current_lr = _linear_schedule(
+                args.lr,
+                args.lr_final,
+                collected_frames,
+                args.lr_anneal_frames,
+            )
+            for group in optim.param_groups:
+                group["lr"] = current_lr
+
+            current_entropy_coeff = _linear_schedule(
+                args.entropy_coeff,
+                args.entropy_coeff_final,
+                collected_frames,
+                args.entropy_anneal_frames,
+            )
+            loss_module.entropy_coeff.copy_(
+                torch.as_tensor(
+                    current_entropy_coeff,
+                    device=loss_module.entropy_coeff.device,
+                    dtype=loss_module.entropy_coeff.dtype,
+                )
+            )
+
+            train_start = time.perf_counter()
+            sgd_steps = 0
+            for _ in range(args.num_epochs):
+                with torch.no_grad():
+                    adv_module(batch)
+                replay_buffer.empty()
+                replay_buffer.extend(batch.reshape(-1))
+                for mb in replay_buffer:
+                    loss_vals = loss_module(mb)
+                    total_loss = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
+                    optim.zero_grad()
+                    total_loss.backward()
+                    nn.utils.clip_grad_norm_(
+                        loss_module.parameters(),
+                        args.max_grad_norm,
+                    )
+                    optim.step()
+                    sgd_steps += 1
+            train_time = time.perf_counter() - train_start
+            collector.update_policy_weights_()
+
+            ep_done = batch["next", "done"].squeeze(-1)
+            ep_rews = batch["next", "episode_reward"][ep_done]
+            mean_ep = ep_rews.mean().item() if ep_rews.numel() > 0 else float("nan")
+            if mean_ep == mean_ep:  # not nan
+                best_reward = max(best_reward, mean_ep)
+
+            eval_time = 0.0
+            should_eval = (iteration + 1) % args.eval_interval == 0 or iteration == 0
+            if should_eval:
+                if args.async_eval:
+                    eval_start = time.perf_counter()
+                    evaluator.trigger_eval(actor, step=collected_frames)
+                    eval_time = time.perf_counter() - eval_start
+                    mjt_logger.info(f"    [EVAL] queued on {eval_device}")
+                else:
+                    eval_start = time.perf_counter()
+                    eval_metrics = evaluator.evaluate(actor, step=collected_frames)
+                    eval_time = time.perf_counter() - eval_start
+                    mjt_logger.info(f"    [EVAL] ep_reward={eval_metrics['eval/reward']:.1f}")
+
+            if args.async_eval:
+                eval_result = evaluator.poll()
+                if eval_result is not None:
+                    mjt_logger.info(f"    [EVAL DONE] step={eval_result['eval/step']} ep_reward={eval_result['eval/reward']:.1f}")
+
+            iter_end = time.perf_counter()
+            iter_time = iter_end - iter_start
+            total_elapsed = iter_end - t0
+            prev_iter_end = iter_end
+
+            logger.experiment.log(
+                {
+                    "reward/episode_reward": mean_ep,
+                    "reward/best_episode_reward": best_reward,
+                    "reward/mean_step_reward": batch["next", "reward"].mean().item(),
+                    "loss/objective": loss_vals["loss_objective"].item(),
+                    "loss/critic": loss_vals["loss_critic"].item(),
+                    "loss/entropy": loss_vals["loss_entropy"].item(),
+                    "perf/fps": collected_frames / total_elapsed,
+                    "perf/iter_time_s": iter_time,
+                    "perf/collection_frac": collection_time / iter_time if iter_time > 0 else 0.0,
+                    "perf/training_frac": train_time / iter_time if iter_time > 0 else 0.0,
+                    "perf/eval_frac": eval_time / iter_time if iter_time > 0 else 0.0,
+                    "inference/time_s": collection_time,
+                    "inference/fps": batch_frames / collection_time if collection_time > 0 else 0.0,
+                    "training/time_s": train_time,
+                    "training/sgd_steps": sgd_steps,
+                    "training/sgd_steps_per_s": sgd_steps / train_time if train_time > 0 else 0.0,
+                    "training/frames_per_s_equiv": batch_frames / train_time if train_time > 0 else 0.0,
+                    "training/lr": current_lr,
+                    "training/entropy_coeff": current_entropy_coeff,
+                    "eval/time_s": eval_time,
+                    "global_step": collected_frames,
+                }
+            )
+
+            if (iteration + 1) % args.log_interval == 0 or iteration == 0:
+                fps = collected_frames / total_elapsed
+                mjt_logger.info(
+                    f"  iter {iteration + 1} | frames={collected_frames} | "
+                    f"ep_reward={mean_ep:.1f} | best={best_reward:.1f} | "
+                    f"fps={fps:.0f} | lr={current_lr:.2e} | ent={current_entropy_coeff:.3g} | "
+                    f"collect={collection_time:.2f}s | train={train_time:.2f}s"
+                )
 
     elapsed = time.perf_counter() - t0
-    if evaluator is not None:
-        if evaluator.pending:
-            final_result = evaluator.wait()
-            log_eval_result(logger, final_result)
-        evaluator.shutdown()
-    elif eval_env is not None:
-        eval_env.close()
+    if args.async_eval:
+        final_result = evaluator.wait()
+        if final_result is not None:
+            mjt_logger.info(f"    [EVAL DONE] step={final_result['eval/step']} ep_reward={final_result['eval/reward']:.1f}")
+    evaluator.shutdown()
     train_env.close()
     collector.shutdown()
     mjt_logger.info(
