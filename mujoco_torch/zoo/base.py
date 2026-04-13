@@ -1,5 +1,6 @@
 """Base batched TorchRL environment backed by mujoco-torch."""
 
+import logging
 import re
 from abc import abstractmethod
 
@@ -11,6 +12,8 @@ from torchrl.data import Bounded, Composite, Unbounded
 from torchrl.envs import EnvBase
 
 import mujoco_torch
+
+log = logging.getLogger(__name__)
 
 _TEST_DATA = epath.resource_path("mujoco_torch") / "test_data"
 
@@ -278,8 +281,50 @@ class MujocoTorchEnv(EnvBase):
 
         self._dx = self._dx.replace(ctrl=ctrl)
         step_fn = self._physics_step
-        for _ in range(self.FRAME_SKIP):
+        for sub_step in range(self.FRAME_SKIP):
+            _dx_before_sub = self._dx.clone()
             self._dx = step_fn(self._dx[0]).unsqueeze(0) if self.num_envs == 1 else torch.vmap(step_fn)(self._dx)
+
+            # Per-sub-step NaN guard: catch the FIRST sub-step producing NaN
+            if not getattr(self, "_nan_dumped", False):
+                qpos_bad = ~torch.isfinite(self._dx.qpos)
+                qvel_bad = ~torch.isfinite(self._dx.qvel)
+                any_bad = qpos_bad.flatten(1).any(dim=-1) | qvel_bad.flatten(1).any(dim=-1)
+                if any_bad.any():
+                    self._nan_dumped = True
+                    dump = {
+                        "before": {
+                            "qpos": _dx_before_sub.qpos.detach().cpu(),
+                            "qvel": _dx_before_sub.qvel.detach().cpu(),
+                            "qacc": _dx_before_sub.qacc.detach().cpu(),
+                            "ctrl": _dx_before_sub.ctrl.detach().cpu(),
+                        },
+                        "after": {
+                            "qpos": self._dx.qpos.detach().cpu(),
+                            "qvel": self._dx.qvel.detach().cpu(),
+                            "qacc": self._dx.qacc.detach().cpu(),
+                            "ctrl": self._dx.ctrl.detach().cpu(),
+                        },
+                        "action": action.detach().cpu(),
+                        "step_count": self._step_count.detach().cpu(),
+                        "sub_step": sub_step,
+                        "frame_skip": self.FRAME_SKIP,
+                        "_bad_env_mask": any_bad.detach().cpu(),
+                        "_qpos_bad_mask": qpos_bad.detach().cpu(),
+                        "_qvel_bad_mask": qvel_bad.detach().cpu(),
+                    }
+                    dump_path = "/tmp/mujoco_nan_dump.pt"
+                    torch.save(dump, dump_path)
+                    n_bad = any_bad.sum().item()
+                    n_qpos = qpos_bad.flatten(1).any(-1).sum().item()
+                    n_qvel = qvel_bad.flatten(1).any(-1).sum().item()
+                    log.error(
+                        "NaN in physics sub-step %d/%d: %d/%d envs "
+                        "(qpos: %d, qvel: %d). Dumped to %s",
+                        sub_step, self.FRAME_SKIP, n_bad,
+                        self._dx.qpos.shape[0], n_qpos, n_qvel, dump_path,
+                    )
+
         self._step_count += 1
 
         reward = self._compute_reward(qpos_before, action)
