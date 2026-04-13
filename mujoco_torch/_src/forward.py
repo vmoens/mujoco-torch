@@ -468,7 +468,8 @@ def step(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     d = d.clone(recurse=False)
 
     # Safety checks matching MuJoCo C's mj_checkPos/mj_checkVel/mj_checkAcc.
-    d = _check_state(m, d)
+    # DISABLED for NaN diagnostic — we want to observe the raw NaN propagation
+    # d = _check_state(m, d)
 
     cfg = get_diff_config()
     if cfg.adaptive_integration:

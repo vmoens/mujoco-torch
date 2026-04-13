@@ -135,9 +135,11 @@ class MujocoTorchEnv(EnvBase):
         self._render_precomp = mujoco_torch.precompute_render_data(self.mx)
 
         _step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
+        self._raw_step_fn = _step_fn
         frame_skip = self.FRAME_SKIP
         compile_kwargs = compile_kwargs or {}
         _vmap_step = torch.vmap(_step_fn)
+        self._raw_vmap_step = _vmap_step
         if num_envs == 1:
 
             def _multi_step(d):
@@ -304,10 +306,79 @@ class MujocoTorchEnv(EnvBase):
         qpos_before = self._dx.qpos.clone()
 
         self._dx.update_(ctrl=ctrl)
-        if self._single_env:
-            self._dx = self._physics_step(self._dx[0]).unsqueeze(0)
-        else:
-            self._dx = self._physics_step(self._dx)
+
+        # -- NaN diagnostic: per-sub-step loop with guard --
+        # Bypass self._physics_step (compiled wrapper) and run sub-steps
+        # manually so we can check for NaN between each sub-step.
+        for sub_step in range(self.FRAME_SKIP):
+            _dx_before = self._dx.clone()
+            if self._single_env:
+                self._dx = self._raw_step_fn(self._dx[0]).unsqueeze(0)
+            else:
+                self._dx = self._raw_vmap_step(self._dx)
+
+            # Check for primary NaN event: finite input → NaN output
+            if not getattr(self, "_nan_dumped", False):
+                qpos_bad = ~torch.isfinite(self._dx.qpos)
+                qvel_bad = ~torch.isfinite(self._dx.qvel)
+                any_bad = qpos_bad.flatten(1).any(dim=-1) | qvel_bad.flatten(1).any(dim=-1)
+                if any_bad.any():
+                    # Check if input was finite (primary event)
+                    before_qpos_finite = torch.isfinite(_dx_before.qpos).all()
+                    before_qvel_finite = torch.isfinite(_dx_before.qvel).all()
+                    before_ctrl_finite = torch.isfinite(_dx_before.ctrl).all()
+                    self._nan_dumped = True
+                    dump = {
+                        "before": {
+                            "qpos": _dx_before.qpos[any_bad].detach().cpu(),
+                            "qvel": _dx_before.qvel[any_bad].detach().cpu(),
+                            "qacc": _dx_before.qacc[any_bad].detach().cpu(),
+                            "ctrl": _dx_before.ctrl[any_bad].detach().cpu(),
+                        },
+                        "before_all": {
+                            "qpos": _dx_before.qpos.detach().cpu(),
+                            "qvel": _dx_before.qvel.detach().cpu(),
+                            "qacc": _dx_before.qacc.detach().cpu(),
+                            "ctrl": _dx_before.ctrl.detach().cpu(),
+                        },
+                        "after": {
+                            "qpos": self._dx.qpos[any_bad].detach().cpu(),
+                            "qvel": self._dx.qvel[any_bad].detach().cpu(),
+                            "qacc": self._dx.qacc[any_bad].detach().cpu(),
+                            "ctrl": self._dx.ctrl[any_bad].detach().cpu(),
+                        },
+                        "after_all": {
+                            "qpos": self._dx.qpos.detach().cpu(),
+                            "qvel": self._dx.qvel.detach().cpu(),
+                            "qacc": self._dx.qacc.detach().cpu(),
+                            "ctrl": self._dx.ctrl.detach().cpu(),
+                        },
+                        "action": action[any_bad].detach().cpu(),
+                        "step_count": self._step_count.detach().cpu(),
+                        "sub_step": sub_step,
+                        "frame_skip": self.FRAME_SKIP,
+                        "_bad_env_mask": any_bad.detach().cpu(),
+                        "_qpos_bad_mask": qpos_bad[any_bad].detach().cpu(),
+                        "_qvel_bad_mask": qvel_bad[any_bad].detach().cpu(),
+                        "_before_all_finite": {
+                            "qpos": before_qpos_finite.item(),
+                            "qvel": before_qvel_finite.item(),
+                            "ctrl": before_ctrl_finite.item(),
+                        },
+                    }
+                    torch.save(dump, "/tmp/mujoco_nan_dump.pt")
+                    import logging
+                    log = logging.getLogger(__name__)
+                    n_bad = any_bad.sum().item()
+                    log.error(
+                        "NaN in physics sub-step %d/%d: %d/%d envs. "
+                        "Input finite: qpos=%s qvel=%s ctrl=%s. "
+                        "Dump saved to /tmp/mujoco_nan_dump.pt",
+                        sub_step, self.FRAME_SKIP, n_bad, self.num_envs,
+                        before_qpos_finite.item(), before_qvel_finite.item(),
+                        before_ctrl_finite.item(),
+                    )
+
         self._step_count += 1
 
         reward = self._compute_reward(qpos_before, action)
