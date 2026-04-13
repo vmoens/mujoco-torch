@@ -1,5 +1,6 @@
 """Base batched TorchRL environment backed by mujoco-torch."""
 
+import logging
 import re
 from abc import abstractmethod
 
@@ -11,6 +12,8 @@ from torchrl.data import Bounded, Composite, Unbounded
 from torchrl.envs import EnvBase
 
 import mujoco_torch
+
+log = logging.getLogger(__name__)
 
 _TEST_DATA = epath.resource_path("mujoco_torch") / "test_data"
 
@@ -303,12 +306,48 @@ class MujocoTorchEnv(EnvBase):
 
         qpos_before = self._dx.qpos.clone()
 
+        # Snapshot physics state before step for NaN diagnostics
+        _dx_before = self._dx.clone()
+
         self._dx.update_(ctrl=ctrl)
         if self._single_env:
             self._dx = self._physics_step(self._dx[0]).unsqueeze(0)
         else:
             self._dx = self._physics_step(self._dx)
         self._step_count += 1
+
+        # NaN diagnostic guard: detect first NaN in physics output
+        if not torch.isfinite(self._dx.qpos).all() and not getattr(self, "_nan_dumped", False):
+            self._nan_dumped = True
+            bad = ~torch.isfinite(self._dx.qpos)
+            bad_envs = bad.flatten(1).any(dim=-1)
+            n_bad = bad_envs.sum().item()
+            dump = {
+                "before": {
+                    "qpos": _dx_before.qpos.detach().cpu(),
+                    "qvel": _dx_before.qvel.detach().cpu(),
+                    "qacc": _dx_before.qacc.detach().cpu(),
+                    "ctrl": _dx_before.ctrl.detach().cpu(),
+                },
+                "after": {
+                    "qpos": self._dx.qpos.detach().cpu(),
+                    "qvel": self._dx.qvel.detach().cpu(),
+                    "qacc": self._dx.qacc.detach().cpu(),
+                    "ctrl": self._dx.ctrl.detach().cpu(),
+                },
+                "action": action.detach().cpu(),
+                "step_count": self._step_count.detach().cpu(),
+                "_bad_env_mask": bad_envs.detach().cpu(),
+            }
+            dump_path = "/tmp/mujoco_nan_dump.pt"
+            torch.save(dump, dump_path)
+            log.error(
+                "NaN in physics output qpos: %d/%d envs at step %s. "
+                "Dumped before/after state to %s",
+                n_bad, self._dx.qpos.shape[0],
+                self._step_count[bad_envs][0].item() if bad_envs.any() else "?",
+                dump_path,
+            )
 
         reward = self._compute_reward(qpos_before, action)
         terminated = self._compute_terminated()
