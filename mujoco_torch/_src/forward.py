@@ -38,6 +38,27 @@ from mujoco_torch._src.diff_config import get_diff_config
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import BiasType, Data, DisableBit, DynType, GainType, IntegratorType, JointType, Model
 
+_MAXVAL = mujoco.mjMAXVAL  # 1e10
+
+
+def _check_state(m: Model, d: Data) -> Data:
+    """Check qpos, qvel, qacc for NaN/inf/extreme values and reset if needed.
+
+    Mirrors MuJoCo C's ``mj_checkPos``, ``mj_checkVel``, ``mj_checkAcc``.
+    Uses ``torch.where`` so the operation is vmap- and compile-safe.
+    """
+    bad_qpos = ~torch.isfinite(d.qpos) | (d.qpos.abs() > _MAXVAL)
+    bad_qvel = ~torch.isfinite(d.qvel) | (d.qvel.abs() > _MAXVAL)
+    bad_qacc = ~torch.isfinite(d.qacc) | (d.qacc.abs() > _MAXVAL)
+
+    qpos = torch.where(bad_qpos, m.qpos0, d.qpos)
+    qvel = torch.where(bad_qvel, torch.zeros_like(d.qvel), d.qvel)
+    qacc = torch.where(bad_qacc, torch.zeros_like(d.qacc), d.qacc)
+
+    d.update_(qpos=qpos, qvel=qvel, qacc=qacc)
+    return d
+
+
 # RK4 tableau (cached per device to avoid CPU→CUDA copies during graph capture)
 _RK4_A = math._CachedConst(
     [
@@ -446,6 +467,9 @@ def step(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     # mutate the caller's Data.
     d = d.clone(recurse=False)
 
+    # Safety checks matching MuJoCo C's mj_checkPos/mj_checkVel/mj_checkAcc.
+    d = _check_state(m, d)
+
     cfg = get_diff_config()
     if cfg.adaptive_integration:
         d = _adaptive(m, d, fixed_iterations=fixed_iterations)
@@ -473,4 +497,5 @@ fwd_acceleration = _acceleration
 euler = _euler
 rungekutta4 = _rungekutta4
 implicit = _implicit
+check_state = _check_state
 adaptive = _adaptive
