@@ -203,6 +203,50 @@ class ValidateInputTest(absltest.TestCase):
         mx = mujoco_torch.device_put(m)
         self.assertEqual(mx.ntendon, 1)
 
+    def test_visual_only_mesh_skips_mesh_convex_precompute(self):
+        m = mujoco.MjModel.from_xml_string("""
+        <mujoco>
+            <asset>
+            <mesh name="tet" vertex="0 0 0 1 0 0 0 1 0 0 0 1" face="0 1 2 0 1 3 0 2 3 1 2 3"/>
+            </asset>
+            <worldbody>
+            <body pos="0 0 1">
+                <freejoint/>
+                <geom type="mesh" mesh="tet" contype="0" conaffinity="0"/>
+            </body>
+            <geom type="plane" size="2 2 0.1"/>
+            </worldbody>
+        </mujoco>
+        """)
+        self.assertEqual(int(m.mesh_graphadr[0]), -1)
+
+        mx = mujoco_torch.device_put(m)
+
+        self.assertLen(mx.mesh_convex, 1)
+        self.assertIsNone(mx.mesh_convex[0])
+
+    def test_colliding_mesh_still_precomputes_mesh_convex(self):
+        m = mujoco.MjModel.from_xml_string("""
+        <mujoco>
+            <asset>
+            <mesh name="tet" vertex="0 0 0 1 0 0 0 1 0 0 0 1" face="0 1 2 0 1 3 0 2 3 1 2 3"/>
+            </asset>
+            <worldbody>
+            <geom type="plane" size="2 2 0.1"/>
+            <body pos="0 0 0.3">
+                <freejoint/>
+                <geom type="mesh" mesh="tet"/>
+            </body>
+            </worldbody>
+        </mujoco>
+        """)
+        self.assertNotEqual(int(m.mesh_graphadr[0]), -1)
+
+        mx = mujoco_torch.device_put(m)
+
+        self.assertLen(mx.mesh_convex, 1)
+        self.assertIsNotNone(mx.mesh_convex[0])
+
 
 if __name__ == "__main__":
     absltest.main()
