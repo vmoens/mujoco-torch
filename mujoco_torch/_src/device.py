@@ -539,8 +539,30 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     result = {"cache_id": _model_cache_id_counter}
     for k, v in mesh_kwargs.items():
         result[k] = tuple(torch.tensor(x) if x is not None else None for x in v)
-    # mesh_convex: one ConvexMesh per mesh
-    result["mesh_convex"] = tuple(mesh.convex(value, i) for i in range(value.nmesh))
+
+    geom_convex_data = (
+        result["geom_convex_face"],
+        result["geom_convex_vert"],
+        result["geom_convex_edge"],
+    )
+    candidate_set = collision_driver.collision_candidates(
+        value,
+        geom_convex_data=geom_convex_data,
+    )
+
+    mesh_convex: list[Any | None] = [None] * int(value.nmesh)
+    mesh_geom_type = int(types.GeomType.MESH)
+    for key, cands in candidate_set.items():
+        t1, t2 = int(key[0]), int(key[1])
+        for cand in cands:
+            for t, geom_id in ((t1, cand.geom1), (t2, cand.geom2)):
+                if t != mesh_geom_type:
+                    continue
+                data_id = int(value.geom_dataid[geom_id])
+                if data_id >= 0 and mesh_convex[data_id] is None:
+                    mesh_convex[data_id] = mesh.convex(value, data_id)
+    result["mesh_convex"] = tuple(mesh_convex)
+
     result["dof_hasfrictionloss"] = np.array(value.dof_frictionloss > 0)
     result["geom_rbound_hfield"] = np.array(value.geom_rbound)
     result["tendon_hasfrictionloss"] = np.array(value.tendon_frictionloss > 0)
@@ -573,15 +595,6 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     result["condim_tensor_py"] = collision_driver.make_condim(value)
     result["constraint_data_py"] = _compute_constraint_data(value)
 
-    geom_convex_data = (
-        result["geom_convex_face"],
-        result["geom_convex_vert"],
-        result["geom_convex_edge"],
-    )
-    candidate_set = collision_driver.collision_candidates(
-        value,
-        geom_convex_data=geom_convex_data,
-    )
     max_cp = collision_driver._max_contact_points(value)
     collision_groups = []
     total_contacts = 0
