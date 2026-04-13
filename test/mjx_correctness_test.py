@@ -270,9 +270,7 @@ class TestHalfCheetahCorrectness:
         qvel_kick = rng.randn(m_mj.nv) * 0.05
 
         mjx_results = _run_mjx(m_mj, qvel_kick, NSTEPS, disable_constraint=False)
-        torch_results = _run_torch_vmap(
-            m_mj, qvel_kick, NSTEPS, disable_constraint=False
-        )
+        torch_results = _run_torch_vmap(m_mj, qvel_kick, NSTEPS, disable_constraint=False)
         _compare_trajectories(mjx_results, torch_results, HALFCHEETAH_MODEL, atol=1e-5)
 
     def test_halfcheetah_vmap_with_actions(self):
@@ -283,9 +281,7 @@ class TestHalfCheetahCorrectness:
         ctrl_seq = rng.uniform(-1, 1, (NSTEPS, m_mj.nu))
 
         mjx_results = _run_mjx(m_mj, qvel_kick, NSTEPS, ctrl_seq=ctrl_seq)
-        torch_results = _run_torch_vmap(
-            m_mj, qvel_kick, NSTEPS, ctrl_seq=ctrl_seq, disable_constraint=False
-        )
+        torch_results = _run_torch_vmap(m_mj, qvel_kick, NSTEPS, ctrl_seq=ctrl_seq, disable_constraint=False)
         _compare_trajectories(mjx_results, torch_results, HALFCHEETAH_MODEL, atol=1e-5)
 
 
@@ -311,17 +307,11 @@ class TestNaNStress:
         vmap_step = torch.vmap(lambda d: mujoco_torch.step(mx, d))
 
         for step in range(nsteps):
-            ctrl = torch.from_numpy(
-                rng.uniform(-1, 1, (batch, m_mj.nu))
-            ).to(d_batch.ctrl.dtype)
+            ctrl = torch.from_numpy(rng.uniform(-1, 1, (batch, m_mj.nu))).to(d_batch.ctrl.dtype)
             d_batch = d_batch.replace(ctrl=ctrl)
             d_batch = vmap_step(d_batch)
-            assert torch.isfinite(d_batch.qpos).all(), (
-                f"NaN/inf in qpos at step {step}"
-            )
-            assert torch.isfinite(d_batch.qvel).all(), (
-                f"NaN/inf in qvel at step {step}"
-            )
+            assert torch.isfinite(d_batch.qpos).all(), f"NaN/inf in qpos at step {step}"
+            assert torch.isfinite(d_batch.qvel).all(), f"NaN/inf in qvel at step {step}"
 
     def test_halfcheetah_no_nan_extreme_vel(self):
         """HalfCheetah with very high initial velocities must not produce NaN."""
@@ -341,14 +331,8 @@ class TestNaNStress:
         vmap_step = torch.vmap(lambda d: mujoco_torch.step(mx, d))
 
         for step in range(nsteps):
-            ctrl = torch.from_numpy(
-                rng.uniform(-1, 1, (batch, m_mj.nu))
-            ).to(d_batch.ctrl.dtype)
+            ctrl = torch.from_numpy(rng.uniform(-1, 1, (batch, m_mj.nu))).to(d_batch.ctrl.dtype)
             d_batch = d_batch.replace(ctrl=ctrl)
             d_batch = vmap_step(d_batch)
-            assert torch.isfinite(d_batch.qpos).all(), (
-                f"NaN/inf in qpos at step {step}"
-            )
-            assert torch.isfinite(d_batch.qvel).all(), (
-                f"NaN/inf in qvel at step {step}"
-            )
+            assert torch.isfinite(d_batch.qpos).all(), f"NaN/inf in qpos at step {step}"
+            assert torch.isfinite(d_batch.qvel).all(), f"NaN/inf in qvel at step {step}"
