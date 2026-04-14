@@ -381,7 +381,7 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
 
             cost = alpha * alpha * quad_total[2] + alpha * quad_total[1] + quad_total[0]
             deriv_0 = 2 * alpha * quad_total[2] + quad_total[1]
-            deriv_1 = 2 * quad_total[2]
+            deriv_1 = 2 * quad_total[2] + (quad_total[2] == 0) * mujoco.mjMINVAL
             return _LSPoint(alpha=alpha, cost=cost, deriv_0=deriv_0, deriv_1=deriv_1)
 
         def ls_cond(ls_ctx):
@@ -407,22 +407,22 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
             # (forming a proper bracket).
             not_bracketed = (lo.deriv_0 < 0) == (hi.deriv_0 < 0)
 
-            def _swap(current_d0, cand_d0, other_d0):
+            def _swap(current_d0, cand_d0):
                 """Accept candidate if it narrows bracket or forms one."""
                 return in_bracket(current_d0, cand_d0) | (not_bracketed & (torch.abs(cand_d0) < torch.abs(current_d0)))
 
-            swap_lo_next = _swap(lo.deriv_0, lo_next.deriv_0, hi.deriv_0)
+            swap_lo_next = _swap(lo.deriv_0, lo_next.deriv_0)
             lo = _tree_where(lambda x, y: torch.where(swap_lo_next, y, x), lo, lo_next)
-            swap_lo_mid = _swap(lo.deriv_0, mid.deriv_0, hi.deriv_0)
+            swap_lo_mid = _swap(lo.deriv_0, mid.deriv_0)
             lo = _tree_where(lambda x, y: torch.where(swap_lo_mid, y, x), lo, mid)
-            swap_lo_hi_next = _swap(lo.deriv_0, hi_next.deriv_0, hi.deriv_0)
+            swap_lo_hi_next = _swap(lo.deriv_0, hi_next.deriv_0)
             lo = _tree_where(lambda x, y: torch.where(swap_lo_hi_next, y, x), lo, hi_next)
 
-            swap_hi_next = _swap(hi.deriv_0, hi_next.deriv_0, lo.deriv_0)
+            swap_hi_next = _swap(hi.deriv_0, hi_next.deriv_0)
             hi = _tree_where(lambda x, y: torch.where(swap_hi_next, y, x), hi, hi_next)
-            swap_hi_mid = _swap(hi.deriv_0, mid.deriv_0, lo.deriv_0)
+            swap_hi_mid = _swap(hi.deriv_0, mid.deriv_0)
             hi = _tree_where(lambda x, y: torch.where(swap_hi_mid, y, x), hi, mid)
-            swap_hi_lo_next = _swap(hi.deriv_0, lo_next.deriv_0, lo.deriv_0)
+            swap_hi_lo_next = _swap(hi.deriv_0, lo_next.deriv_0)
             hi = _tree_where(lambda x, y: torch.where(swap_hi_lo_next, y, x), hi, lo_next)
 
             swap = swap_lo_next | swap_lo_mid | swap_lo_hi_next
