@@ -68,6 +68,13 @@ _TYPE_MAP = {
 }
 
 _TRANSFORMS = {
+    # MuJoCo exposes these as Python ints; force int32 so the torch tensors
+    # match what ``make_data`` / ``make_constraint`` / ``collision`` produce.
+    # Without this, ``_device_put_torch`` would land on torch's default int64
+    # and the first compiled ``step`` call retraces once on a dtype guard when
+    # ``make_constraint`` overwrites ``nefc`` as int32.
+    (types.Data, "nefc"): lambda x: torch.tensor(int(x), dtype=torch.int32),
+    (types.Data, "ncon"): lambda x: torch.tensor(int(x), dtype=torch.int32),
     (types.Data, "ximat"): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
     (types.Data, "xmat"): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
     (types.Data, "geom_xmat"): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
