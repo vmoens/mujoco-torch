@@ -11,7 +11,7 @@ import sys
 import time
 
 os.environ.setdefault("TORCH_LOGS", "recompiles")
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "5")
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "6")
 
 import mujoco  # noqa: E402
 import mujoco_torch  # noqa: E402
