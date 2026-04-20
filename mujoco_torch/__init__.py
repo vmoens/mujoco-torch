@@ -20,9 +20,19 @@
 # trigger tensordict loading) so that tensordict's runtime guard sees the
 # patched MetaConverter and selects the right UnbatchedTensor implementation.
 from mujoco_torch.patches import apply as _apply_patches
+from mujoco_torch.patches import fix_tensordict_unbatched as _fix_ut
 
 _apply_patches()
+# Force tensordict to pick the wrapper-subclass UnbatchedTensor *before* any
+# _src module below binds ``from tensordict import UnbatchedTensor``.  If we
+# ran this after the _src imports (as the code used to), each _src module
+# would cache the pre-patch class while tensordict internals use the
+# post-patch class, yielding two coexisting UnbatchedTensor classes with
+# identical names but different type ids — which trips Dynamo's type_id
+# guard on call 2 of compile(vmap(step)) and forces a recompile.
+_fix_ut()
 del _apply_patches
+del _fix_ut
 
 # pylint:disable=g-importing-member
 
@@ -122,11 +132,3 @@ from mujoco_torch._src.types import (
     WrapType,
 )
 
-# tensordict picks its UnbatchedTensor implementation at import time by
-# inspecting MetaConverter's *on-disk* source.  Our in-memory patch isn't
-# visible to inspect.getsource, so tensordict may have chosen the wrong
-# implementation.  Fix it up now that both patches and tensordict are loaded.
-from mujoco_torch.patches import fix_tensordict_unbatched as _fix_ut
-
-_fix_ut()
-del _fix_ut
