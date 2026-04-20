@@ -886,6 +886,14 @@ def _build_device_precomp(model, device, _resolve_cached_tensors):
 
     object.__setattr__(model, "_device_precomp", precomp)
 
+    # Static contact fields (model-only: includemargin, friction, solref,
+    # geom1/2, contact_dim, efc_address).  Baked into d.contact by make_data
+    # so step can reuse them from the batched input, avoiding vmap stride-0
+    # broadcasts that would trigger a recompile on call 2.
+    from mujoco_torch._src.collision_driver import _compute_static_contact_dict  # local to avoid cycle
+
+    precomp["contact_static"] = _compute_static_contact_dict(model)
+
 
 def _mark_model_constants(model):
     """Mark all Model tensor fields as having static addresses for torch.compile.

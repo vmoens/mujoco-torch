@@ -688,6 +688,111 @@ def constraint_sizes(m: Model) -> tuple[int, int, int, int, int]:
     return m.constraint_sizes_py
 
 
+def _compute_static_contact_dict(m: Model) -> dict | None:
+    """Precompute Contact fields that only depend on the Model.
+
+    Under vmap the collision output emits stride-0 broadcasts for model-only
+    fields (includemargin, friction, solref, ...), which mismatches the
+    contiguous init stride and triggers a Dynamo recompile on call 2.
+
+    By baking these fields at device_put time and initializing d.contact
+    with them, collision() can pass them through unchanged — the step
+    output inherits the input's stride instead of emitting stride-0.
+
+    Returns None when any collision group has no static path (e.g. HFIELD).
+    Callers fall back to the fresh computation path in that case.
+    """
+    collision_groups = m._device_precomp.get("collision_groups_py")
+    if collision_groups is None:
+        return None
+
+    max_cp = m.collision_max_cp_py
+    total = m.collision_total_contacts_py
+    if max_cp > -1 and total > max_cp:
+        # topk is data-dependent — cannot bake static ordering.
+        return None
+
+    im_l: list[torch.Tensor] = []
+    fric_l: list[torch.Tensor] = []
+    sref_l: list[torch.Tensor] = []
+    sreff_l: list[torch.Tensor] = []
+    simp_l: list[torch.Tensor] = []
+    cdim_l: list[torch.Tensor] = []
+    g1_l: list[torch.Tensor] = []
+    g2_l: list[torch.Tensor] = []
+
+    for fn, geom_types, _candidates, precomp in collision_groups:
+        if fn is None:
+            continue
+        if geom_types[0] == GeomType.HFIELD:
+            return None  # fallback to fresh path
+        geom1_t = precomp["geom1_t"]
+        geom2_t = precomp["geom2_t"]
+        contact_dim = precomp["contact_dim_t"]
+        params = [pf(m, **idx) for pf, idx in precomp["param_groups"]]
+
+        def _concat(*x):
+            return torch.cat(x, dim=0) if isinstance(x[0], torch.Tensor) else np.concatenate(x, axis=0)
+
+        params_merged = torch.utils._pytree.tree_map(_concat, *params) if len(params) > 1 else params[0]
+        ncon_per_pair = fn.ncon
+        geom1_t, geom2_t, contact_dim, params_merged = torch.utils._pytree.tree_map(
+            lambda x: x.repeat_interleave(ncon_per_pair, dim=0),
+            (geom1_t, geom2_t, contact_dim, params_merged),
+        )
+        im_l.append(params_merged.margin - params_merged.gap)
+        fric_l.append(params_merged.friction)
+        sref_l.append(params_merged.solref)
+        sreff_l.append(params_merged.solreffriction)
+        simp_l.append(params_merged.solimp)
+        cdim_l.append(contact_dim)
+        g1_l.append(geom1_t)
+        g2_l.append(geom2_t)
+
+    if not im_l:
+        return None
+
+    includemargin = torch.cat(im_l)
+    friction = torch.cat(fric_l)
+    solref = torch.cat(sref_l)
+    solreffriction = torch.cat(sreff_l)
+    solimp = torch.cat(simp_l)
+    contact_dim = torch.cat(cdim_l)
+    geom1 = torch.cat(g1_l)
+    geom2 = torch.cat(g2_l)
+
+    sort_idx = torch.argsort(contact_dim)
+    includemargin = includemargin[sort_idx].contiguous()
+    friction = friction[sort_idx].contiguous()
+    solref = solref[sort_idx].contiguous()
+    solreffriction = solreffriction[sort_idx].contiguous()
+    solimp = solimp[sort_idx].contiguous()
+    contact_dim = contact_dim[sort_idx].contiguous()
+    geom1 = geom1[sort_idx].contiguous()
+    geom2 = geom2[sort_idx].contiguous()
+
+    ne, nf, nl, _, _ = m.constraint_sizes_py
+    ns = ne + nf + nl
+    rows_per_contact = torch.where(contact_dim == 1, 1, (contact_dim - 1) * 2)
+    zeros = torch.zeros(1, dtype=rows_per_contact.dtype, device=rows_per_contact.device)
+    offsets = torch.cumsum(torch.cat([zeros, rows_per_contact[:-1]]), dim=0)
+    efc_address = (ns + offsets).to(torch.int64).contiguous()
+    geom = torch.stack([geom1, geom2], dim=-1).contiguous()
+
+    return {
+        "includemargin": includemargin,
+        "friction": friction,
+        "solref": solref,
+        "solreffriction": solreffriction,
+        "solimp": solimp,
+        "contact_dim": contact_dim.to(torch.int32).contiguous(),
+        "geom1": geom1.to(torch.int64).contiguous(),
+        "geom2": geom2.to(torch.int64).contiguous(),
+        "geom": geom.to(torch.int64),
+        "efc_address": efc_address,
+    }
+
+
 def collision(m: Model, d: Data) -> Data:
     """Collides geometries."""
     collision_groups = m._device_precomp["collision_groups_py"]
@@ -711,28 +816,51 @@ def collision(m: Model, d: Data) -> Data:
     contact = torch.cat(contacts)
 
     if max_cp > -1 and total > max_cp:
-        # get top-k contacts
+        # Data-dependent topk reorders contacts — cannot reuse d.contact's
+        # model-constant fields, emit the full fresh contact.
         _, idx = torch.topk(-contact.dist, k=max_cp)
         contact = contact[idx]
+        sort_idx = torch.argsort(contact.contact_dim)
+        contact = contact[sort_idx]
+        ne, nf, nl, _, _ = constraint_sizes(m)
+        ns = ne + nf + nl
+        dims_t = contact.contact_dim
+        rows_per_contact = torch.where(dims_t == 1, 1, (dims_t - 1) * 2)
+        zeros = torch.zeros(1, dtype=rows_per_contact.dtype, device=rows_per_contact.device)
+        offsets = torch.cumsum(torch.cat([zeros, rows_per_contact[:-1]]), dim=0)
+        contact = contact.replace(efc_address=(ns + offsets).to(torch.int64))
+        d.update_(
+            contact=contact,
+            ncon=UnbatchedTensor(data=torch.full((), ncon_, dtype=torch.int32, device=contact.dist.device)),
+        )
+        return d
 
-    # Sort contacts by condim (1s before 3s) for consistent constraint ordering.
+    # No-topk path: sort is model-constant, so reorder fresh dist/pos/frame
+    # by the baked sort_idx and pass through d.contact's model-constant fields.
+    # This keeps the vmap output stride tied to the batched input stride,
+    # avoiding stride-0 broadcast drift that forces a recompile.
     sort_idx = torch.argsort(contact.contact_dim)
-    contact = contact[sort_idx]
+    dist = contact.dist[sort_idx]
+    pos = contact.pos[sort_idx]
+    frame = contact.frame[sort_idx]
 
-    # Compute efc_address with variable strides per condim:
-    # condim=1 produces 1 constraint row, condim=3 produces 4 (pyramidal).
-    ne, nf, nl, _, _ = constraint_sizes(m)
-    ns = ne + nf + nl
-    dims_t = contact.contact_dim
-    rows_per_contact = torch.where(dims_t == 1, 1, (dims_t - 1) * 2)
-    zeros = torch.zeros(1, dtype=rows_per_contact.dtype, device=rows_per_contact.device)
-    offsets = torch.cumsum(torch.cat([zeros, rows_per_contact[:-1]]), dim=0)
-    contact = contact.replace(
-        efc_address=(ns + offsets).to(torch.int64),
-    )
+    # When static precompute exists, d.contact was initialized with the
+    # correct model-constant values — reuse them.  Otherwise emit the full
+    # fresh contact (matches pre-refactor behavior).
+    if m._device_precomp.get("contact_static") is not None:
+        new_contact = d.contact.replace(dist=dist, pos=pos, frame=frame)
+    else:
+        contact = contact[sort_idx]
+        ne, nf, nl, _, _ = constraint_sizes(m)
+        ns = ne + nf + nl
+        dims_t = contact.contact_dim
+        rows_per_contact = torch.where(dims_t == 1, 1, (dims_t - 1) * 2)
+        zeros = torch.zeros(1, dtype=rows_per_contact.dtype, device=rows_per_contact.device)
+        offsets = torch.cumsum(torch.cat([zeros, rows_per_contact[:-1]]), dim=0)
+        new_contact = contact.replace(efc_address=(ns + offsets).to(torch.int64))
 
     d.update_(
-        contact=contact,
-        ncon=UnbatchedTensor(data=torch.full((), ncon_, dtype=torch.int32, device=contact.dist.device)),
+        contact=new_contact,
+        ncon=UnbatchedTensor(data=torch.full((), ncon_, dtype=torch.int32, device=dist.device)),
     )
     return d
