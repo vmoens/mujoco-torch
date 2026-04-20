@@ -58,7 +58,10 @@ def fix_tensordict_unbatched() -> None:
     import tensordict
     import tensordict._unbatched as _ub
 
-    if _ub._HAS_WRAPPER_SUBCLASS_FIX:
+    # Older tensordict versions expose this guard; newer versions have the fix
+    # unconditionally and no longer carry the flag.  Treat absence as "fix
+    # already present" and skip the re-exec dance.
+    if getattr(_ub, "_HAS_WRAPPER_SUBCLASS_FIX", True):
         return
 
     src_path = _ub.__file__
