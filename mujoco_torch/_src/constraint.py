@@ -603,15 +603,14 @@ def make_constraint(m: Model, d: Data) -> Data:
 
     def _set_constraint_tensors(size: int, reported_nefc: int | None = None) -> Data:
         _dev = d.qpos.device
-        dtype = d.qpos.dtype
-        z = torch.zeros(size, dtype=dtype, device=_dev)
         if reported_nefc is None:
             reported_nefc = size
+        # Early-return path: no constraint computation happened, so leave
+        # efc_J/D/aref/frictionloss alone — they were initialized to zeros
+        # in make_data with the batched input stride.  Writing fresh zeros
+        # here would emit stride-0 broadcasts under vmap, mismatching the
+        # input stride and forcing a Dynamo recompile on call 2.
         d.update_(
-            efc_J=torch.zeros((size, m.nv), dtype=dtype, device=_dev),
-            efc_D=z,
-            efc_aref=z,
-            efc_frictionloss=z,
             nefc=UnbatchedTensor(data=torch.full((), reported_nefc, dtype=torch.int32, device=_dev)),
         )
         return d
