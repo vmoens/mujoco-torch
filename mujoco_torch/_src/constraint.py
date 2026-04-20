@@ -755,13 +755,14 @@ def make_constraint(m: Model, d: Data) -> Data:
         nefc=UnbatchedTensor(data=torch.full((), reported_nefc, dtype=torch.int32, device=r.device)),
     )
     # Only _instantiate_friction produces nonzero frictionloss — every other
-    # constraint type uses torch.zeros_like.  When there are no friction
-    # constraints, efc_frictionloss is model-constant (all-zero) and vmap
-    # emits a stride-0 broadcast, mismatching d.efc_frictionloss's
+    # constraint type uses torch.zeros_like.  Under compile, when there are
+    # no friction constraints, efc_frictionloss is model-constant (all-zero)
+    # and vmap emits a stride-0 broadcast mismatching d.efc_frictionloss's
     # materialized stride from make_data → Dynamo recompile on call 2.
     # Pass through d.efc_frictionloss (already zeros from make_data) to
-    # preserve the input stride.
-    if precomp["friction"] is not None:
+    # preserve the input stride.  Under eager, always write so the shape
+    # matches the current nefc (stateful callers rely on this).
+    if precomp["friction"] is not None or not torch.compiler.is_compiling():
         update_kwargs["efc_frictionloss"] = efc_frictionloss
     d.update_(**update_kwargs)
     return d

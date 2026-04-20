@@ -116,15 +116,17 @@ def kinematics(m: Model, d: Data) -> Data:
 
     xipos, ximat = v_local_to_global(xpos, xquat, m.body_ipos, m.body_iquat)
     kwargs = dict(qpos=qpos, xanchor=xanchor, xaxis=xaxis, xpos=xpos, xquat=xquat, xmat=xmat, xipos=xipos, ximat=ximat)
-    # Drop model-constant fields from the update: some topologies (e.g.
-    # cartpole's slide+hinge tree) produce xaxis/xanchor values that don't
-    # depend on qpos, so vmap emits stride-0 broadcasts that mismatch
-    # d.<field>'s materialized stride and force a Dynamo recompile.
-    # device_put baked the static values into d at make_data time, so
-    # passing through the batched input preserves the stride.
-    kin_static = m._device_precomp.get("kinematics_static", {})
-    for k in kin_static:
-        kwargs.pop(k, None)
+    # Under compile: drop model-constant fields (xaxis/xanchor for some
+    # topologies like cartpole's slide+hinge tree, which produce qpos-
+    # independent outputs).  Writing them would emit stride-0 broadcasts
+    # under vmap, mismatching d.<field>'s materialized stride from make_data
+    # and forcing a Dynamo recompile.  Under eager (tests using
+    # device_put(MjData) with uninitialized xaxis), keep the write so the
+    # values get populated correctly.
+    if torch.compiler.is_compiling():
+        kin_static = m._device_precomp.get("kinematics_static", {})
+        for k in kin_static:
+            kwargs.pop(k, None)
 
     if m.ngeom:
         geom_xpos, geom_xmat = v_local_to_global(xpos[m.geom_bodyid_t], xquat[m.geom_bodyid_t], m.geom_pos, m.geom_quat)
