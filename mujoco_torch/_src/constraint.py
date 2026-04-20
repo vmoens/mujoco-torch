@@ -18,6 +18,7 @@ import mujoco
 
 # pylint: enable=g-importing-member
 import torch
+from tensordict import UnbatchedTensor
 
 from mujoco_torch._src import collision_driver, math, support
 from mujoco_torch._src.diff_config import DiffConfig, get_diff_config
@@ -611,7 +612,7 @@ def make_constraint(m: Model, d: Data) -> Data:
             efc_D=z,
             efc_aref=z,
             efc_frictionloss=z,
-            nefc=torch.full((), reported_nefc, dtype=torch.int32, device=_dev),
+            nefc=UnbatchedTensor(data=torch.full((), reported_nefc, dtype=torch.int32, device=_dev)),
         )
         return d
 
@@ -741,6 +742,6 @@ def make_constraint(m: Model, d: Data) -> Data:
         efc_D=efc_D,
         efc_aref=efc_aref,
         efc_frictionloss=efc_frictionloss,
-        nefc=torch.full((), reported_nefc, dtype=torch.int32, device=r.device),
+        nefc=UnbatchedTensor(data=torch.full((), reported_nefc, dtype=torch.int32, device=r.device)),
     )
     return d
