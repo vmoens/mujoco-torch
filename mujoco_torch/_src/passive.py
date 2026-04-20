@@ -39,7 +39,7 @@ def _inertia_box_fluid_model(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Fluid forces based on inertia-box approximation."""
     box = inertia.unsqueeze(0).repeat(3, 1)
-    box = box * (torch.ones((3, 3), dtype=inertia.dtype, device=inertia.device) - 2 * torch.eye(3))
+    box = box * (torch.ones((3, 3), dtype=inertia.dtype, device=inertia.device) - 2 * torch.eye(3, dtype=inertia.dtype, device=inertia.device))
     box = 6.0 * torch.clamp(torch.sum(box, dim=-1), min=1e-12)
     box = torch.sqrt(box / torch.maximum(mass, _EPS12.get(mass.dtype, mass.device))) * (mass > 0.0)
 
