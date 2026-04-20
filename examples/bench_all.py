@@ -124,6 +124,100 @@ def _bench_compile_torch(env_name: str, batch_size: int, device: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# torch backend -- eager vmap (no compile)
+# ---------------------------------------------------------------------------
+
+
+def _bench_vmap_torch(env_name: str, batch_size: int, device: str) -> dict:
+    import mujoco_torch
+    from benchmarks._helpers import load_model, make_batch, warm_caches
+
+    m_mj = load_model(env_name)
+    with torch.device("cpu"):
+        mx = mujoco_torch.device_put(m_mj)
+    mx = mx.to(device)
+    warm_caches(mx, m_mj, device)
+
+    vmap_step = torch.vmap(lambda d: mujoco_torch.step(mx, d))
+
+    d_batch = make_batch(mx, m_mj, batch_size, device)
+
+    for _ in range(COMPILE_WARMUP_ITERS):
+        d_batch = vmap_step(d_batch)
+        torch.cuda.synchronize()
+
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    for _ in range(WARMUP_NSTEPS):
+        d_batch = vmap_step(d_batch)
+    torch.cuda.synchronize()
+    warmup_s = time.perf_counter() - t0
+    warmup_sps = batch_size * WARMUP_NSTEPS / warmup_s
+
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    for _ in range(MEASURE_NSTEPS):
+        d_batch = vmap_step(d_batch)
+    torch.cuda.synchronize()
+    run_s = time.perf_counter() - t0
+    steps_per_s = batch_size * MEASURE_NSTEPS / run_s
+
+    return {
+        "steps_per_s": steps_per_s,
+        "compile_s": None,
+        "run_s": run_s,
+        "nsteps": MEASURE_NSTEPS,
+        "warmup_sps": warmup_sps,
+        "warmup_s": warmup_s,
+    }
+
+
+# ---------------------------------------------------------------------------
+# MuJoCo C backend -- stock CPU sequential step baseline (B=1 only)
+# ---------------------------------------------------------------------------
+
+
+def _bench_compile_mujoco_c(env_name: str, batch_size: int, device: str) -> dict:
+    import mujoco
+    import numpy as np
+
+    from benchmarks._helpers import SEED, load_model
+
+    if batch_size != 1:
+        raise NotImplementedError(
+            f"mujoco_c backend is a single-stream CPU baseline; only batch_size=1 is supported (got {batch_size})"
+        )
+
+    m_mj = load_model(env_name)
+    d = mujoco.MjData(m_mj)
+    d.qvel[:] = 0.01 * np.random.RandomState(SEED).randn(m_mj.nv)
+
+    for _ in range(10):
+        mujoco.mj_step(m_mj, d)
+
+    t0 = time.perf_counter()
+    for _ in range(WARMUP_NSTEPS):
+        mujoco.mj_step(m_mj, d)
+    warmup_s = time.perf_counter() - t0
+    warmup_sps = WARMUP_NSTEPS / warmup_s
+
+    t0 = time.perf_counter()
+    for _ in range(MEASURE_NSTEPS):
+        mujoco.mj_step(m_mj, d)
+    run_s = time.perf_counter() - t0
+    steps_per_s = MEASURE_NSTEPS / run_s
+
+    return {
+        "steps_per_s": steps_per_s,
+        "compile_s": None,
+        "run_s": run_s,
+        "nsteps": MEASURE_NSTEPS,
+        "warmup_sps": warmup_sps,
+        "warmup_s": warmup_s,
+    }
+
+
+# ---------------------------------------------------------------------------
 # MJX backend -- compile sweep
 # ---------------------------------------------------------------------------
 
@@ -339,6 +433,10 @@ def bench_one(env_name: str, batch_size: int, mode: str, backend: str, device: s
         return _bench_compile_torch(env_name, batch_size, device)
     if mode == "compile" and backend == "mjx":
         return _bench_compile_mjx(env_name, batch_size, device)
+    if mode == "compile" and backend == "mujoco_c":
+        return _bench_compile_mujoco_c(env_name, batch_size, device)
+    if mode == "vmap" and backend == "torch":
+        return _bench_vmap_torch(env_name, batch_size, device)
     if mode == "collector" and backend == "torch":
         return _bench_collector_torch(env_name, batch_size, device)
     if mode == "collector" and backend == "mjx":
@@ -355,8 +453,14 @@ def append_jsonl(path: Path, row: dict):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--env", required=True, help="Env name, e.g. halfcheetah")
-    p.add_argument("--mode", choices=("compile", "collector"), required=True)
-    p.add_argument("--backend", choices=("torch", "mjx"), required=True)
+    p.add_argument("--mode", choices=("compile", "vmap", "collector"), required=True)
+    p.add_argument("--backend", choices=("torch", "mjx", "mujoco_c"), required=True)
+    p.add_argument(
+        "--tuned",
+        action="store_true",
+        help="For (mode=compile, backend=torch): enable Inductor coordinate-descent tuning "
+             "+ aggressive fusion (the 'tuned' column) and tag output rows with tuned=True.",
+    )
     p.add_argument(
         "--batch_sizes",
         type=int,
@@ -370,6 +474,11 @@ def main():
     out_path = args.out.expanduser()
 
     torch.set_default_dtype(torch.float64)
+
+    if args.tuned:
+        if not (args.mode == "compile" and args.backend == "torch"):
+            raise ValueError("--tuned is only meaningful for (mode=compile, backend=torch)")
+        os.environ["MJT_TUNED"] = "1"
 
     if args.mode == "collector" and args.backend == "mjx":
         print(
@@ -413,6 +522,7 @@ def main():
             "batch_size": B,
             "mode": args.mode,
             "backend": args.backend,
+            "tuned": bool(args.tuned),
         }
         try:
             t_total = time.perf_counter()

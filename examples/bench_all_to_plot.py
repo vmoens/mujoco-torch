@@ -28,9 +28,12 @@ from pathlib import Path
 
 
 BACKEND_LABEL = {
-    ("torch", "compile"): "torch compile",
-    ("mjx", "compile"): "MJX jit(vmap)",
-    ("torch", "collector"): "TorchRL collector+RB",
+    ("torch", "compile", False): "torch compile",
+    ("torch", "compile", True): "torch compile (H4)",
+    ("torch", "vmap", False): "torch vmap (eager)",
+    ("torch", "collector", False): "TorchRL collector+RB",
+    ("mjx", "compile", False): "MJX jit(vmap)",
+    ("mujoco_c", "compile", False): "MuJoCo C (seq)",
 }
 
 
@@ -56,7 +59,8 @@ def main():
                 env = row["env"]
                 backend = row["backend"]
                 mode = row["mode"]
-                label = BACKEND_LABEL.get((backend, mode))
+                tuned = bool(row.get("tuned", False))
+                label = BACKEND_LABEL.get((backend, mode, tuned))
                 if label is None:
                     continue
                 B = row["batch_size"]
