@@ -71,10 +71,15 @@ def stride_of(x):
 
 def describe(tag, d):
     (nefc_a, nefc_td), (ncon_a, ncon_td) = types_of(d)
+    sc = d.subtree_com
+    sc_info = f"shape={tuple(sc.shape)} stride={tuple(sc.stride())}"
+    xi = d.xipos
+    xi_info = f"shape={tuple(xi.shape)} stride={tuple(xi.stride())}"
     print(
         f"  {tag}: "
-        f"nefc[attr={nefc_a}, td={nefc_td}, stride={stride_of(d.nefc)}]  "
-        f"ncon[attr={ncon_a}, td={ncon_td}, stride={stride_of(d.ncon)}]",
+        f"nefc[td={nefc_td}, stride={stride_of(d.nefc)}]  "
+        f"ncon[td={ncon_td}, stride={stride_of(d.ncon)}]\n"
+        f"       subtree_com {sc_info}  xipos {xi_info}",
         flush=True,
     )
 
