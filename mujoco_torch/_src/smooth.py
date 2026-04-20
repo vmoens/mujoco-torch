@@ -115,13 +115,16 @@ def kinematics(m: Model, d: Data) -> Data:
     v_local_to_global = torch.vmap(support.local_to_global)
 
     xipos, ximat = v_local_to_global(xpos, xquat, m.body_ipos, m.body_iquat)
-    # Force contiguous layout for xanchor/xaxis: on envs with only slide/hinge
-    # joints, these are model-constant so vmap emits stride-0 broadcasts, but
-    # the input Data has them materialized with normal strides.  The stride
-    # mismatch triggers a Dynamo recompile on the second call.
-    xanchor = xanchor.contiguous()
-    xaxis = xaxis.contiguous()
     kwargs = dict(qpos=qpos, xanchor=xanchor, xaxis=xaxis, xpos=xpos, xquat=xquat, xmat=xmat, xipos=xipos, ximat=ximat)
+    # Drop model-constant fields from the update: some topologies (e.g.
+    # cartpole's slide+hinge tree) produce xaxis/xanchor values that don't
+    # depend on qpos, so vmap emits stride-0 broadcasts that mismatch
+    # d.<field>'s materialized stride and force a Dynamo recompile.
+    # device_put baked the static values into d at make_data time, so
+    # passing through the batched input preserves the stride.
+    kin_static = m._device_precomp.get("kinematics_static", {})
+    for k in kin_static:
+        kwargs.pop(k, None)
 
     if m.ngeom:
         geom_xpos, geom_xmat = v_local_to_global(xpos[m.geom_bodyid_t], xquat[m.geom_bodyid_t], m.geom_pos, m.geom_quat)

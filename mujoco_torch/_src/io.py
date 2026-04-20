@@ -150,6 +150,15 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
     public_fields["qpos"] = torch.as_tensor(m.qpos0, dtype=DEFAULT_DTYPE)
     public_fields["eq_active"] = torch.as_tensor(m.eq_active0, dtype=torch.int32)
 
+    # Bake model-constant kinematics fields into init so kinematics() can
+    # pass them through d.<field> unchanged — without this, vmap emits a
+    # stride-0 broadcast on envs whose topology gives a qpos-independent
+    # xaxis/xanchor (e.g. cartpole's slide+hinge tree), and the mismatch
+    # with the materialized init stride triggers a Dynamo recompile.
+    kin_static = getattr(m, "_device_precomp", {}).get("kinematics_static", {}) if isinstance(m, Model) else {}
+    for k, v in kin_static.items():
+        public_fields[k] = torch.as_tensor(v, dtype=DEFAULT_DTYPE)
+
     # Build zero fields for impl-specific data
     zero_impl = {
         "solver_niter": torch.tensor(0, dtype=torch.int32),

@@ -903,6 +903,43 @@ def _validate(m: mujoco.MjModel):
             warnings.warn(f"Ignoring enable flag {f.name}.")
 
 
+def _probe_kinematics_static(mj_model: mujoco.MjModel) -> dict:
+    """Detect kinematics fields whose output is model-constant under vmap.
+
+    Runs mj_kinematics twice with different qpos values and records which
+    outputs are identical (model-constant).  Returns a dict mapping field
+    name -> numpy array of the static value, for each truly-static field.
+    Dynamic fields are omitted.
+
+    kinematics() uses this dict to skip writing static fields so that
+    d.<field>'s materialized stride (from make_data + expand().clone())
+    is preserved across step calls.
+    """
+    mj_data = mujoco.MjData(mj_model)
+    mj_data.qpos[:] = mj_model.qpos0
+    mujoco.mj_kinematics(mj_model, mj_data)
+    a = {
+        "xaxis": mj_data.xaxis.copy(),
+        "xanchor": mj_data.xanchor.copy(),
+    }
+
+    mj_data2 = mujoco.MjData(mj_model)
+    rng = np.random.default_rng(0xC0FFEE)
+    mj_data2.qpos[:] = mj_model.qpos0 + rng.standard_normal(mj_model.nq) * 0.1
+    # Renormalize any free/ball quats so the result is valid (without this,
+    # the comparison is moot for free-joint envs; normalization doesn't
+    # affect the static-vs-dynamic test).
+    mujoco.mj_normalizeQuat(mj_model, mj_data2.qpos)
+    mujoco.mj_kinematics(mj_model, mj_data2)
+
+    static = {}
+    for k, v in a.items():
+        v2 = getattr(mj_data2, k)
+        if np.allclose(v, v2, atol=0.0, rtol=0.0):
+            static[k] = v
+    return static
+
+
 @overload
 def device_put(value: mujoco.MjData, *, dtype: torch.dtype | None = None) -> types.Data: ...
 
@@ -989,6 +1026,14 @@ def device_put(value, *, dtype: torch.dtype | None = None):
             torch.device("cpu"),
             scan._resolve_cached_tensors,
         )
+        # Probe kinematics for model-constant fields: when a topology
+        # produces xaxis/xanchor values that don't depend on qpos (e.g.
+        # cartpole's slide+hinge tree), vmap emits a stride-0 broadcast
+        # that mismatches d.xaxis's materialized stride and forces a
+        # Dynamo recompile on call 2.  Pre-bake the static values here
+        # so kinematics() can pass through d.xaxis unchanged.
+        if isinstance(value, mujoco.MjModel):
+            result._device_precomp["kinematics_static"] = _probe_kinematics_static(value)
         _math._CachedConst.warm_all(torch.device("cpu"))
 
     return result

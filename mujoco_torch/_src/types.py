@@ -920,6 +920,11 @@ def _model_to(self, *args, **kwargs):
         warm_device_caches(result.cache_id, device)
 
     _build_device_precomp(result, device, _resolve_cached_tensors)
+    # Preserve kinematics_static across device moves — it's a dict of
+    # device-independent numpy arrays computed once from the MjModel at
+    # device_put time, and _build_device_precomp doesn't regenerate it.
+    if hasattr(self, "_device_precomp") and "kinematics_static" in self._device_precomp:
+        result._device_precomp["kinematics_static"] = self._device_precomp["kinematics_static"]
     _mark_model_constants(result)
     return result
 

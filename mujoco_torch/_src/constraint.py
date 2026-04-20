@@ -737,11 +737,20 @@ def make_constraint(m: Model, d: Data) -> Data:
         efc_frictionloss = efc.frictionloss
     reported_nefc = nefc if torch.compiler.is_compiling() else actual_nefc
 
-    d.update_(
+    update_kwargs = dict(
         efc_J=efc_J,
         efc_D=efc_D,
         efc_aref=efc_aref,
-        efc_frictionloss=efc_frictionloss,
         nefc=UnbatchedTensor(data=torch.full((), reported_nefc, dtype=torch.int32, device=r.device)),
     )
+    # Only _instantiate_friction produces nonzero frictionloss — every other
+    # constraint type uses torch.zeros_like.  When there are no friction
+    # constraints, efc_frictionloss is model-constant (all-zero) and vmap
+    # emits a stride-0 broadcast, mismatching d.efc_frictionloss's
+    # materialized stride from make_data → Dynamo recompile on call 2.
+    # Pass through d.efc_frictionloss (already zeros from make_data) to
+    # preserve the input stride.
+    if precomp["friction"] is not None:
+        update_kwargs["efc_frictionloss"] = efc_frictionloss
+    d.update_(**update_kwargs)
     return d
