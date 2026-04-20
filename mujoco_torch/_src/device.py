@@ -588,6 +588,8 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     result["dof_tri_col"] = np.array(cols, dtype=np.int64)
 
     actuator_info = []
+    moment_is_batched = False
+    static_moment = np.zeros((value.nu, value.nv), dtype=np.float64)
     for i in range(value.nu):
         trntype = int(value.actuator_trntype[i])
         trnid = int(value.actuator_trnid[i, 0])
@@ -597,7 +599,29 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
             dofadr = int(value.jnt_dofadr[trnid])
             qposadr = int(value.jnt_qposadr[trnid])
         actuator_info.append((trntype, trnid, jnt_type, dofadr, qposadr))
+        # The moment row for an actuator depends on Data only for TENDON
+        # transmissions (reads d.ten_J) and for JOINTINPARENT on FREE/BALL
+        # joints (rotates the gear axis by d.qpos's quaternion).  Otherwise
+        # the row is built from Model values alone and can be baked at
+        # device_put time — the init static_moment matches step output,
+        # avoiding a vmap stride-0 drift / Dynamo recompile.
+        gear = np.array(value.actuator_gear[i], dtype=np.float64)
+        if trntype == types.TrnType.TENDON:
+            moment_is_batched = True
+        elif trntype == types.TrnType.JOINTINPARENT and jnt_type in (
+            int(types.JointType.FREE),
+            int(types.JointType.BALL),
+        ):
+            moment_is_batched = True
+        elif jnt_type == int(types.JointType.FREE):
+            static_moment[i, dofadr : dofadr + 6] = gear[:6]
+        elif jnt_type == int(types.JointType.BALL):
+            static_moment[i, dofadr : dofadr + 3] = gear[:3]
+        elif jnt_type in (int(types.JointType.SLIDE), int(types.JointType.HINGE)):
+            static_moment[i, dofadr] = gear[0]
     result["actuator_info"] = tuple(actuator_info)
+    result["actuator_moment_is_batched_py"] = moment_is_batched
+    result["actuator_moment_static_py"] = None if moment_is_batched else static_moment
 
     result["constraint_sizes_py"] = _compute_constraint_sizes(value)
     result["condim_counts_py"] = _compute_condim_counts(value)

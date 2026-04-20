@@ -134,7 +134,14 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
         "ten_J": torch.zeros((m.ntendon, m.nv), dtype=DEFAULT_DTYPE),
         "wrap_obj": torch.zeros((m.nwrap, 2), dtype=torch.int32),
         "wrap_xpos": torch.zeros((m.nwrap, 6), dtype=DEFAULT_DTYPE),
-        "actuator_moment": torch.zeros((m.nu, m.nv), dtype=DEFAULT_DTYPE),
+        # Use the static actuator_moment baked at device_put time when all
+        # actuator transmissions produce Model-only moment rows; otherwise
+        # init to zeros (step will populate it each call).
+        "actuator_moment": (
+            torch.as_tensor(m._device_precomp["actuator_moment_static_py"], dtype=DEFAULT_DTYPE)
+            if m._device_precomp.get("actuator_moment_static_py") is not None
+            else torch.zeros((m.nu, m.nv), dtype=DEFAULT_DTYPE)
+        ),
         "crb": torch.zeros((m.nbody, 10), dtype=DEFAULT_DTYPE),
         # qM/qLD: dense solver returns (nv, nv); sparse keeps (nM,). Match
         # the step output so Dynamo doesn't see a shape change on call 2.

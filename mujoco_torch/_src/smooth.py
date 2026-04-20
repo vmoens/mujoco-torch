@@ -571,6 +571,12 @@ def transmission(m: Model, d: Data) -> Data:
             raise RuntimeError(f"unrecognized joint type: {jnt_typ}")
 
     length = torch.stack(lengths).contiguous()
-    moment = torch.stack(moments).contiguous()
-    d.update_(actuator_length=length, actuator_moment=moment)
+    if m._device_precomp["actuator_moment_is_batched_py"]:
+        moment = torch.stack(moments).contiguous()
+        d.update_(actuator_length=length, actuator_moment=moment)
+    else:
+        # Moment rows are Model-only; d.actuator_moment was baked at init
+        # from the same Model values.  Skip the update so vmap doesn't emit
+        # a stride-0 broadcast that mismatches init layout.
+        d.update_(actuator_length=length)
     return d
