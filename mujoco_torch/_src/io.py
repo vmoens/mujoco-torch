@@ -19,7 +19,7 @@ import numpy as np
 import torch
 from tensordict import UnbatchedTensor
 
-from mujoco_torch._src import constraint, device, support
+from mujoco_torch._src import constraint, device, math as _math, support
 from mujoco_torch._src.types import Contact, Data, Model
 
 DEFAULT_DTYPE = torch.float64
@@ -108,6 +108,12 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
     # For MjModel, convert to our Model first
     if isinstance(m, mujoco.MjModel):
         m = put_model(m)
+
+    # Pre-populate _CachedConst caches on the model's tensor device so that
+    # the first torch.compile trace sees the cache already populated.  Without
+    # this, the first trace records the cache-miss branch and the second
+    # call's hit flips the ___dict_contains guard → Dynamo recompile.
+    _math._CachedConst.warm_all(m.qpos0.device if isinstance(m.qpos0, torch.Tensor) else torch.device("cpu"))
 
     # Get constraint counts purely from Model (no Data needed).
     ne, nf, nl, ncon, nefc = constraint.constraint_sizes(m)

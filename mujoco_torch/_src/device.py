@@ -27,7 +27,7 @@ import torch
 from tensordict import UnbatchedTensor
 from torch.utils._pytree import tree_map
 
-from mujoco_torch._src import collision_driver, mesh, ray, scan, types
+from mujoco_torch._src import collision_driver, math as _math, mesh, ray, scan, types
 from mujoco_torch._src.dataclasses import MjTensorClass
 
 _MJ_TYPE_ATTR = {
@@ -989,6 +989,7 @@ def device_put(value, *, dtype: torch.dtype | None = None):
             torch.device("cpu"),
             scan._resolve_cached_tensors,
         )
+        _math._CachedConst.warm_all(torch.device("cpu"))
 
     return result
 
