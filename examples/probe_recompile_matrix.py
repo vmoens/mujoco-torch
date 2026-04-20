@@ -40,14 +40,24 @@ MODEL = "humanoid.xml"
 
 
 def types_of(d):
-    """Return ((attr_type, td_type), (attr_type, td_type)) for (nefc, ncon)."""
+    """Return ((attr_type, td_type, td_id), (attr_type, td_type, td_id))."""
     nefc_attr = type(d.nefc).__name__
     ncon_attr = type(d.ncon).__name__
     # Poke at the backing dict directly — this is where Dynamo's
     # _is_unbatched guard actually looks for the wrapper-subclass type.
+    # Log id(type(x)) so we can see whether the CLASS OBJECT is the same
+    # across calls (type_id guards compare class identity, not name).
     backing = d._tensordict._tensordict
-    nefc_td = type(backing["nefc"]).__name__ if "nefc" in backing else "<missing>"
-    ncon_td = type(backing["ncon"]).__name__ if "ncon" in backing else "<missing>"
+    if "nefc" in backing:
+        nefc_t = type(backing["nefc"])
+        nefc_td = f"{nefc_t.__name__}@{id(nefc_t)}"
+    else:
+        nefc_td = "<missing>"
+    if "ncon" in backing:
+        ncon_t = type(backing["ncon"])
+        ncon_td = f"{ncon_t.__name__}@{id(ncon_t)}"
+    else:
+        ncon_td = "<missing>"
     return (nefc_attr, nefc_td), (ncon_attr, ncon_td)
 
 
