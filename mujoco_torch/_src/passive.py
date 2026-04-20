@@ -185,5 +185,5 @@ def passive(m: Model, d: Data) -> Data:
     if m.opt.has_fluid_params:
         qfrc_passive = qfrc_passive + _fluid(m, d)
 
-    d.update_(qfrc_passive=qfrc_passive, qfrc_gravcomp=qfrc_gravcomp)
+    d.update_(qfrc_passive=qfrc_passive.contiguous(), qfrc_gravcomp=qfrc_gravcomp.contiguous())
     return d

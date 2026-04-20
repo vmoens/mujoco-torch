@@ -89,7 +89,7 @@ def _velocity(m: Model, d: Data) -> Data:
     actuator_moment = d.actuator_moment
     if actuator_moment.ndim == 1 and m.nu == 0:
         actuator_moment = actuator_moment.reshape(0, m.nv)
-    kwargs = {"actuator_velocity": actuator_moment @ d.qvel}
+    kwargs = {"actuator_velocity": (actuator_moment @ d.qvel).contiguous()}
     if m.ntendon:
         kwargs["ten_velocity"] = d.ten_J @ d.qvel
     d.update_(**kwargs)
@@ -211,7 +211,7 @@ def _actuation(m: Model, d: Data) -> Data:
     actfrcrange = actfrcrange[m.dof_jntid_t]
     qfrc_actuator = torch.clamp(qfrc_actuator, actfrcrange[:, 0], actfrcrange[:, 1])
 
-    d.update_(act_dot=act_dot, qfrc_actuator=qfrc_actuator)
+    d.update_(act_dot=act_dot.contiguous(), qfrc_actuator=qfrc_actuator.contiguous())
     return d
 
 

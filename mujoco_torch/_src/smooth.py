@@ -570,7 +570,7 @@ def transmission(m: Model, d: Data) -> Data:
         else:
             raise RuntimeError(f"unrecognized joint type: {jnt_typ}")
 
-    length = torch.stack(lengths)
-    moment = torch.stack(moments)
+    length = torch.stack(lengths).contiguous()
+    moment = torch.stack(moments).contiguous()
     d.update_(actuator_length=length, actuator_moment=moment)
     return d
