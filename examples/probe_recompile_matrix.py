@@ -87,9 +87,11 @@ def describe(tag, d):
 def make_batch(batched: bool):
     m_mj = test_util.load_test_file(MODEL)
     mx = mujoco_torch.device_put(m_mj).to(DEVICE)
-    d_mj = mujoco.MjData(m_mj)
+    # Use make_data (honors constraint_sizes) instead of device_put(MjData)
+    # so that efc_* fields are sized to the model's post-step nefc — without
+    # this, call 1 sees init shape (0,) and outputs (nefc,), shape-drifting.
     with torch.device("cpu"):
-        dx0 = mujoco_torch.device_put(d_mj)
+        dx0 = mujoco_torch.make_data(mx)
     dx0 = dx0.to(DEVICE)
     if batched:
         return mx, dx0.expand(BATCH).clone()
