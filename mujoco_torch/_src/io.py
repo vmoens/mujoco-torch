@@ -19,7 +19,7 @@ import numpy as np
 import torch
 from tensordict import UnbatchedTensor
 
-from mujoco_torch._src import constraint, device
+from mujoco_torch._src import constraint, device, support
 from mujoco_torch._src.types import Contact, Data, Model
 
 DEFAULT_DTYPE = torch.float64
@@ -136,8 +136,10 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
         "wrap_xpos": torch.zeros((m.nwrap, 6), dtype=DEFAULT_DTYPE),
         "actuator_moment": torch.zeros((m.nu, m.nv), dtype=DEFAULT_DTYPE),
         "crb": torch.zeros((m.nbody, 10), dtype=DEFAULT_DTYPE),
-        "qM": torch.zeros(m.nM, dtype=DEFAULT_DTYPE),
-        "qLD": torch.zeros(m.nM, dtype=DEFAULT_DTYPE),
+        # qM/qLD: dense solver returns (nv, nv); sparse keeps (nM,). Match
+        # the step output so Dynamo doesn't see a shape change on call 2.
+        "qM": torch.zeros((m.nv, m.nv) if not support.is_sparse(m) else (m.nM,), dtype=DEFAULT_DTYPE),
+        "qLD": torch.zeros((m.nv, m.nv) if not support.is_sparse(m) else (m.nM,), dtype=DEFAULT_DTYPE),
         "qLDiagInv": torch.zeros(m.nv, dtype=DEFAULT_DTYPE),
         "ten_velocity": torch.zeros(m.ntendon, dtype=DEFAULT_DTYPE),
         "actuator_velocity": torch.zeros(m.nu, dtype=DEFAULT_DTYPE),

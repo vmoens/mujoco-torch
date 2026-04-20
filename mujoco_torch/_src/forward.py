@@ -132,7 +132,6 @@ def _actuation(m: Model, d: Data) -> Data:
             raise NotImplementedError(f"dyntype {dyn_typ.name} not implemented.")
         return act_dot
 
-    act_dot = torch.zeros((m.na,), dtype=d.qpos.dtype, device=d.qpos.device)
     if m.na:
         act_dot = scan.flat(
             m,
@@ -145,6 +144,11 @@ def _actuation(m: Model, d: Data) -> Data:
             d.act,
             group_by="u",
         )
+    else:
+        # No stateful actuators: propagate the input (shape-(0,)) so we
+        # don't allocate a fresh zero tensor whose stride differs from
+        # init under vmap.
+        act_dot = d.act_dot
 
     ctrl_act = ctrl
     if m.na:

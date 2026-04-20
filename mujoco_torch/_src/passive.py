@@ -176,11 +176,15 @@ def passive(m: Model, d: Data) -> Data:
         return d
 
     qfrc_passive = _spring_damper(m, d)
-    qfrc_gravcomp = d.qvel * 0
 
     if m.has_gravcomp and not m.opt.disableflags & DisableBit.GRAVITY:
         qfrc_gravcomp = _gravcomp(m, d)
         qfrc_passive = qfrc_passive + qfrc_gravcomp * (1 - m.jnt_actgravcomp[m.dof_jntid])
+    else:
+        # No gravcomp: preserve the init value so its stride/layout matches
+        # across step calls (a fresh torch.zeros(nv) would get broadcast to
+        # stride-0 under vmap, triggering a Dynamo recompile).
+        qfrc_gravcomp = d.qfrc_gravcomp
 
     if m.opt.has_fluid_params:
         qfrc_passive = qfrc_passive + _fluid(m, d)

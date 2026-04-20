@@ -813,11 +813,14 @@ def _data_derived(value: mujoco.MjData) -> dict[str, Any]:
             np.diag(m_data) if nu == nv else np.zeros((nu, nv)),
             dtype=torch.float64,
         )
+    # qM/qLD: default to dense (nv, nv) to match step output for the dense
+    # solver.  Step overwrites these before reading, so init values can be
+    # zeros.  Sparse models should use make_data() which honors is_sparse.
     return {
         "efc_J": torch.device_put(value.efc_J),
         "actuator_moment": actuator_moment,
-        "qM": torch.as_tensor(value.qM.copy(), dtype=torch.float64),
-        "qLD": torch.as_tensor(value.qM.copy(), dtype=torch.float64),  # same sparse format as qM
+        "qM": torch.zeros((nv, nv), dtype=torch.float64),
+        "qLD": torch.zeros((nv, nv), dtype=torch.float64),
     }
 
 

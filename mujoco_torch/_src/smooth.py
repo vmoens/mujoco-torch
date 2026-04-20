@@ -572,6 +572,5 @@ def transmission(m: Model, d: Data) -> Data:
 
     length = torch.stack(lengths).contiguous()
     moment = torch.stack(moments).contiguous()
-    batched_zero = d.qvel.sum() * 0
-    d.update_(actuator_length=length + batched_zero, actuator_moment=moment + batched_zero)
+    d.update_(actuator_length=length, actuator_moment=moment)
     return d
