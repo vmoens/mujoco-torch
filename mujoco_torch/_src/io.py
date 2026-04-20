@@ -138,8 +138,8 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
         # actuator transmissions produce Model-only moment rows; otherwise
         # init to zeros (step will populate it each call).
         "actuator_moment": (
-            torch.as_tensor(m._device_precomp["actuator_moment_static_py"], dtype=DEFAULT_DTYPE)
-            if m._device_precomp.get("actuator_moment_static_py") is not None
+            torch.as_tensor(m.actuator_moment_static_py, dtype=DEFAULT_DTYPE)
+            if m.actuator_moment_static_py is not None
             else torch.zeros((m.nu, m.nv), dtype=DEFAULT_DTYPE)
         ),
         "crb": torch.zeros((m.nbody, 10), dtype=DEFAULT_DTYPE),

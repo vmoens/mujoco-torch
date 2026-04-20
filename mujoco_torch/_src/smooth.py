@@ -571,7 +571,7 @@ def transmission(m: Model, d: Data) -> Data:
             raise RuntimeError(f"unrecognized joint type: {jnt_typ}")
 
     length = torch.stack(lengths).contiguous()
-    if m._device_precomp["actuator_moment_is_batched_py"]:
+    if m.actuator_moment_is_batched_py:
         moment = torch.stack(moments).contiguous()
         d.update_(actuator_length=length, actuator_moment=moment)
     else:

@@ -778,6 +778,8 @@ class Model(MjTensorClass):
     dof_tri_row: np.ndarray
     dof_tri_col: np.ndarray
     actuator_info: tuple
+    actuator_moment_is_batched_py: bool
+    actuator_moment_static_py: np.ndarray | None
     constraint_sizes_py: tuple
     condim_counts_py: tuple
     condim_tensor_py: torch.Tensor
