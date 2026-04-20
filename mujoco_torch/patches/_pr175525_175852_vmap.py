@@ -54,13 +54,12 @@ def register_vmappable_cls(cls: type) -> None:
 def _is_vmappable(obj: Any) -> bool:
     if isinstance(obj, torch.Tensor):
         return False
-    cls = type(obj)
-    if cls in _vmappable_cls_cache:
-        return True
-    if hasattr(cls, "_add_batch_dim"):
-        _vmappable_cls_cache[cls] = True
-        return True
-    return False
+    # Avoid caching the result here: Dynamo specializes on the cache's
+    # truthiness / membership when this runs under torch.compile, and a
+    # first-trace cache miss followed by a second-call cache hit triggers
+    # a recompile.  ``hasattr`` is O(1) on a given class so the per-call
+    # cost is negligible.
+    return hasattr(type(obj), "_add_batch_dim")
 
 
 # ---------------------------------------------------------------------------
