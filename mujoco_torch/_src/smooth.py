@@ -214,6 +214,12 @@ def com_pos(m: Model, d: Data) -> Data:
         d.xipos,
         torch.vmap(torch.divide)(pos, torch.maximum(mass, _MJMINVAL.get(mass.dtype, mass.device))),
     )
+    # .contiguous() to match the stride of the initial Data's subtree_com
+    # (contiguous from make_data + expand().clone()).  Without this, the
+    # vmap(divide) + where path produces a transposed layout (stride
+    # swapped on the last two dims), which trips Dynamo's per-call stride
+    # guard on subsequent compile(vmap(step)) invocations.
+    subtree_com = subtree_com.contiguous()
 
     # map inertias to frame centered at subtree_com
     @torch.vmap
