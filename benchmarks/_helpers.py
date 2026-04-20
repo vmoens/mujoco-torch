@@ -25,17 +25,17 @@ def load_model(name: str) -> mujoco.MjModel:
 def make_batch(mx, m_mj, batch_size, device=DEVICE):
     """Create a batched Data with ``batch_size`` envs on ``device``.
 
-    Vectorized: one ``device_put`` + ``expand(batch_size).clone()`` + a single
-    host→device copy for the randomized qvel field. Replaces the earlier
-    per-env Python loop that was O(B) MjData allocations (≈13 ms/env — over
-    20 minutes at B=131k).
+    Uses ``make_data`` so that contact/efc fields are sized from
+    ``constraint_sizes(m)`` — matches the shapes that step() produces.
+    ``device_put(MjData)`` honors MjData's current (post-reset) ncon/nefc = 0,
+    which shape-drifts against step output and triggers a Dynamo recompile on
+    call 2.
     """
     rng = np.random.RandomState(SEED)
     qvels = 0.01 * rng.randn(batch_size, m_mj.nv)
 
-    d = mujoco.MjData(m_mj)
     with torch.device("cpu"):
-        dx0 = mujoco_torch.device_put(d)
+        dx0 = mujoco_torch.make_data(mx)
     dx0 = dx0.to(device)
     batched = dx0.expand(batch_size).clone()
     batched.qvel[:] = torch.as_tensor(qvels, dtype=batched.qvel.dtype, device=device)

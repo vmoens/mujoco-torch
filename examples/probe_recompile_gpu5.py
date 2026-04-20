@@ -42,9 +42,8 @@ def make_batch():
     m_mj = test_util.load_test_file(MODEL)
     mx = mujoco_torch.device_put(m_mj)
     mx = mx.to(DEVICE)
-    d_mj = mujoco.MjData(m_mj)
     with torch.device("cpu"):
-        dx0 = mujoco_torch.device_put(d_mj)
+        dx0 = mujoco_torch.make_data(mx)
     dx0 = dx0.to(DEVICE)
     return mx, dx0.expand(BATCH).clone()
 
