@@ -115,6 +115,12 @@ def kinematics(m: Model, d: Data) -> Data:
     v_local_to_global = torch.vmap(support.local_to_global)
 
     xipos, ximat = v_local_to_global(xpos, xquat, m.body_ipos, m.body_iquat)
+    # Force contiguous layout for xanchor/xaxis: on envs with only slide/hinge
+    # joints, these are model-constant so vmap emits stride-0 broadcasts, but
+    # the input Data has them materialized with normal strides.  The stride
+    # mismatch triggers a Dynamo recompile on the second call.
+    xanchor = xanchor.contiguous()
+    xaxis = xaxis.contiguous()
     kwargs = dict(qpos=qpos, xanchor=xanchor, xaxis=xaxis, xpos=xpos, xquat=xquat, xmat=xmat, xipos=xipos, ximat=ximat)
 
     if m.ngeom:

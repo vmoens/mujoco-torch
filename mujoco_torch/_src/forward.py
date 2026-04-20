@@ -389,7 +389,10 @@ def forward(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
 
     _, _, _, _, nefc = collision_driver.constraint_sizes(m)
     if nefc == 0:
-        d.update_(qacc=d.qacc_smooth)
+        # Clone to avoid aliasing qacc with qacc_smooth — Dynamo emits a
+        # "Duplicate tensors found" guard otherwise, forcing a recompile on
+        # the next call when the caller feeds the aliased tensors back in.
+        d.update_(qacc=d.qacc_smooth.clone())
         return d
 
     d = solver.solve(m, d, fixed_iterations=fixed_iterations)
