@@ -73,8 +73,10 @@ _TRANSFORMS = {
     # Without this, ``_device_put_torch`` would land on torch's default int64
     # and the first compiled ``step`` call retraces once on a dtype guard when
     # ``make_constraint`` overwrites ``nefc`` as int32.
-    (types.Data, "nefc"): lambda x: torch.tensor(int(x), dtype=torch.int32),
-    (types.Data, "ncon"): lambda x: torch.tensor(int(x), dtype=torch.int32),
+    # Wrapped in UnbatchedTensor so .expand(B).clone() keeps the broadcast
+    # semantics through tensordict and vmap doesn't emit stride-0 outputs.
+    (types.Data, "nefc"): lambda x: UnbatchedTensor(data=torch.tensor(int(x), dtype=torch.int32)),
+    (types.Data, "ncon"): lambda x: UnbatchedTensor(data=torch.tensor(int(x), dtype=torch.int32)),
     (types.Data, "ximat"): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
     (types.Data, "xmat"): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
     (types.Data, "geom_xmat"): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
@@ -920,7 +922,10 @@ def device_put(value, *, dtype: torch.dtype | None = None):
         if (clz, f.name) in _TRANSFORMS:
             field_value = _TRANSFORMS[(clz, f.name)](field_value)
 
-        if f.type is torch.Tensor:
+        if isinstance(field_value, UnbatchedTensor):
+            # Already wrapped by a transform; skip re-wrapping / device_put.
+            pass
+        elif f.type is torch.Tensor:
             field_value = torch.device_put(field_value)
         elif f.type is UnbatchedTensor:
             field_value = UnbatchedTensor(
@@ -1005,8 +1010,13 @@ def device_get_into(result, value):
 
     else:
         if isinstance(result, mujoco.MjData):
+            # nefc/ncon are wrapped as UnbatchedTensor (TensorClass) to
+            # preserve broadcast semantics under vmap; unwrap via .data to
+            # reach the underlying 0-d tensor before calling int().
+            ncon_v = value.ncon.data if isinstance(value.ncon, UnbatchedTensor) else value.ncon
+            nefc_v = value.nefc.data if isinstance(value.nefc, UnbatchedTensor) else value.nefc
             mujoco._functions._realloc_con_efc(  # pylint: disable=protected-access
-                result, ncon=int(value.ncon), nefc=int(value.nefc)
+                result, ncon=int(ncon_v), nefc=int(nefc_v)
             )
 
         for f in dataclasses.fields(value):  # type: ignore
