@@ -997,7 +997,7 @@ class Contact(MjTensorClass):
             geom1=torch.zeros(shape, dtype=torch.int32, device=device),
             geom2=torch.zeros(shape, dtype=torch.int32, device=device),
             geom=torch.zeros(shape + (2,), dtype=torch.int32, device=device),
-            efc_address=torch.zeros(shape, dtype=torch.int32, device=device),
+            efc_address=torch.zeros(shape, dtype=torch.int64, device=device),
             batch_size=list(shape),
         )
 

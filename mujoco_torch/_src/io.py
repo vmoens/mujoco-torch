@@ -116,7 +116,7 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
     # Build contact dim and efc_address (mujoco_torch uses contact_dim=3 for all, 4 efc rows per contact)
     contact_dim = torch.full((ncon,), 3, dtype=torch.int32) if ncon > 0 else torch.zeros((0,), dtype=torch.int32)
     efc_address = (
-        torch.arange(ns, ns + ncon * 4, 4, dtype=torch.int32) if ncon > 0 else torch.zeros((0,), dtype=torch.int32)
+        torch.arange(ns, ns + ncon * 4, 4, dtype=torch.int64) if ncon > 0 else torch.zeros((0,), dtype=torch.int64)
     )
     contact = _make_data_contact(ncon, contact_dim, efc_address)
 
@@ -136,7 +136,7 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
             geom1=static["geom1"],
             geom2=static["geom2"],
             geom=static["geom"],
-            efc_address=static["efc_address"].to(torch.int32),
+            efc_address=static["efc_address"],
         )
 
     # Build public fields
