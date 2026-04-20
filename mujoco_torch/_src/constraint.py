@@ -605,14 +605,26 @@ def make_constraint(m: Model, d: Data) -> Data:
         _dev = d.qpos.device
         if reported_nefc is None:
             reported_nefc = size
-        # Early-return path: no constraint computation happened, so leave
-        # efc_J/D/aref/frictionloss alone — they were initialized to zeros
-        # in make_data with the batched input stride.  Writing fresh zeros
-        # here would emit stride-0 broadcasts under vmap, mismatching the
-        # input stride and forcing a Dynamo recompile on call 2.
-        d.update_(
-            nefc=UnbatchedTensor(data=torch.full((), reported_nefc, dtype=torch.int32, device=_dev)),
-        )
+        # Early-return path: under compile, leave efc_J/D/aref/frictionloss
+        # alone — they were initialized by make_data with the batched input
+        # stride, and writing fresh zeros here would emit stride-0 broadcasts
+        # that mismatch the input stride and force a Dynamo recompile.
+        # Under eager, reset them so stateful callers (e.g. test flows that
+        # toggle disable flags between calls) see a fresh zero buffer.
+        if torch.compiler.is_compiling():
+            d.update_(
+                nefc=UnbatchedTensor(data=torch.full((), reported_nefc, dtype=torch.int32, device=_dev)),
+            )
+        else:
+            dtype = d.qpos.dtype
+            z = torch.zeros(size, dtype=dtype, device=_dev)
+            d.update_(
+                efc_J=torch.zeros((size, m.nv), dtype=dtype, device=_dev),
+                efc_D=z,
+                efc_aref=z,
+                efc_frictionloss=z,
+                nefc=UnbatchedTensor(data=torch.full((), reported_nefc, dtype=torch.int32, device=_dev)),
+            )
         return d
 
     if nefc == 0:
