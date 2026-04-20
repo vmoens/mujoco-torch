@@ -132,6 +132,8 @@ _DERIVED = mesh.DERIVED.union(
         (types.Model, "dof_tri_row"),
         (types.Model, "dof_tri_col"),
         (types.Model, "actuator_info"),
+        (types.Model, "actuator_moment_is_batched_py"),
+        (types.Model, "actuator_moment_static_py"),
         (types.Model, "constraint_sizes_py"),
         (types.Model, "condim_counts_py"),
         (types.Model, "condim_tensor_py"),
