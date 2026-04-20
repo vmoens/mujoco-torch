@@ -96,10 +96,39 @@ def make_batch(batched: bool):
     return mx, dx0
 
 
+def _field_strides(d):
+    """Return {field_name: (shape, stride)} for every tensor in d._tensordict."""
+    out = {}
+    for k, v in d._tensordict._tensordict.items():
+        if isinstance(v, UnbatchedTensor):
+            v = v.data
+        if hasattr(v, "stride") and hasattr(v, "shape"):
+            try:
+                out[k] = (tuple(v.shape), tuple(v.stride()))
+            except Exception:
+                pass
+    return out
+
+
+def diff_strides(label, before, after):
+    """Print fields whose (shape, stride) changed between before and after."""
+    drifted = []
+    for k in sorted(set(before) & set(after)):
+        if before[k] != after[k]:
+            drifted.append((k, before[k], after[k]))
+    if drifted:
+        print(f"  [{label}] stride/shape DRIFT:", flush=True)
+        for k, b, a in drifted:
+            print(f"      {k}: {b} -> {a}", flush=True)
+    else:
+        print(f"  [{label}] no stride/shape drift across {len(before)} fields", flush=True)
+
+
 def run_scenario(name, step_fn, mx, dx):
     print(f"\n=== {name} ===", flush=True)
     torch._dynamo.reset()
     describe("input ", dx)
+    before = _field_strides(dx)
     for i in range(3):
         t0 = time.time()
         dx = step_fn(mx, dx)
@@ -107,6 +136,9 @@ def run_scenario(name, step_fn, mx, dx):
             torch.cuda.synchronize()
         dt = time.time() - t0
         describe(f"call {i + 1} ({dt:.2f}s)", dx)
+        after = _field_strides(dx)
+        diff_strides(f"call {i + 1} vs prev", before, after)
+        before = after
 
 
 def main():
