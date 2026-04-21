@@ -122,6 +122,10 @@ _DERIVED = mesh.DERIVED.union(
         # qM, qLD have different sparse formats in MJ vs torch
         (types.Data, "qM"),
         (types.Data, "qLD"),
+        # contact is built from scratch (shape (0,)) rather than read from
+        # MjData, so its provenance is guaranteed-fresh and the collision()
+        # passthrough gate (which keys on contact shape) can't misfire.
+        (types.Data, "contact"),
         (types.Option, "has_fluid_params"),
         # Torch-impl derived model fields
         (types.Model, "mesh_convex"),
@@ -542,6 +546,50 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
     return result
 
 
+def _compute_actuator_static_moment(
+    value: mujoco.MjModel,
+) -> tuple[tuple, bool, np.ndarray]:
+    """Build the model-constant actuator moment matrix.
+
+    The moment row for an actuator depends on Data only for TENDON transmissions
+    (reads d.ten_J) and for JOINTINPARENT on FREE/BALL joints (rotates the gear
+    axis by d.qpos's quaternion).  Otherwise the row is built from Model values
+    alone and can be baked at device_put time.
+
+    Returns (actuator_info, moment_is_batched, static_moment). When batched,
+    static_moment is still returned as a consistent zeros matrix that callers
+    may use as an init value; they should treat it as meaningful only when
+    moment_is_batched is False.
+    """
+    actuator_info: list[tuple[int, int, int, int, int]] = []
+    moment_is_batched = False
+    static_moment = np.zeros((value.nu, value.nv), dtype=np.float64)
+    for i in range(value.nu):
+        trntype = int(value.actuator_trntype[i])
+        trnid = int(value.actuator_trnid[i, 0])
+        jnt_type = dofadr = qposadr = 0
+        if trntype != types.TrnType.TENDON:
+            jnt_type = int(value.jnt_type[trnid])
+            dofadr = int(value.jnt_dofadr[trnid])
+            qposadr = int(value.jnt_qposadr[trnid])
+        actuator_info.append((trntype, trnid, jnt_type, dofadr, qposadr))
+        gear = np.array(value.actuator_gear[i], dtype=np.float64)
+        if trntype == types.TrnType.TENDON:
+            moment_is_batched = True
+        elif trntype == types.TrnType.JOINTINPARENT and jnt_type in (
+            int(types.JointType.FREE),
+            int(types.JointType.BALL),
+        ):
+            moment_is_batched = True
+        elif jnt_type == int(types.JointType.FREE):
+            static_moment[i, dofadr : dofadr + 6] = gear[:6]
+        elif jnt_type == int(types.JointType.BALL):
+            static_moment[i, dofadr : dofadr + 3] = gear[:3]
+        elif jnt_type in (int(types.JointType.SLIDE), int(types.JointType.HINGE)):
+            static_moment[i, dofadr] = gear[0]
+    return tuple(actuator_info), moment_is_batched, static_moment
+
+
 def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     global _model_cache_id_counter
     _model_cache_id_counter += 1
@@ -589,39 +637,8 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     result["dof_tri_row"] = np.array(rows, dtype=np.int64)
     result["dof_tri_col"] = np.array(cols, dtype=np.int64)
 
-    actuator_info = []
-    moment_is_batched = False
-    static_moment = np.zeros((value.nu, value.nv), dtype=np.float64)
-    for i in range(value.nu):
-        trntype = int(value.actuator_trntype[i])
-        trnid = int(value.actuator_trnid[i, 0])
-        jnt_type = dofadr = qposadr = 0
-        if trntype != types.TrnType.TENDON:
-            jnt_type = int(value.jnt_type[trnid])
-            dofadr = int(value.jnt_dofadr[trnid])
-            qposadr = int(value.jnt_qposadr[trnid])
-        actuator_info.append((trntype, trnid, jnt_type, dofadr, qposadr))
-        # The moment row for an actuator depends on Data only for TENDON
-        # transmissions (reads d.ten_J) and for JOINTINPARENT on FREE/BALL
-        # joints (rotates the gear axis by d.qpos's quaternion).  Otherwise
-        # the row is built from Model values alone and can be baked at
-        # device_put time — the init static_moment matches step output,
-        # avoiding a vmap stride-0 drift / Dynamo recompile.
-        gear = np.array(value.actuator_gear[i], dtype=np.float64)
-        if trntype == types.TrnType.TENDON:
-            moment_is_batched = True
-        elif trntype == types.TrnType.JOINTINPARENT and jnt_type in (
-            int(types.JointType.FREE),
-            int(types.JointType.BALL),
-        ):
-            moment_is_batched = True
-        elif jnt_type == int(types.JointType.FREE):
-            static_moment[i, dofadr : dofadr + 6] = gear[:6]
-        elif jnt_type == int(types.JointType.BALL):
-            static_moment[i, dofadr : dofadr + 3] = gear[:3]
-        elif jnt_type in (int(types.JointType.SLIDE), int(types.JointType.HINGE)):
-            static_moment[i, dofadr] = gear[0]
-    result["actuator_info"] = tuple(actuator_info)
+    actuator_info, moment_is_batched, static_moment = _compute_actuator_static_moment(value)
+    result["actuator_info"] = actuator_info
     result["actuator_moment_is_batched_py"] = moment_is_batched
     result["actuator_moment_static_py"] = None if moment_is_batched else static_moment
 
@@ -831,14 +848,19 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
 def _data_derived(value: mujoco.MjData) -> dict[str, Any]:
     nv = value.qvel.shape[0]
     nu = value.ctrl.shape[0]
-    # MuJoCo stores actuator_moment as (nu,), we need (nu, nv) dense
-    actuator_moment = torch.zeros((nu, nv), dtype=torch.float64)
-    if nu > 0:
-        m_data = np.array(value.actuator_moment)
-        actuator_moment = torch.as_tensor(
-            np.diag(m_data) if nu == nv else np.zeros((nu, nv)),
-            dtype=torch.float64,
-        )
+    # MuJoCo stores actuator_moment as (nu,), we need (nu, nv) dense.  When the
+    # moment is fully determined by the model (non-TENDON, non-JOINTINPARENT
+    # FREE/BALL), transmission() skips writing it and relies on the init value
+    # matching the static moment — so bake it here from the underlying model.
+    mjmodel = getattr(value, "model", None)
+    if mjmodel is not None and nu > 0:
+        _, moment_is_batched, static_moment = _compute_actuator_static_moment(mjmodel)
+        if moment_is_batched:
+            actuator_moment = torch.zeros((nu, nv), dtype=torch.float64)
+        else:
+            actuator_moment = torch.as_tensor(static_moment, dtype=torch.float64)
+    else:
+        actuator_moment = torch.zeros((nu, nv), dtype=torch.float64)
     # qM/qLD: default to dense (nv, nv) to match step output for the dense
     # solver.  Step overwrites these before reading, so init values can be
     # zeros.  Sparse models should use make_data() which honors is_sparse.
@@ -847,6 +869,7 @@ def _data_derived(value: mujoco.MjData) -> dict[str, Any]:
         "actuator_moment": actuator_moment,
         "qM": torch.zeros((nv, nv), dtype=torch.float64),
         "qLD": torch.zeros((nv, nv), dtype=torch.float64),
+        "contact": types.Contact.zero(shape=(0,)),
     }
 
 
