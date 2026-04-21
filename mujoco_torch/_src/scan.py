@@ -160,7 +160,7 @@ def precompute_scan_caches(m, cache_id: int):
         # Pre-extract static args for all groups
         key_in_take_torch = cache["key_in_take_torch"]
         keys = cache["keys"]
-        pre_extracted = []
+        pre_extracted = {}
         for key in keys:
             group_static = [None]  # carry is never static
             for i, ids in enumerate(key_in_take_torch[key]):
@@ -172,12 +172,8 @@ def precompute_scan_caches(m, cache_id: int):
                         static_val = _validate_and_convert_subset(subset)
                         break
                 group_static.append(static_val)
-            pre_extracted.append(group_static)
+            pre_extracted[key] = group_static
         cache["pre_extracted_static"] = pre_extracted
-        sample = next((g for g in pre_extracted if g is not None), None)
-        cache["pre_extracted_is_static"] = (
-            tuple(x is not None for x in sample[1:]) if sample else tuple(False for _ in in_types)
-        )
         _body_tree_cache[cache_key] = cache
 
 
@@ -917,14 +913,17 @@ def body_tree(
     # time for known signatures), otherwise fall back to runtime extraction.
     all_static_args = cache.get("pre_extracted_static")
     if all_static_args is not None:
-        is_static = list(cache["pre_extracted_is_static"])
+        # Derive static mask from the pre-extracted data (compile-safe).
+        # Skip carry position (index 0) which is always None.
+        sample = next(iter(all_static_args.values()), None)
+        is_static = [x is not None for x in sample[1:]] if sample else [False] * len(args)
     else:
         is_static = _static_arg_mask(m, args)
         all_static_args = _extract_static_for_body_tree(args, key_in_take_torch, keys, is_static)
 
     # Scan over groups in tree order, carrying results up/down
     key_y = {}
-    for i, key in enumerate(keys):
+    for key in keys:
         carry = None
 
         if reverse:
@@ -949,7 +948,7 @@ def body_tree(
 
         ids_list = key_in_take_torch[key]
         f_args = [_take(arg, ids) if not static else None for arg, ids, static in zip(args, ids_list, is_static)]
-        y = _nvmap(f, all_static_args[i], carry, *f_args)
+        y = _nvmap(f, all_static_args[key], carry, *f_args)
 
         key_y[key] = y
 
