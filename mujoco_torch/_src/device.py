@@ -122,10 +122,6 @@ _DERIVED = mesh.DERIVED.union(
         # qM, qLD have different sparse formats in MJ vs torch
         (types.Data, "qM"),
         (types.Data, "qLD"),
-        # contact is built from scratch (shape (0,)) rather than read from
-        # MjData, so its provenance is guaranteed-fresh and the collision()
-        # passthrough gate (which keys on contact shape) can't misfire.
-        (types.Data, "contact"),
         (types.Option, "has_fluid_params"),
         # Torch-impl derived model fields
         (types.Model, "mesh_convex"),
@@ -869,7 +865,6 @@ def _data_derived(value: mujoco.MjData) -> dict[str, Any]:
         "actuator_moment": actuator_moment,
         "qM": torch.zeros((nv, nv), dtype=torch.float64),
         "qLD": torch.zeros((nv, nv), dtype=torch.float64),
-        "contact": types.Contact.zero(shape=(0,)),
     }
 
 

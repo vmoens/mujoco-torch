@@ -844,12 +844,17 @@ def collision(m: Model, d: Data) -> Data:
     pos = contact.pos[sort_idx]
     frame = contact.frame[sort_idx]
 
-    # When static precompute exists AND d.contact was initialized with the
-    # matching ncon_ shape (via make_data), reuse d.contact's model-constant
-    # fields to keep the vmap output stride tied to the batched input.
-    # Otherwise (e.g. device_put(MjData) builds d.contact with size 0) emit
-    # the full fresh contact.
-    use_passthrough = m._device_precomp.get("contact_static") is not None and d.contact.dist.shape[-1] == ncon_
+    # When static precompute exists AND we're inside torch.compile, reuse
+    # d.contact's model-constant fields so the vmap output stride tracks the
+    # batched input (prevents stride-0 drift / recompile).  Eager paths
+    # (incl. device_put(MjData) -> collision()) always take the fresh branch:
+    # d.contact may carry raw post-step data with shape == ncon_ that only
+    # coincidentally matches, and passthrough would reuse stale model fields.
+    use_passthrough = (
+        m._device_precomp.get("contact_static") is not None
+        and d.contact.dist.shape[-1] == ncon_
+        and torch.compiler.is_compiling()
+    )
     if use_passthrough:
         new_contact = d.contact.replace(dist=dist, pos=pos, frame=frame)
     else:
