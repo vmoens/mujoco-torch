@@ -35,6 +35,14 @@ This currently includes:
 Expected runtime is ~15–25 minutes per env on an H100/H200 GPU.  Run
 overnight if needed.
 
+### Torch version
+
+The integration test is validated against PyTorch nightly
+`2.13.0.dev20260417+cu130`.  Dynamo guard plumbing and vmap stride
+handling have been known to shift between stable releases, so on a
+failure first confirm the torch version — if you're on a different
+build, reproduce on the pinned nightly before bisecting mujoco-torch.
+
 If the integration suite fails with a recompile, set
 `TORCH_LOGS=recompiles` and re-run the specific parametrization to see
 the guard that flipped.

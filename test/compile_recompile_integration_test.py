@@ -7,6 +7,10 @@ for 15+ minutes per env, so it is gated behind the ``integration`` marker.
 
 Run with:  pytest -m integration test/compile_recompile_integration_test.py
 
+Note: pyproject.toml sets ``addopts = "-m 'not integration'"``, so a plain
+``pytest`` invocation silently skips this file.  Always pass ``-m integration``
+(or override ``addopts``) when you want the recompile gate to run.
+
 See RELEASE.md for the pre-publish checklist.
 """
 
@@ -33,6 +37,10 @@ NSTEPS = 3
 
 
 def _unique_graph_count() -> int:
+    # torch._dynamo.utils.counters is a PyTorch-internal counter dict. If a
+    # future torch version renames or relocates it, this will raise rather
+    # than silently return 0 — i.e. CI surfaces the breakage instead of
+    # silently passing with a false-zero recompile count.
     return int(torch._dynamo.utils.counters.get("stats", {}).get("unique_graphs", 0))
 
 

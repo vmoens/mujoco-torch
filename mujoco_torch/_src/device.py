@@ -932,6 +932,12 @@ def _probe_kinematics_static(mj_model: mujoco.MjModel) -> dict:
     kinematics() uses this dict to skip writing static fields so that
     d.<field>'s materialized stride (from make_data + expand().clone())
     is preserved across step calls.
+
+    atol/rtol are both 0 — mj_kinematics is deterministic for identical
+    qpos, so true-static fields compare bit-exact between the two probes.
+    Any future change that introduces numeric jitter in mj_kinematics
+    would silently reclassify static fields as dynamic (safe fallback,
+    but a noticeable perf cliff worth revisiting).
     """
     mj_data = mujoco.MjData(mj_model)
     mj_data.qpos[:] = mj_model.qpos0
