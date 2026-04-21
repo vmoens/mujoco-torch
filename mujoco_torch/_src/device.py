@@ -27,7 +27,8 @@ import torch
 from tensordict import UnbatchedTensor
 from torch.utils._pytree import tree_map
 
-from mujoco_torch._src import collision_driver, math as _math, mesh, ray, scan, types
+from mujoco_torch._src import collision_driver, mesh, ray, scan, types
+from mujoco_torch._src import math as _math
 from mujoco_torch._src.dataclasses import MjTensorClass
 
 _MJ_TYPE_ATTR = {

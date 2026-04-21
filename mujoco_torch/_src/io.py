@@ -19,7 +19,8 @@ import numpy as np
 import torch
 from tensordict import UnbatchedTensor
 
-from mujoco_torch._src import constraint, device, math as _math, support
+from mujoco_torch._src import constraint, device, support
+from mujoco_torch._src import math as _math
 from mujoco_torch._src.types import Contact, Data, Model
 
 DEFAULT_DTYPE = torch.float64

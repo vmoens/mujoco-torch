@@ -26,7 +26,6 @@ import argparse
 import json
 from pathlib import Path
 
-
 BACKEND_LABEL = {
     ("torch", "compile", False): "torch compile",
     ("torch", "compile", True): "torch compile (H4)",

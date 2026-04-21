@@ -228,7 +228,7 @@ def _bench_compile_mjx(env_name: str, batch_size: int, device: str) -> dict:
     import numpy as np
     from mujoco import mjx
 
-    from benchmarks._helpers import load_model, SEED
+    from benchmarks._helpers import SEED, load_model
 
     jax.config.update("jax_enable_x64", True)
 
