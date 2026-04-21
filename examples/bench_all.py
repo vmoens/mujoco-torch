@@ -326,11 +326,7 @@ def _bench_collector_torch(env_name: str, batch_size: int, device: str) -> dict:
     fpb = batch_size * DEFAULT_STEPS_PER_WRITE
 
     rb_max_size = max(1, RB_TOTAL_ELEMENTS // batch_size)
-    rb = ReplayBuffer(
-        storage=LazyTensorStorage(
-            max_size=rb_max_size, device=RB_DEVICE, ndim=2
-        )
-    )
+    rb = ReplayBuffer(storage=LazyTensorStorage(max_size=rb_max_size, device=RB_DEVICE, ndim=2))
     collector = SyncDataCollector(
         env,
         policy,
@@ -459,7 +455,7 @@ def main():
         "--tuned",
         action="store_true",
         help="For (mode=compile, backend=torch): enable Inductor coordinate-descent tuning "
-             "+ aggressive fusion (the 'tuned' column) and tag output rows with tuned=True.",
+        "+ aggressive fusion (the 'tuned' column) and tag output rows with tuned=True.",
     )
     p.add_argument(
         "--batch_sizes",

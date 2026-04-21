@@ -131,4 +131,3 @@ from mujoco_torch._src.types import (
     TrnType,
     WrapType,
 )
-
