@@ -835,40 +835,26 @@ def collision(m: Model, d: Data) -> Data:
         )
         return d
 
-    # No-topk path: sort is model-constant, so reorder fresh dist/pos/frame
-    # by the baked sort_idx and pass through d.contact's model-constant fields.
-    # This keeps the vmap output stride tied to the batched input stride,
-    # avoiding stride-0 broadcast drift that forces a recompile.
     sort_idx = torch.argsort(contact.contact_dim)
-    dist = contact.dist[sort_idx]
-    pos = contact.pos[sort_idx]
-    frame = contact.frame[sort_idx]
+    contact = contact[sort_idx]
+    ne, nf, nl, _, _ = constraint_sizes(m)
+    ns = ne + nf + nl
+    dims_t = contact.contact_dim
+    rows_per_contact = torch.where(dims_t == 1, 1, (dims_t - 1) * 2)
+    zeros = torch.zeros(1, dtype=rows_per_contact.dtype, device=rows_per_contact.device)
+    offsets = torch.cumsum(torch.cat([zeros, rows_per_contact[:-1]]), dim=0)
+    new_contact = contact.replace(efc_address=(ns + offsets).to(torch.int64))
 
-    # When static precompute exists AND we're inside torch.compile, reuse
-    # d.contact's model-constant fields so the vmap output stride tracks the
-    # batched input (prevents stride-0 drift / recompile).  Eager paths
-    # (incl. device_put(MjData) -> collision()) always take the fresh branch:
-    # d.contact may carry raw post-step data with shape == ncon_ that only
-    # coincidentally matches, and passthrough would reuse stale model fields.
     use_passthrough = (
         m._device_precomp.get("contact_static") is not None
         and d.contact.dist.shape[-1] == ncon_
         and torch.compiler.is_compiling()
     )
     if use_passthrough:
-        new_contact = d.contact.replace(dist=dist, pos=pos, frame=frame)
-    else:
-        contact = contact[sort_idx]
-        ne, nf, nl, _, _ = constraint_sizes(m)
-        ns = ne + nf + nl
-        dims_t = contact.contact_dim
-        rows_per_contact = torch.where(dims_t == 1, 1, (dims_t - 1) * 2)
-        zeros = torch.zeros(1, dtype=rows_per_contact.dtype, device=rows_per_contact.device)
-        offsets = torch.cumsum(torch.cat([zeros, rows_per_contact[:-1]]), dim=0)
-        new_contact = contact.replace(efc_address=(ns + offsets).to(torch.int64))
+        new_contact = new_contact.replace(includemargin=d.contact.includemargin)
 
     d.update_(
         contact=new_contact,
-        ncon=UnbatchedTensor(data=torch.full((), ncon_, dtype=torch.int32, device=dist.device)),
+        ncon=UnbatchedTensor(data=torch.full((), ncon_, dtype=torch.int32, device=contact.dist.device)),
     )
     return d
