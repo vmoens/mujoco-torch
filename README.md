@@ -227,13 +227,13 @@ than Euler.
 
 Hopper uses the RK4 integrator (like Walker2d).
 
-| Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 |
-|---|--:|--:|--:|--:|--:|
-| MuJoCo C (CPU, sequential) | 119,976 | — | — | — | — |
-| mujoco-torch vmap (eager) | 17 | 2,074 | 16,584 | 65,921 | 524,852 |
-| mujoco-torch compile | 313 | 35,441 | 269,661 | 1,059,939 | 4,557,454 |
-| **mujoco-torch compile (tuned)** | **286** | **33,658** | **257,049** | **1,035,760** | **3,474,654** |
-| MJX (JAX jit+vmap) | 945 | 115,509 | 836,522 | 977,780 | 7,762,885 |
+| Configuration | B=1 | B=128 | B=1 024 | B=4 096 | B=32 768 | B=65 536 | B=131 072 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| MuJoCo C (CPU, sequential) | 212,505 | — | — | — | — | — | — |
+| mujoco-torch vmap (eager) | 18 | 867 | 4,482 | 14,408 | 90,066 | 166,800 | 304,215 |
+| mujoco-torch compile | 285 | 22,652 | 153,702 | 572,233 | 2,652,525 | 3,327,314 | 3,710,821 |
+| **mujoco-torch compile (tuned)** | **309** | **23,510** | **161,201** | **609,688** | **3,187,133** | **4,091,785** | **4,893,648** |
+| MJX (JAX jit+vmap) | 575 | 47,496 | 350,215 | 1,117,554 | 2,487,794 | 2,699,727 | 1,997,695 |
 
 **"tuned"** = Inductor coordinate-descent tile-size tuning + aggressive fusion
 enabled (`torch._inductor.config.coordinate_descent_tuning`,
