@@ -674,8 +674,7 @@ def make_constraint(m: Model, d: Data) -> Data:
     efcs = tuple(efcs)
 
     if not efcs:
-        padded_nefc = nefc if torch.compiler.is_compiling() else 0
-        return _set_constraint_tensors(padded_nefc)
+        return _set_constraint_tensors(0)
 
     efc = torch.cat(list(efcs))
     refsafe = precomp["refsafe"]
@@ -726,27 +725,11 @@ def make_constraint(m: Model, d: Data) -> Data:
         r = r.detach() + r_cfd - r_cfd.detach()
 
     actual_nefc = r.shape[0]
-    if torch.compiler.is_compiling() and actual_nefc < nefc:
-        pad = nefc - actual_nefc
-        efc_J = torch.cat(
-            [efc.J, torch.zeros((pad, m.nv), dtype=efc.J.dtype, device=efc.J.device)],
-            dim=0,
-        )
-        efc_D = torch.cat([1 / r, torch.zeros(pad, dtype=r.dtype, device=r.device)], dim=0)
-        efc_aref = torch.cat([aref, torch.zeros(pad, dtype=aref.dtype, device=aref.device)], dim=0)
-        efc_frictionloss = torch.cat(
-            [
-                efc.frictionloss,
-                torch.zeros(pad, dtype=efc.frictionloss.dtype, device=efc.frictionloss.device),
-            ],
-            dim=0,
-        )
-    else:
-        efc_J = efc.J
-        efc_D = 1 / r
-        efc_aref = aref
-        efc_frictionloss = efc.frictionloss
-    reported_nefc = nefc if torch.compiler.is_compiling() else actual_nefc
+    efc_J = efc.J
+    efc_D = 1 / r
+    efc_aref = aref
+    efc_frictionloss = efc.frictionloss
+    reported_nefc = actual_nefc
 
     update_kwargs = dict(
         efc_J=efc_J,
