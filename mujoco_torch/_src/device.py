@@ -28,6 +28,7 @@ from tensordict import UnbatchedTensor
 from torch.utils._pytree import tree_map
 
 from mujoco_torch._src import collision_driver, mesh, ray, scan, types
+from mujoco_torch._src import math as _math
 from mujoco_torch._src.dataclasses import MjTensorClass
 
 _MJ_TYPE_ATTR = {
@@ -68,6 +69,15 @@ _TYPE_MAP = {
 }
 
 _TRANSFORMS = {
+    # MuJoCo exposes these as Python ints; force int32 so the torch tensors
+    # match what ``make_data`` / ``make_constraint`` / ``collision`` produce.
+    # Without this, ``_device_put_torch`` would land on torch's default int64
+    # and the first compiled ``step`` call retraces once on a dtype guard when
+    # ``make_constraint`` overwrites ``nefc`` as int32.
+    # Wrapped in UnbatchedTensor so .expand(B).clone() keeps the broadcast
+    # semantics through tensordict and vmap doesn't emit stride-0 outputs.
+    (types.Data, "nefc"): lambda x: UnbatchedTensor(data=torch.tensor(int(x), dtype=torch.int32)),
+    (types.Data, "ncon"): lambda x: UnbatchedTensor(data=torch.tensor(int(x), dtype=torch.int32)),
     (types.Data, "ximat"): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
     (types.Data, "xmat"): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
     (types.Data, "geom_xmat"): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
@@ -123,6 +133,8 @@ _DERIVED = mesh.DERIVED.union(
         (types.Model, "dof_tri_row"),
         (types.Model, "dof_tri_col"),
         (types.Model, "actuator_info"),
+        (types.Model, "actuator_moment_is_batched_py"),
+        (types.Model, "actuator_moment_static_py"),
         (types.Model, "constraint_sizes_py"),
         (types.Model, "condim_counts_py"),
         (types.Model, "condim_tensor_py"),
@@ -531,6 +543,50 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
     return result
 
 
+def _compute_actuator_static_moment(
+    value: mujoco.MjModel,
+) -> tuple[tuple, bool, np.ndarray]:
+    """Build the model-constant actuator moment matrix.
+
+    The moment row for an actuator depends on Data only for TENDON transmissions
+    (reads d.ten_J) and for JOINTINPARENT on FREE/BALL joints (rotates the gear
+    axis by d.qpos's quaternion).  Otherwise the row is built from Model values
+    alone and can be baked at device_put time.
+
+    Returns (actuator_info, moment_is_batched, static_moment). When batched,
+    static_moment is still returned as a consistent zeros matrix that callers
+    may use as an init value; they should treat it as meaningful only when
+    moment_is_batched is False.
+    """
+    actuator_info: list[tuple[int, int, int, int, int]] = []
+    moment_is_batched = False
+    static_moment = np.zeros((value.nu, value.nv), dtype=np.float64)
+    for i in range(value.nu):
+        trntype = int(value.actuator_trntype[i])
+        trnid = int(value.actuator_trnid[i, 0])
+        jnt_type = dofadr = qposadr = 0
+        if trntype != types.TrnType.TENDON:
+            jnt_type = int(value.jnt_type[trnid])
+            dofadr = int(value.jnt_dofadr[trnid])
+            qposadr = int(value.jnt_qposadr[trnid])
+        actuator_info.append((trntype, trnid, jnt_type, dofadr, qposadr))
+        gear = np.array(value.actuator_gear[i], dtype=np.float64)
+        if trntype == types.TrnType.TENDON:
+            moment_is_batched = True
+        elif trntype == types.TrnType.JOINTINPARENT and jnt_type in (
+            int(types.JointType.FREE),
+            int(types.JointType.BALL),
+        ):
+            moment_is_batched = True
+        elif jnt_type == int(types.JointType.FREE):
+            static_moment[i, dofadr : dofadr + 6] = gear[:6]
+        elif jnt_type == int(types.JointType.BALL):
+            static_moment[i, dofadr : dofadr + 3] = gear[:3]
+        elif jnt_type in (int(types.JointType.SLIDE), int(types.JointType.HINGE)):
+            static_moment[i, dofadr] = gear[0]
+    return tuple(actuator_info), moment_is_batched, static_moment
+
+
 def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     global _model_cache_id_counter
     _model_cache_id_counter += 1
@@ -578,17 +634,10 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     result["dof_tri_row"] = np.array(rows, dtype=np.int64)
     result["dof_tri_col"] = np.array(cols, dtype=np.int64)
 
-    actuator_info = []
-    for i in range(value.nu):
-        trntype = int(value.actuator_trntype[i])
-        trnid = int(value.actuator_trnid[i, 0])
-        jnt_type = dofadr = qposadr = 0
-        if trntype != types.TrnType.TENDON:
-            jnt_type = int(value.jnt_type[trnid])
-            dofadr = int(value.jnt_dofadr[trnid])
-            qposadr = int(value.jnt_qposadr[trnid])
-        actuator_info.append((trntype, trnid, jnt_type, dofadr, qposadr))
-    result["actuator_info"] = tuple(actuator_info)
+    actuator_info, moment_is_batched, static_moment = _compute_actuator_static_moment(value)
+    result["actuator_info"] = actuator_info
+    result["actuator_moment_is_batched_py"] = moment_is_batched
+    result["actuator_moment_static_py"] = None if moment_is_batched else static_moment
 
     result["constraint_sizes_py"] = _compute_constraint_sizes(value)
     result["condim_counts_py"] = _compute_condim_counts(value)
@@ -796,19 +845,27 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
 def _data_derived(value: mujoco.MjData) -> dict[str, Any]:
     nv = value.qvel.shape[0]
     nu = value.ctrl.shape[0]
-    # MuJoCo stores actuator_moment as (nu,), we need (nu, nv) dense
-    actuator_moment = torch.zeros((nu, nv), dtype=torch.float64)
-    if nu > 0:
-        m_data = np.array(value.actuator_moment)
-        actuator_moment = torch.as_tensor(
-            np.diag(m_data) if nu == nv else np.zeros((nu, nv)),
-            dtype=torch.float64,
-        )
+    # MuJoCo stores actuator_moment as (nu,), we need (nu, nv) dense.  When the
+    # moment is fully determined by the model (non-TENDON, non-JOINTINPARENT
+    # FREE/BALL), transmission() skips writing it and relies on the init value
+    # matching the static moment — so bake it here from the underlying model.
+    mjmodel = getattr(value, "model", None)
+    if mjmodel is not None and nu > 0:
+        _, moment_is_batched, static_moment = _compute_actuator_static_moment(mjmodel)
+        if moment_is_batched:
+            actuator_moment = torch.zeros((nu, nv), dtype=torch.float64)
+        else:
+            actuator_moment = torch.as_tensor(static_moment, dtype=torch.float64)
+    else:
+        actuator_moment = torch.zeros((nu, nv), dtype=torch.float64)
+    # qM/qLD: default to dense (nv, nv) to match step output for the dense
+    # solver.  Step overwrites these before reading, so init values can be
+    # zeros.  Sparse models should use make_data() which honors is_sparse.
     return {
         "efc_J": torch.device_put(value.efc_J),
         "actuator_moment": actuator_moment,
-        "qM": torch.as_tensor(value.qM.copy(), dtype=torch.float64),
-        "qLD": torch.as_tensor(value.qM.copy(), dtype=torch.float64),  # same sparse format as qM
+        "qM": torch.zeros((nv, nv), dtype=torch.float64),
+        "qLD": torch.zeros((nv, nv), dtype=torch.float64),
     }
 
 
@@ -865,6 +922,49 @@ def _validate(m: mujoco.MjModel):
             warnings.warn(f"Ignoring enable flag {f.name}.")
 
 
+def _probe_kinematics_static(mj_model: mujoco.MjModel) -> dict:
+    """Detect kinematics fields whose output is model-constant under vmap.
+
+    Runs mj_kinematics twice with different qpos values and records which
+    outputs are identical (model-constant).  Returns a dict mapping field
+    name -> numpy array of the static value, for each truly-static field.
+    Dynamic fields are omitted.
+
+    kinematics() uses this dict to skip writing static fields so that
+    d.<field>'s materialized stride (from make_data + expand().clone())
+    is preserved across step calls.
+
+    atol/rtol are both 0 — mj_kinematics is deterministic for identical
+    qpos, so true-static fields compare bit-exact between the two probes.
+    Any future change that introduces numeric jitter in mj_kinematics
+    would silently reclassify static fields as dynamic (safe fallback,
+    but a noticeable perf cliff worth revisiting).
+    """
+    mj_data = mujoco.MjData(mj_model)
+    mj_data.qpos[:] = mj_model.qpos0
+    mujoco.mj_kinematics(mj_model, mj_data)
+    a = {
+        "xaxis": mj_data.xaxis.copy(),
+        "xanchor": mj_data.xanchor.copy(),
+    }
+
+    mj_data2 = mujoco.MjData(mj_model)
+    rng = np.random.default_rng(0xC0FFEE)
+    mj_data2.qpos[:] = mj_model.qpos0 + rng.standard_normal(mj_model.nq) * 0.1
+    # Renormalize any free/ball quats so the result is valid (without this,
+    # the comparison is moot for free-joint envs; normalization doesn't
+    # affect the static-vs-dynamic test).
+    mujoco.mj_normalizeQuat(mj_model, mj_data2.qpos)
+    mujoco.mj_kinematics(mj_model, mj_data2)
+
+    static = {}
+    for k, v in a.items():
+        v2 = getattr(mj_data2, k)
+        if np.allclose(v, v2, atol=0.0, rtol=0.0):
+            static[k] = v
+    return static
+
+
 @overload
 def device_put(value: mujoco.MjData, *, dtype: torch.dtype | None = None) -> types.Data: ...
 
@@ -913,7 +1013,10 @@ def device_put(value, *, dtype: torch.dtype | None = None):
         if (clz, f.name) in _TRANSFORMS:
             field_value = _TRANSFORMS[(clz, f.name)](field_value)
 
-        if f.type is torch.Tensor:
+        if isinstance(field_value, UnbatchedTensor):
+            # Already wrapped by a transform; skip re-wrapping / device_put.
+            pass
+        elif f.type is torch.Tensor:
             field_value = torch.device_put(field_value)
         elif f.type is UnbatchedTensor:
             field_value = UnbatchedTensor(
@@ -948,6 +1051,15 @@ def device_put(value, *, dtype: torch.dtype | None = None):
             torch.device("cpu"),
             scan._resolve_cached_tensors,
         )
+        # Probe kinematics for model-constant fields: when a topology
+        # produces xaxis/xanchor values that don't depend on qpos (e.g.
+        # cartpole's slide+hinge tree), vmap emits a stride-0 broadcast
+        # that mismatches d.xaxis's materialized stride and forces a
+        # Dynamo recompile on call 2.  Pre-bake the static values here
+        # so kinematics() can pass through d.xaxis unchanged.
+        if isinstance(value, mujoco.MjModel):
+            result._device_precomp["kinematics_static"] = _probe_kinematics_static(value)
+        _math._CachedConst.warm_all(torch.device("cpu"))
 
     return result
 
@@ -998,8 +1110,13 @@ def device_get_into(result, value):
 
     else:
         if isinstance(result, mujoco.MjData):
+            # nefc/ncon are wrapped as UnbatchedTensor (TensorClass) to
+            # preserve broadcast semantics under vmap; unwrap via .data to
+            # reach the underlying 0-d tensor before calling int().
+            ncon_v = value.ncon.data if isinstance(value.ncon, UnbatchedTensor) else value.ncon
+            nefc_v = value.nefc.data if isinstance(value.nefc, UnbatchedTensor) else value.nefc
             mujoco._functions._realloc_con_efc(  # pylint: disable=protected-access
-                result, ncon=int(value.ncon), nefc=int(value.nefc)
+                result, ncon=int(ncon_v), nefc=int(nefc_v)
             )
 
         for f in dataclasses.fields(value):  # type: ignore

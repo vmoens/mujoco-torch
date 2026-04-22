@@ -89,7 +89,7 @@ def _velocity(m: Model, d: Data) -> Data:
     actuator_moment = d.actuator_moment
     if actuator_moment.ndim == 1 and m.nu == 0:
         actuator_moment = actuator_moment.reshape(0, m.nv)
-    kwargs = {"actuator_velocity": actuator_moment @ d.qvel}
+    kwargs = {"actuator_velocity": (actuator_moment @ d.qvel).contiguous()}
     if m.ntendon:
         kwargs["ten_velocity"] = d.ten_J @ d.qvel
     d.update_(**kwargs)
@@ -132,7 +132,6 @@ def _actuation(m: Model, d: Data) -> Data:
             raise NotImplementedError(f"dyntype {dyn_typ.name} not implemented.")
         return act_dot
 
-    act_dot = torch.zeros((m.na,), dtype=d.qpos.dtype, device=d.qpos.device)
     if m.na:
         act_dot = scan.flat(
             m,
@@ -145,6 +144,11 @@ def _actuation(m: Model, d: Data) -> Data:
             d.act,
             group_by="u",
         )
+    else:
+        # No stateful actuators: propagate the input (shape-(0,)) so we
+        # don't allocate a fresh zero tensor whose stride differs from
+        # init under vmap.
+        act_dot = d.act_dot
 
     ctrl_act = ctrl
     if m.na:
@@ -211,7 +215,7 @@ def _actuation(m: Model, d: Data) -> Data:
     actfrcrange = actfrcrange[m.dof_jntid_t]
     qfrc_actuator = torch.clamp(qfrc_actuator, actfrcrange[:, 0], actfrcrange[:, 1])
 
-    d.update_(act_dot=act_dot, qfrc_actuator=qfrc_actuator)
+    d.update_(act_dot=act_dot.contiguous(), qfrc_actuator=qfrc_actuator.contiguous())
     return d
 
 
@@ -385,7 +389,10 @@ def forward(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
 
     _, _, _, _, nefc = collision_driver.constraint_sizes(m)
     if nefc == 0:
-        d.update_(qacc=d.qacc_smooth)
+        # Clone to avoid aliasing qacc with qacc_smooth — Dynamo emits a
+        # "Duplicate tensors found" guard otherwise, forcing a recompile on
+        # the next call when the caller feeds the aliased tensors back in.
+        d.update_(qacc=d.qacc_smooth.clone())
         return d
 
     d = solver.solve(m, d, fixed_iterations=fixed_iterations)

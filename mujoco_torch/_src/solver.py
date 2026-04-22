@@ -498,8 +498,14 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     else:
         ctx = while_loop(cond, body, (ctx,), max_iter=iterations)[0]
 
+    # qacc and qacc_warmstart receive the same value (ctx.qacc) but Inductor
+    # fuses identical output expressions into a single buffer, which aliases
+    # them under compile while the initial batched Data has them as distinct
+    # tensors. Break the alias so Dynamo's aliasing guard stays consistent
+    # across calls (first trace sees distinct, subsequent traces also see
+    # distinct). The clone is a single (nv,)-sized tensor per step.
     d.update_(
-        qacc_warmstart=ctx.qacc,
+        qacc_warmstart=ctx.qacc.clone(),
         qacc=ctx.qacc,
         qfrc_constraint=ctx.qfrc_constraint,
         efc_force=ctx.efc_force,

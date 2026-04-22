@@ -39,7 +39,9 @@ def _inertia_box_fluid_model(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Fluid forces based on inertia-box approximation."""
     box = inertia.unsqueeze(0).repeat(3, 1)
-    box = box * (torch.ones((3, 3), dtype=inertia.dtype, device=inertia.device) - 2 * torch.eye(3))
+    _ones = torch.ones((3, 3), dtype=inertia.dtype, device=inertia.device)
+    _eye = torch.eye(3, dtype=inertia.dtype, device=inertia.device)
+    box = box * (_ones - 2 * _eye)
     box = 6.0 * torch.clamp(torch.sum(box, dim=-1), min=1e-12)
     box = torch.sqrt(box / torch.maximum(mass, _EPS12.get(mass.dtype, mass.device))) * (mass > 0.0)
 
@@ -176,14 +178,18 @@ def passive(m: Model, d: Data) -> Data:
         return d
 
     qfrc_passive = _spring_damper(m, d)
-    qfrc_gravcomp = torch.zeros(m.nv, dtype=d.qpos.dtype, device=d.qpos.device)
 
     if m.has_gravcomp and not m.opt.disableflags & DisableBit.GRAVITY:
         qfrc_gravcomp = _gravcomp(m, d)
         qfrc_passive = qfrc_passive + qfrc_gravcomp * (1 - m.jnt_actgravcomp[m.dof_jntid])
+    else:
+        # No gravcomp: preserve the init value so its stride/layout matches
+        # across step calls (a fresh torch.zeros(nv) would get broadcast to
+        # stride-0 under vmap, triggering a Dynamo recompile).
+        qfrc_gravcomp = d.qfrc_gravcomp
 
     if m.opt.has_fluid_params:
         qfrc_passive = qfrc_passive + _fluid(m, d)
 
-    d.update_(qfrc_passive=qfrc_passive, qfrc_gravcomp=qfrc_gravcomp)
+    d.update_(qfrc_passive=qfrc_passive.contiguous(), qfrc_gravcomp=qfrc_gravcomp.contiguous())
     return d

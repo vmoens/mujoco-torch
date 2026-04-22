@@ -778,6 +778,8 @@ class Model(MjTensorClass):
     dof_tri_row: np.ndarray
     dof_tri_col: np.ndarray
     actuator_info: tuple
+    actuator_moment_is_batched_py: bool
+    actuator_moment_static_py: np.ndarray | None
     constraint_sizes_py: tuple
     condim_counts_py: tuple
     condim_tensor_py: torch.Tensor
@@ -884,6 +886,14 @@ def _build_device_precomp(model, device, _resolve_cached_tensors):
 
     object.__setattr__(model, "_device_precomp", precomp)
 
+    # Static contact fields (model-only: includemargin, friction, solref,
+    # geom1/2, contact_dim, efc_address).  Baked into d.contact by make_data
+    # so step can reuse them from the batched input, avoiding vmap stride-0
+    # broadcasts that would trigger a recompile on call 2.
+    from mujoco_torch._src.collision_driver import _compute_static_contact_dict  # local to avoid cycle
+
+    precomp["contact_static"] = _compute_static_contact_dict(model)
+
 
 def _mark_model_constants(model):
     """Mark all Model tensor fields as having static addresses for torch.compile.
@@ -910,6 +920,11 @@ def _model_to(self, *args, **kwargs):
         warm_device_caches(result.cache_id, device)
 
     _build_device_precomp(result, device, _resolve_cached_tensors)
+    # Preserve kinematics_static across device moves — it's a dict of
+    # device-independent numpy arrays computed once from the MjModel at
+    # device_put time, and _build_device_precomp doesn't regenerate it.
+    if hasattr(self, "_device_precomp") and "kinematics_static" in self._device_precomp:
+        result._device_precomp["kinematics_static"] = self._device_precomp["kinematics_static"]
     _mark_model_constants(result)
     return result
 
@@ -984,10 +999,10 @@ class Contact(MjTensorClass):
             solreffriction=torch.zeros(shape + (mujoco.mjNREF,), device=device),
             solimp=torch.zeros(shape + (mujoco.mjNIMP,), device=device),
             contact_dim=torch.zeros(shape, dtype=torch.int32, device=device),
-            geom1=torch.zeros(shape, dtype=torch.int32, device=device),
-            geom2=torch.zeros(shape, dtype=torch.int32, device=device),
-            geom=torch.zeros(shape + (2,), dtype=torch.int32, device=device),
-            efc_address=torch.zeros(shape, dtype=torch.int32, device=device),
+            geom1=torch.zeros(shape, dtype=torch.int64, device=device),
+            geom2=torch.zeros(shape, dtype=torch.int64, device=device),
+            geom=torch.zeros(shape + (2,), dtype=torch.int64, device=device),
+            efc_address=torch.zeros(shape, dtype=torch.int64, device=device),
             batch_size=list(shape),
         )
 

@@ -37,7 +37,12 @@ mujoco_torch = ["test_data/**/*"]
 [tool.pytest.ini_options]
 testpaths = ["test"]
 python_files = ["test_*.py", "*_test.py", "bench_*.py"]
-markers = ["mjx: benchmarks requiring JAX and mujoco.mjx"]
+markers = [
+    "mjx: benchmarks requiring JAX and mujoco.mjx",
+    "integration: slow end-to-end tests, run manually before releases (see RELEASE.md)",
+]
+# integration tests are expensive and opt-in only
+addopts = "-m 'not integration'"
 
 [tool.ruff]
 line-length = 120

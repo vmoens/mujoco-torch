@@ -18,7 +18,10 @@ jobs:
       - name: Install CPU-only PyTorch
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Install JAX (CPU) and MJX
-        run: pip install "jax[cpu]" "mujoco>=3.0,<3.6" "mujoco-mjx>=3.0,<3.6"
+        # jax>=0.5 removed jnp.clip(a_min=, a_max=), which mujoco-mjx 3.5 still uses
+        # (see mujoco/mjx/_src/collision_driver.py). Pin to the 0.4.x series until
+        # mujoco-mjx updates.
+        run: pip install "jax[cpu]<0.5" "mujoco>=3.0,<3.6" "mujoco-mjx>=3.0,<3.6"
       - name: Install tensordict from main
         run: pip install git+https://github.com/pytorch/tensordict.git@main
       - name: Install mujoco-torch with test deps

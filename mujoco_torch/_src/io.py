@@ -17,8 +17,10 @@
 import mujoco
 import numpy as np
 import torch
+from tensordict import UnbatchedTensor
 
-from mujoco_torch._src import constraint, device
+from mujoco_torch._src import constraint, device, support
+from mujoco_torch._src import math as _math
 from mujoco_torch._src.types import Contact, Data, Model
 
 DEFAULT_DTYPE = torch.float64
@@ -108,6 +110,12 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
     if isinstance(m, mujoco.MjModel):
         m = put_model(m)
 
+    # Pre-populate _CachedConst caches on the model's tensor device so that
+    # the first torch.compile trace sees the cache already populated.  Without
+    # this, the first trace records the cache-miss branch and the second
+    # call's hit flips the ___dict_contains guard → Dynamo recompile.
+    _math._CachedConst.warm_all(m.qpos0.device if isinstance(m.qpos0, torch.Tensor) else torch.device("cpu"))
+
     # Get constraint counts purely from Model (no Data needed).
     ne, nf, nl, ncon, nefc = constraint.constraint_sizes(m)
     ns = ne + nf + nl
@@ -115,14 +123,42 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
     # Build contact dim and efc_address (mujoco_torch uses contact_dim=3 for all, 4 efc rows per contact)
     contact_dim = torch.full((ncon,), 3, dtype=torch.int32) if ncon > 0 else torch.zeros((0,), dtype=torch.int32)
     efc_address = (
-        torch.arange(ns, ns + ncon * 4, 4, dtype=torch.int32) if ncon > 0 else torch.zeros((0,), dtype=torch.int32)
+        torch.arange(ns, ns + ncon * 4, 4, dtype=torch.int64) if ncon > 0 else torch.zeros((0,), dtype=torch.int64)
     )
     contact = _make_data_contact(ncon, contact_dim, efc_address)
+
+    # If the Model has pre-computed static contact fields (model-only values
+    # that don't vary per env), use them for init so that collision() can
+    # pass them through from d.contact without emitting stride-0 broadcasts
+    # that would trigger a Dynamo recompile on call 2.
+    static = getattr(m, "_device_precomp", {}).get("contact_static") if isinstance(m, Model) else None
+    if static is not None and ncon > 0:
+        contact = contact.replace(
+            includemargin=static["includemargin"].to(DEFAULT_DTYPE),
+            friction=static["friction"].to(DEFAULT_DTYPE),
+            solref=static["solref"].to(DEFAULT_DTYPE),
+            solreffriction=static["solreffriction"].to(DEFAULT_DTYPE),
+            solimp=static["solimp"].to(DEFAULT_DTYPE),
+            contact_dim=static["contact_dim"],
+            geom1=static["geom1"],
+            geom2=static["geom2"],
+            geom=static["geom"],
+            efc_address=static["efc_address"],
+        )
 
     # Build public fields
     public_fields = _make_data_public_fields(m)
     public_fields["qpos"] = torch.as_tensor(m.qpos0, dtype=DEFAULT_DTYPE)
     public_fields["eq_active"] = torch.as_tensor(m.eq_active0, dtype=torch.int32)
+
+    # Bake model-constant kinematics fields into init so kinematics() can
+    # pass them through d.<field> unchanged — without this, vmap emits a
+    # stride-0 broadcast on envs whose topology gives a qpos-independent
+    # xaxis/xanchor (e.g. cartpole's slide+hinge tree), and the mismatch
+    # with the materialized init stride triggers a Dynamo recompile.
+    kin_static = getattr(m, "_device_precomp", {}).get("kinematics_static", {}) if isinstance(m, Model) else {}
+    for k, v in kin_static.items():
+        public_fields[k] = torch.as_tensor(v, dtype=DEFAULT_DTYPE)
 
     # Build zero fields for impl-specific data
     zero_impl = {
@@ -133,10 +169,19 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
         "ten_J": torch.zeros((m.ntendon, m.nv), dtype=DEFAULT_DTYPE),
         "wrap_obj": torch.zeros((m.nwrap, 2), dtype=torch.int32),
         "wrap_xpos": torch.zeros((m.nwrap, 6), dtype=DEFAULT_DTYPE),
-        "actuator_moment": torch.zeros((m.nu, m.nv), dtype=DEFAULT_DTYPE),
+        # Use the static actuator_moment baked at device_put time when all
+        # actuator transmissions produce Model-only moment rows; otherwise
+        # init to zeros (step will populate it each call).
+        "actuator_moment": (
+            torch.as_tensor(m.actuator_moment_static_py, dtype=DEFAULT_DTYPE)
+            if m.actuator_moment_static_py is not None
+            else torch.zeros((m.nu, m.nv), dtype=DEFAULT_DTYPE)
+        ),
         "crb": torch.zeros((m.nbody, 10), dtype=DEFAULT_DTYPE),
-        "qM": torch.zeros(m.nM, dtype=DEFAULT_DTYPE),
-        "qLD": torch.zeros(m.nM, dtype=DEFAULT_DTYPE),
+        # qM/qLD: dense solver returns (nv, nv); sparse keeps (nM,). Match
+        # the step output so Dynamo doesn't see a shape change on call 2.
+        "qM": torch.zeros((m.nv, m.nv) if not support.is_sparse(m) else (m.nM,), dtype=DEFAULT_DTYPE),
+        "qLD": torch.zeros((m.nv, m.nv) if not support.is_sparse(m) else (m.nM,), dtype=DEFAULT_DTYPE),
         "qLDiagInv": torch.zeros(m.nv, dtype=DEFAULT_DTYPE),
         "ten_velocity": torch.zeros(m.ntendon, dtype=DEFAULT_DTYPE),
         "actuator_velocity": torch.zeros(m.nu, dtype=DEFAULT_DTYPE),
@@ -155,12 +200,16 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
         "efc_type": torch.zeros(nefc, dtype=torch.int32),
     }
 
+    # nefc/ncon are Model-derived scalars that do not vary per env.  Wrap as
+    # UnbatchedTensor so .expand(B).clone() keeps the broadcast semantics and
+    # vmap doesn't emit stride-0 outputs that would trigger a Dynamo recompile
+    # on the second step call.
     d = Data(
         ne=torch.tensor(ne, dtype=torch.int32),
         nf=torch.tensor(nf, dtype=torch.int32),
         nl=torch.tensor(nl, dtype=torch.int32),
-        nefc=torch.tensor(nefc, dtype=torch.int32),
-        ncon=torch.tensor(ncon, dtype=torch.int32),
+        nefc=UnbatchedTensor(data=torch.tensor(nefc, dtype=torch.int32)),
+        ncon=UnbatchedTensor(data=torch.tensor(ncon, dtype=torch.int32)),
         contact=contact,
         **public_fields,
         **zero_impl,

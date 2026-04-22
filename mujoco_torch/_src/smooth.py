@@ -116,6 +116,17 @@ def kinematics(m: Model, d: Data) -> Data:
 
     xipos, ximat = v_local_to_global(xpos, xquat, m.body_ipos, m.body_iquat)
     kwargs = dict(qpos=qpos, xanchor=xanchor, xaxis=xaxis, xpos=xpos, xquat=xquat, xmat=xmat, xipos=xipos, ximat=ximat)
+    # Under compile: drop model-constant fields (xaxis/xanchor for some
+    # topologies like cartpole's slide+hinge tree, which produce qpos-
+    # independent outputs).  Writing them would emit stride-0 broadcasts
+    # under vmap, mismatching d.<field>'s materialized stride from make_data
+    # and forcing a Dynamo recompile.  Under eager (tests using
+    # device_put(MjData) with uninitialized xaxis), keep the write so the
+    # values get populated correctly.
+    if torch.compiler.is_compiling():
+        kin_static = m._device_precomp.get("kinematics_static", {})
+        for k in kin_static:
+            kwargs.pop(k, None)
 
     if m.ngeom:
         geom_xpos, geom_xmat = v_local_to_global(xpos[m.geom_bodyid_t], xquat[m.geom_bodyid_t], m.geom_pos, m.geom_quat)
@@ -214,6 +225,12 @@ def com_pos(m: Model, d: Data) -> Data:
         d.xipos,
         torch.vmap(torch.divide)(pos, torch.maximum(mass, _MJMINVAL.get(mass.dtype, mass.device))),
     )
+    # .contiguous() to match the stride of the initial Data's subtree_com
+    # (contiguous from make_data + expand().clone()).  Without this, the
+    # vmap(divide) + where path produces a transposed layout (stride
+    # swapped on the last two dims), which trips Dynamo's per-call stride
+    # guard on subsequent compile(vmap(step)) invocations.
+    subtree_com = subtree_com.contiguous()
 
     # map inertias to frame centered at subtree_com
     @torch.vmap
@@ -564,7 +581,13 @@ def transmission(m: Model, d: Data) -> Data:
         else:
             raise RuntimeError(f"unrecognized joint type: {jnt_typ}")
 
-    length = torch.stack(lengths)
-    moment = torch.stack(moments)
-    d.update_(actuator_length=length, actuator_moment=moment)
+    length = torch.stack(lengths).contiguous()
+    if m.actuator_moment_is_batched_py:
+        moment = torch.stack(moments).contiguous()
+        d.update_(actuator_length=length, actuator_moment=moment)
+    else:
+        # Moment rows are Model-only; d.actuator_moment was baked at init
+        # from the same Model values.  Skip the update so vmap doesn't emit
+        # a stride-0 broadcast that mismatches init layout.
+        d.update_(actuator_length=length)
     return d
