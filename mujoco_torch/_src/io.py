@@ -127,25 +127,6 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
     )
     contact = _make_data_contact(ncon, contact_dim, efc_address)
 
-    # If the Model has pre-computed static contact fields (model-only values
-    # that don't vary per env), use them for init so that collision() can
-    # pass them through from d.contact without emitting stride-0 broadcasts
-    # that would trigger a Dynamo recompile on call 2.
-    static = getattr(m, "_device_precomp", {}).get("contact_static") if isinstance(m, Model) else None
-    if static is not None and ncon > 0:
-        contact = contact.replace(
-            includemargin=static["includemargin"].to(DEFAULT_DTYPE),
-            friction=static["friction"].to(DEFAULT_DTYPE),
-            solref=static["solref"].to(DEFAULT_DTYPE),
-            solreffriction=static["solreffriction"].to(DEFAULT_DTYPE),
-            solimp=static["solimp"].to(DEFAULT_DTYPE),
-            contact_dim=static["contact_dim"],
-            geom1=static["geom1"],
-            geom2=static["geom2"],
-            geom=static["geom"],
-            efc_address=static["efc_address"],
-        )
-
     # Build public fields
     public_fields = _make_data_public_fields(m)
     public_fields["qpos"] = torch.as_tensor(m.qpos0, dtype=DEFAULT_DTYPE)
