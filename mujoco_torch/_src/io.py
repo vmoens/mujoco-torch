@@ -127,25 +127,6 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
     )
     contact = _make_data_contact(ncon, contact_dim, efc_address)
 
-    # If the Model has pre-computed static contact fields (model-only values
-    # that don't vary per env), use them for init so that collision() can
-    # pass them through from d.contact without emitting stride-0 broadcasts
-    # that would trigger a Dynamo recompile on call 2.
-    static = getattr(m, "_device_precomp", {}).get("contact_static") if isinstance(m, Model) else None
-    if static is not None and ncon > 0:
-        contact = contact.replace(
-            includemargin=static["includemargin"].to(DEFAULT_DTYPE),
-            friction=static["friction"].to(DEFAULT_DTYPE),
-            solref=static["solref"].to(DEFAULT_DTYPE),
-            solreffriction=static["solreffriction"].to(DEFAULT_DTYPE),
-            solimp=static["solimp"].to(DEFAULT_DTYPE),
-            contact_dim=static["contact_dim"],
-            geom1=static["geom1"],
-            geom2=static["geom2"],
-            geom=static["geom"],
-            efc_address=static["efc_address"],
-        )
-
     # Build public fields
     public_fields = _make_data_public_fields(m)
     public_fields["qpos"] = torch.as_tensor(m.qpos0, dtype=DEFAULT_DTYPE)
@@ -169,14 +150,7 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
         "ten_J": torch.zeros((m.ntendon, m.nv), dtype=DEFAULT_DTYPE),
         "wrap_obj": torch.zeros((m.nwrap, 2), dtype=torch.int32),
         "wrap_xpos": torch.zeros((m.nwrap, 6), dtype=DEFAULT_DTYPE),
-        # Use the static actuator_moment baked at device_put time when all
-        # actuator transmissions produce Model-only moment rows; otherwise
-        # init to zeros (step will populate it each call).
-        "actuator_moment": (
-            torch.as_tensor(m.actuator_moment_static_py, dtype=DEFAULT_DTYPE)
-            if m.actuator_moment_static_py is not None
-            else torch.zeros((m.nu, m.nv), dtype=DEFAULT_DTYPE)
-        ),
+        "actuator_moment": torch.zeros((m.nu, m.nv), dtype=DEFAULT_DTYPE),
         "crb": torch.zeros((m.nbody, 10), dtype=DEFAULT_DTYPE),
         # qM/qLD: dense solver returns (nv, nv); sparse keeps (nM,). Match
         # the step output so Dynamo doesn't see a shape change on call 2.
