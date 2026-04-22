@@ -81,7 +81,7 @@ def safe_div(num: float | torch.Tensor, den: float | torch.Tensor) -> float | to
     return num / (den + mujoco.mjMINVAL * (den == 0))
 
 
-_INLINE_CHOLESKY_MAX_SIZE = 32
+_INLINE_CHOLESKY_MAX_SIZE = 16
 
 
 def small_cholesky(A: torch.Tensor) -> torch.Tensor:
