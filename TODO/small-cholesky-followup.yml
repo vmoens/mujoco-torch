@@ -1,0 +1,134 @@
+title: Follow up on small_cholesky compile regression after PR #54
+priority: P1
+status: proposed
+owner: unassigned
+
+summary: |
+  PR #54 fixed compile correctness and line-search behavior, but it also moved
+  compiled humanoid throughput into a much slower regime. The strongest current
+  signal is that the regression is dominated by the dense ``small_cholesky``
+  path rather than the solver line-search or compile-time ``nefc`` padding.
+
+background: |
+  Before PR #54, ``mujoco_torch._src.math.small_cholesky`` used:
+    * ``_INLINE_CHOLESKY_MAX_SIZE = 16``
+    * no diagonal regularization in the ``torch.linalg.cholesky`` fallback
+    * no per-pivot clamp in the inline unrolled path
+
+  PR #54 changed that to:
+    * ``_INLINE_CHOLESKY_MAX_SIZE = 32``
+    * ``A = A + 1e-10 * eye(...)`` before the large-matrix fallback
+    * ``torch.sqrt(torch.clamp_min(s, 1e-12))`` in the inline path
+
+  For dense Humanoid (``nv=27``), raising the threshold from 16 to 32 forces
+  the model onto the unrolled inline path. That makes the compiled graph much
+  larger and appears to be the main throughput cliff.
+
+current_status: |
+  Baseline on current ``origin/main`` after PR #68:
+    * branch / commit: ``origin/main`` @ ``f579c3c0``
+    * env: ``humanoid``
+    * batch size: ``1024``
+    * torch: ``2.13.0.dev20260417+cu130``
+    * compile time: ~252.6 s
+    * throughput: ~72.4k steps/s
+    * unique_graphs: stable in the simple probe
+
+  Ablations run on top of ``fix/nefc-ncon-int32-dtype`` showed:
+    * reverting the #54 solver line-search logic: no meaningful improvement
+    * disabling compile-time ``nefc`` padding / over-reporting: no improvement
+    * restoring pre-#54 ``small_cholesky`` behavior: throughput returns to the
+      old fast regime (~214k steps/s) but reintroduces a Humanoid recompile
+    * preserving ``qLD`` stride in dense ``factor_m`` on top of that: fixes the
+      recompile and further improves throughput (~231k steps/s, ~82 s compile)
+
+perf_hypothesis: |
+  The main performance loss comes from specializing the dense Cholesky path for
+  matrices up to size 32. Humanoid's ``nv=27`` then takes the scalar-unrolled
+  path, which bloats the compile graph and kernel schedule. The extra clamp /
+  regularization ops may contribute, but the threshold change is the most
+  plausible first-order effect.
+
+  The recompile seen in the first "fast" ablation was not caused by the
+  Cholesky math itself. It came from writing a fresh dense ``qLD`` tensor whose
+  layout did not preserve the incoming stride expected by Dynamo. Preserving the
+  existing ``qLD`` storage layout removed that guard failure.
+
+evidence: |
+  Representative measurements from the bisect runs:
+
+    * current slow regime:
+      - ``f579c3c0`` / ``7ae2f32c``-equivalent state: ~69k-72k steps/s
+      - compile time: ~252s-264s
+
+    * "fast but recompiling" ablation:
+      - restore pre-#54 ``small_cholesky`` only
+      - ~214k steps/s
+      - compile time: ~87s
+      - recompilation guard: ``qLD`` stride mismatch on Humanoid
+
+    * "fast and stable" ablation:
+      - restore pre-#54 ``small_cholesky``
+      - preserve dense ``qLD`` stride in ``smooth.factor_m``
+      - ~231k steps/s
+      - compile time: ~82s
+      - ``pytest -m integration test/compile_recompile_integration_test.py -v``:
+        passed
+
+why_this_is_not_yet_the_final_fix: |
+  Fully reverting the #54 ``small_cholesky`` changes also reverts numerical
+  robustness additions. Those changes were likely introduced to protect against
+  degenerate or near-singular states:
+    * pivot clamp in the inline path
+    * diagonal regularization in the large-matrix fallback
+
+  The throughput bisect says "this area caused the regression", but it does not
+  yet say "ship the exact old code unchanged".
+
+possible_ways_forward:
+  - name: Keep the qLD stride fix and restore the old threshold only
+    rationale: |
+      This is the highest-value next experiment. If the main regression is the
+      16 -> 32 threshold jump, we may be able to keep the robustness changes
+      while sending Humanoid back to the cuSOLVER path.
+    expected_outcome: |
+      Recover most of the throughput without fully removing the clamp or
+      regularization logic.
+
+  - name: Keep threshold 16, then re-add robustness pieces one at a time
+    rationale: |
+      Separately test:
+        * pivot clamp only
+        * fallback diagonal regularization only
+        * both together
+      This isolates whether either numerical safeguard has a measurable compile
+      cost once Humanoid is no longer forced into the inline path.
+
+  - name: Make the threshold model-dependent or shape-dependent
+    rationale: |
+      A single constant may not be ideal across the model zoo. Dense models with
+      ``nv <= 16`` may still benefit from the inline path, while Humanoid
+      clearly does not.
+    expected_outcome: |
+      Keep small-model wins while avoiding Humanoid's compile blow-up.
+
+  - name: Preserve layout invariants for dense solver intermediates
+    rationale: |
+      The ``qLD`` stride guard shows that layout stability matters independently
+      of the math path. Similar issues may exist for other dense solver buffers.
+    expected_outcome: |
+      Reduce risk of reintroducing recompiles while iterating on the numerical
+      fix.
+
+recommended_next_steps:
+  - land the standalone ``qLD`` stride-preservation fix first
+  - create a follow-up branch that only changes
+    ``_INLINE_CHOLESKY_MAX_SIZE: 32 -> 16`` on current ``main``
+  - benchmark ``humanoid`` and at least one smaller dense env
+  - run ``pytest -m integration test/compile_recompile_integration_test.py -v``
+  - if stable, re-add the pivot clamp and fallback regularization separately
+
+references:
+  - "PR #54: Fix torch.compile + solver line search + auto_reset + Humanoid envs"
+  - "PR #68: Eliminate torch.compile(vmap(step)) recompiles + benchmark infrastructure"
+  - "Winning bisect branch: bisect/fix-nefc-math-qld-stride"

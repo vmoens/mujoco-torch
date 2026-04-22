@@ -313,7 +313,9 @@ def factor_m(m: Model, d: Data) -> Data:
 
     if not support.is_sparse(m):
         L = math.small_cholesky(d.qM)
-        d.update_(qLD=L)
+        qld = d.qLD.clone()
+        qld.copy_(L)
+        d.update_(qLD=qld)
         return d
 
     qld = d.qM.clone()
