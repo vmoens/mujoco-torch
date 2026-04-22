@@ -858,14 +858,6 @@ def collision(m: Model, d: Data) -> Data:
         new_contact = new_contact.replace(
             includemargin=_materialize_like(d.contact.includemargin, new_contact.includemargin),
             friction=_materialize_like(d.contact.friction, new_contact.friction),
-            solref=_materialize_like(d.contact.solref, new_contact.solref),
-            solreffriction=_materialize_like(d.contact.solreffriction, new_contact.solreffriction),
-            solimp=_materialize_like(d.contact.solimp, new_contact.solimp),
-            contact_dim=_materialize_like(d.contact.contact_dim, new_contact.contact_dim),
-            geom1=_materialize_like(d.contact.geom1, new_contact.geom1),
-            geom2=_materialize_like(d.contact.geom2, new_contact.geom2),
-            geom=_materialize_like(d.contact.geom, new_contact.geom),
-            efc_address=_materialize_like(d.contact.efc_address, new_contact.efc_address),
         )
 
     d.update_(
