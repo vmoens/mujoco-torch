@@ -40,6 +40,15 @@ del _fix_ut
 # Collision
 from mujoco_torch._src.collision_driver import collision
 
+# Control Moment Gyro (CMG) cluster math
+from mujoco_torch._src.cmg import (
+    cmg_jacobian,
+    manipulability,
+    orthogonal_6cmg_geometry,
+    pyramid_4cmg_geometry,
+    rodrigues_rotate,
+)
+
 # Constraint
 from mujoco_torch._src.constraint import make_constraint
 
@@ -70,6 +79,9 @@ from mujoco_torch._src.io import make_data
 
 # Logging
 from mujoco_torch._src.log import logger as mujoco_logger
+
+# Math (selected -- the rest of `mujoco_torch._src.math` is internal)
+from mujoco_torch._src.math import random_unit_quat
 
 # Passive forces
 from mujoco_torch._src.passive import passive
