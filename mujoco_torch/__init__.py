@@ -40,15 +40,6 @@ del _fix_ut
 # Collision
 from mujoco_torch._src.collision_driver import collision
 
-# Control Moment Gyro (CMG) cluster math
-from mujoco_torch._src.cmg import (
-    cmg_jacobian,
-    manipulability,
-    orthogonal_6cmg_geometry,
-    pyramid_4cmg_geometry,
-    rodrigues_rotate,
-)
-
 # Constraint
 from mujoco_torch._src.constraint import make_constraint
 

@@ -4,12 +4,12 @@ import math
 
 import torch
 
-from mujoco_torch import (
+from mujoco_torch import random_unit_quat
+from mujoco_torch.zoo.cmg import (
     cmg_jacobian,
     manipulability,
     orthogonal_6cmg_geometry,
     pyramid_4cmg_geometry,
-    random_unit_quat,
     rodrigues_rotate,
 )
 
