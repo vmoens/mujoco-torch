@@ -7,7 +7,7 @@ import torch
 from mujoco_torch import random_unit_quat
 from mujoco_torch.zoo.cmg import (
     cmg_jacobian,
-    manipulability,
+    log_manipulability,
     orthogonal_6cmg_geometry,
     pyramid_4cmg_geometry,
     rodrigues_rotate,
@@ -89,31 +89,37 @@ def test_cmg_jacobian_scales_linearly_with_h():
     torch.testing.assert_close(j3, 3.0 * j1)
 
 
-def test_manipulability_pyramid_and_orthogonal_neutral():
-    """At the neutral configuration, both standard clusters are full-rank."""
+def test_log_manipulability_pyramid_and_orthogonal_neutral():
+    """At the neutral configuration, both standard clusters are full-rank,
+    so log-manipulability is well above the singular floor."""
+    eps = 1e-8
+    floor = 0.5 * math.log(eps)
     g4, r4 = pyramid_4cmg_geometry()
     j4 = cmg_jacobian(torch.zeros(4), g4, r4, h=1.0)
-    m4 = manipulability(j4)
-    assert m4.item() > 0.5
+    m4 = log_manipulability(j4, eps=eps)
+    assert m4.item() > floor + 5.0
 
     g6, r6 = orthogonal_6cmg_geometry()
     j6 = cmg_jacobian(torch.zeros(6), g6, r6, h=1.0)
-    m6 = manipulability(j6)
-    assert m6.item() > 0.5
+    m6 = log_manipulability(j6, eps=eps)
+    assert m6.item() > floor + 5.0
 
 
-def test_manipulability_singular_jacobian():
-    """A rank-1 Jacobian has near-zero ``det(J J^T)``; the ``+eps`` floor
-    keeps :func:`manipulability` finite at the singularity."""
+def test_log_manipulability_singular_jacobian():
+    """A rank-1 Jacobian has ``det(J J^T) = 0``; the soft floor saturates
+    log-manipulability at ``0.5 * log(eps)`` and keeps it finite."""
+    eps = 1e-8
     rank1 = torch.tensor([[1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]])
-    m = manipulability(rank1, eps=1e-8)
-    assert m.item() < 1e-3
+    m = log_manipulability(rank1, eps=eps)
     assert torch.isfinite(m).all()
+    torch.testing.assert_close(m, torch.tensor(0.5 * math.log(eps)), atol=1e-6, rtol=0)
 
 
-def test_manipulability_batched():
+def test_log_manipulability_batched():
+    eps = 1e-8
+    floor = 0.5 * math.log(eps)
     g, r0 = pyramid_4cmg_geometry()
     j = cmg_jacobian(torch.zeros(5, 4), g, r0, h=1.0)
-    m = manipulability(j)
+    m = log_manipulability(j, eps=eps)
     assert m.shape == torch.Size([5])
-    assert (m > 0).all()
+    assert (m > floor + 5.0).all()

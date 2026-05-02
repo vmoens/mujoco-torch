@@ -87,23 +87,35 @@ def cmg_jacobian(
     return h * torch.linalg.cross(g_expanded, rotor, dim=-2)
 
 
-def manipulability(jac: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    """Yoshikawa manipulability ``sqrt(det(J J^T) + eps)``.
+def log_manipulability(jac: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Log-Yoshikawa manipulability ``0.5 * log(det(J J^T))``.
 
-    Approaches zero as the Jacobian loses rank (cluster becomes
-    singular); the ``+eps`` guard keeps the metric finite at exact
-    singularities, suitable for use in a reward shaping term.
+    Working in log space avoids the catastrophic underflow of ``det``
+    near singularity, sidesteps roundoff making ``det`` slightly
+    negative on a numerically-singular PSD, and yields a better-
+    conditioned gradient (``J⁺`` rather than the diverging derivative
+    of ``√``).
+
+    The result is soft-floored at ``0.5 * log(eps)`` via
+    ``logaddexp``: as the cluster becomes singular the metric saturates
+    smoothly at the floor, with gradient surviving through the floor so
+    it can still push a policy away from the singularity in a reward-
+    shaping term.
 
     Args:
         jac: ``(..., 3, N)`` Jacobian, with ``N >= 3``.
-        eps: small floor added inside the square root.
+        eps: floor on the (linear-space) manipulability-squared; the
+            log-space output is bounded below by ``0.5 * log(eps)``.
 
     Returns:
-        ``(...,)`` manipulability per batch element.
+        ``(...,)`` log-manipulability per batch element. Negative
+        values are normal: only the *change* is meaningful for
+        reward shaping.
     """
     jjt = jac @ jac.transpose(-1, -2)
-    det = torch.linalg.det(jjt).clamp_min(0.0)
-    return torch.sqrt(det + eps)
+    logabsdet = torch.linalg.slogdet(jjt).logabsdet
+    log_eps = torch.full_like(logabsdet, math.log(eps))
+    return 0.5 * torch.logaddexp(logabsdet, log_eps)
 
 
 def pyramid_4cmg_geometry(
