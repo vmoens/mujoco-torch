@@ -383,6 +383,35 @@ def quat_integrate(q: torch.Tensor, v: torch.Tensor, dt: torch.Tensor) -> torch.
     return normalize(q_res)
 
 
+def random_unit_quat(
+    shape: tuple[int, ...] | torch.Size,
+    *,
+    generator: torch.Generator | None = None,
+    device: torch.device | None = None,
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    """Sample uniform random unit quaternions on ``SO(3)``.
+
+    Uses Marsaglia / Shoemake's method: four standard normals,
+    normalized. Output convention is ``(w, x, y, z)`` per the rest of
+    this module.
+
+    Args:
+        shape: leading batch shape; the returned tensor has shape
+            ``(*shape, 4)``.
+        generator: optional :class:`torch.Generator` for reproducible
+            sampling.
+        device: device for the returned tensor.
+        dtype: dtype for the returned tensor.
+
+    Returns:
+        ``(*shape, 4)`` tensor of unit quaternions, distributed
+        uniformly on ``SO(3)``.
+    """
+    q = torch.randn(*shape, 4, generator=generator, device=device, dtype=dtype)
+    return q / q.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+
+
 def inert_mul(i: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     """Multiply inertia by motion, producing force.
 

@@ -71,6 +71,9 @@ from mujoco_torch._src.io import make_data
 # Logging
 from mujoco_torch._src.log import logger as mujoco_logger
 
+# Math (selected -- the rest of `mujoco_torch._src.math` is internal)
+from mujoco_torch._src.math import random_unit_quat
+
 # Passive forces
 from mujoco_torch._src.passive import passive
 
