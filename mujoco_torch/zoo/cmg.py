@@ -32,6 +32,7 @@ Conventions:
 Functions are batched: ``gimbal_angles`` of shape ``(..., N)`` produces
 a Jacobian of shape ``(..., 3, N)``.
 """
+
 from __future__ import annotations
 
 import math
@@ -39,9 +40,7 @@ import math
 import torch
 
 
-def rodrigues_rotate(
-    axis: torch.Tensor, vector: torch.Tensor, theta: torch.Tensor
-) -> torch.Tensor:
+def rodrigues_rotate(axis: torch.Tensor, vector: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
     """Rotate ``vector`` around unit ``axis`` by ``theta`` (Rodrigues).
 
     Args:
