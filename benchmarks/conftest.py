@@ -8,7 +8,7 @@ import torch
 import torch._inductor.config as inductor_config
 
 ALL_MODELS = ["humanoid", "ant", "halfcheetah", "walker2d", "hopper"]
-BATCH_SIZES = [32768, 4096, 1024, 128, 1]
+BATCH_SIZES = [131072, 65536, 32768, 4096, 1024, 128, 1]
 
 
 # ---------------------------------------------------------------------------
