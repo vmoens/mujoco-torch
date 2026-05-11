@@ -24,6 +24,7 @@ dependencies = [
 zoo = ["torchrl>=0.6"]
 test = ["pytest", "pytest-benchmark"]
 benchmark = ["pytest", "pytest-benchmark", "pytest-xdist"]
+warp = ["mujoco-warp", "warp-lang"]
 
 [project.urls]
 Homepage = "https://github.com/vmoens/mujoco-torch"
@@ -39,6 +40,7 @@ testpaths = ["test"]
 python_files = ["test_*.py", "*_test.py", "bench_*.py"]
 markers = [
     "mjx: benchmarks requiring JAX and mujoco.mjx",
+    "warp: benchmarks requiring NVIDIA Warp and mujoco_warp",
     "integration: slow end-to-end tests, run manually before releases (see RELEASE.md)",
 ]
 # integration tests are expensive and opt-in only

@@ -25,6 +25,7 @@ COLORS = {
     "torch compile (H4)": "#e8792b",
     "torch compile (H4+H8)": "#d63b2f",
     "MJX jit(vmap)": "#59a84b",
+    "MuJoCo Warp": "#76b900",
     "TorchRL collector+RB": "#8a4fbf",
 }
 
@@ -36,6 +37,7 @@ MARKERS = {
     "torch compile (H4)": "^",
     "torch compile (H4+H8)": "^",
     "MJX jit(vmap)": "P",
+    "MuJoCo Warp": "*",
     "TorchRL collector+RB": "X",
 }
 
@@ -47,6 +49,7 @@ LABELS = {
     "torch compile (H4)": "mujoco-torch compile (tuned)",
     "torch compile (H4+H8)": "mujoco-torch compile (tuned + fixed iter)",
     "MJX jit(vmap)": "MJX (JAX jit+vmap)",
+    "MuJoCo Warp": "MuJoCo Warp (CUDA graph)",
     "TorchRL collector+RB": "TorchRL collector + replay buffer",
 }
 

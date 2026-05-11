@@ -91,7 +91,7 @@ def batch_size(request):
 
 
 # ---------------------------------------------------------------------------
-# MJX skip logic
+# MJX / Warp skip logic
 # ---------------------------------------------------------------------------
 
 _has_mjx = True
@@ -101,11 +101,19 @@ try:
 except ImportError:
     _has_mjx = False
 
+_has_warp = True
+try:
+    import mujoco_warp  # noqa: F401
+    import warp  # noqa: F401
+except ImportError:
+    _has_warp = False
+
 
 def pytest_collection_modifyitems(config, items):
-    if _has_mjx:
-        return
     skip_mjx = pytest.mark.skip(reason="JAX / mujoco.mjx not installed")
+    skip_warp = pytest.mark.skip(reason="warp / mujoco_warp not installed")
     for item in items:
-        if "mjx" in item.keywords:
+        if not _has_mjx and "mjx" in item.keywords:
             item.add_marker(skip_mjx)
+        if not _has_warp and "warp" in item.keywords:
+            item.add_marker(skip_warp)
