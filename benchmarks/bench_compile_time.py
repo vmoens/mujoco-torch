@@ -31,10 +31,16 @@ from benchmarks._helpers import DEVICE, SEED, load_model, make_batch, warm_cache
 
 
 def _force_cold_inductor():
-    """Force a cold Inductor compile by redirecting the on-disk cache dir."""
+    """Force a cold Inductor compile by redirecting the on-disk cache dir.
+
+    Note: we deliberately do NOT set ``force_disable_caches = True`` — under
+    torch >= 2.13 nightlies it triggers a TypeError("unhashable type:
+    numpy.ndarray") during dynamo's guard generation. A fresh tempdir for
+    ``TORCHINDUCTOR_CACHE_DIR`` plus ``_dynamo.reset()`` is enough to make
+    each test cold-compile.
+    """
     tmp = tempfile.mkdtemp(prefix="inductor_cold_")
     os.environ["TORCHINDUCTOR_CACHE_DIR"] = tmp
-    inductor_config.force_disable_caches = True
     torch._dynamo.reset()
     torch.compiler.reset()
 
