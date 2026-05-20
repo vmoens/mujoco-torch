@@ -26,6 +26,7 @@ TEST_FILES: list[str] = [
     "cartpole.xml",
     "convex.xml",
     "equality.xml",
+    "frictionloss_dof.xml",
     "halfcheetah.xml",
     "hopper.xml",
     "humanoid.xml",

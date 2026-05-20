@@ -104,6 +104,7 @@ class _Context(NamedTuple):
       grad: gradient of master cost                     (nv,)
       Mgrad: M / grad                                   (nv,)
       search: linesearch vector                         (nv,)
+      active: active (quadratic) constraints            (nefc,)
       gauss: gauss Cost
       cost: constraint + Gauss cost
       prev_cost: cost from previous iter
@@ -118,6 +119,7 @@ class _Context(NamedTuple):
     grad: torch.Tensor
     Mgrad: torch.Tensor  # pylint: disable=invalid-name
     search: torch.Tensor
+    active: torch.Tensor
     gauss: torch.Tensor
     cost: torch.Tensor
     prev_cost: torch.Tensor
@@ -269,6 +271,7 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
     efc_J_T = efc_J.T.contiguous()  # separate tensor to avoid view aliasing
     efc_D = d.efc_D.clone()
     efc_aref = d.efc_aref.clone()
+    efc_frictionloss = d.efc_frictionloss.clone()
     qfrc_smooth = d.qfrc_smooth.clone()
     qacc_smooth = d.qacc_smooth.clone()
     qacc_warmstart = d.qacc_warmstart.clone()
@@ -302,6 +305,7 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
             grad=torch.zeros((nv,), dtype=dtype, device=_dev),
             Mgrad=torch.zeros((nv,), dtype=dtype, device=_dev),
             search=torch.zeros((nv,), dtype=dtype, device=_dev),
+            active=torch.zeros(nefc, dtype=torch.bool, device=_dev),
             gauss=qacc.new_zeros(()),
             cost=qacc.new_full((), float("inf")),
             prev_cost=qacc.new_zeros(()),
@@ -319,10 +323,29 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
         eq_fric_mask = torch.arange(active.shape[0], device=active.device) < ne_nf
         active = active | eq_fric_mask
 
-        efc_force = efc_D * -ctx.Jaref * active
+        floss_force = torch.zeros(nefc, dtype=efc_D.dtype, device=efc_D.device)
+        floss_cost = torch.tensor(0.0, dtype=efc_D.dtype, device=efc_D.device)
+        if nf > 0 and not (disableflags & DisableBit.FRICTIONLOSS):
+            has_floss = efc_frictionloss > 0
+            r = 1.0 / (efc_D + (efc_D == 0.0) * mujoco.mjMINVAL)
+            linear_neg = (ctx.Jaref <= -r * efc_frictionloss) & has_floss
+            linear_pos = (ctx.Jaref >= r * efc_frictionloss) & has_floss
+            active = active & ~linear_neg & ~linear_pos
+            floss_force = torch.where(
+                linear_neg,
+                efc_frictionloss,
+                torch.where(linear_pos, -efc_frictionloss, torch.zeros_like(efc_frictionloss)),
+            )
+            floss_cost = (
+                linear_neg * (-0.5 * r * efc_frictionloss * efc_frictionloss - efc_frictionloss * ctx.Jaref)
+            ).sum() + (
+                linear_pos * (-0.5 * r * efc_frictionloss * efc_frictionloss + efc_frictionloss * ctx.Jaref)
+            ).sum()
+
+        efc_force = efc_D * -ctx.Jaref * active + floss_force
         qfrc_con = efc_J_T @ efc_force
         gauss = 0.5 * ((ctx.Ma - qfrc_smooth) * (ctx.qacc - qacc_smooth)).sum(-1)
-        cost = 0.5 * torch.sum(efc_D * ctx.Jaref * ctx.Jaref * active) + gauss
+        cost = 0.5 * torch.sum(efc_D * ctx.Jaref * ctx.Jaref * active) + gauss + floss_cost
 
         return ctx._replace(
             qfrc_constraint=qfrc_con,
@@ -330,6 +353,7 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
             cost=cost,
             prev_cost=ctx.cost,
             efc_force=efc_force,
+            active=active,
         )
 
     def _update_gradient(ctx):
@@ -339,10 +363,7 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
         if solver_type == SolverType.CG:
             mgrad = solve_m_fn(grad)
         elif solver_type == SolverType.NEWTON:
-            active = ctx.Jaref < 0
-            eq_fric_mask = torch.arange(active.shape[0], device=active.device) < ne_nf
-            active = active | eq_fric_mask
-            weighted_J_T = efc_J_T * efc_D * active
+            weighted_J_T = efc_J_T * efc_D * ctx.active
             if nv <= math._INLINE_CHOLESKY_MAX_SIZE:
                 h = dense_M + (weighted_J_T.unsqueeze(-1) * efc_J).sum(-2)
             else:
@@ -373,11 +394,27 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
         quad = (quad * efc_D).T
 
         def point_fn(alpha):
-            active = (ctx.Jaref + alpha * jv) < 0
+            x = ctx.Jaref + alpha * jv
+            active = x < 0
             eq_fric_mask = torch.arange(active.shape[0], device=active.device) < ne_nf
             active = active | eq_fric_mask
+
+            floss_adjust = torch.zeros(3, dtype=quad.dtype, device=quad.device)
+            if nf > 0 and not (disableflags & DisableBit.FRICTIONLOSS):
+                has_floss = efc_frictionloss > 0
+                r = 1.0 / (efc_D + (efc_D == 0.0) * mujoco.mjMINVAL)
+                rf = r * efc_frictionloss
+                fl_ln = (x <= -rf) & has_floss
+                fl_lp = (x >= rf) & has_floss
+                qf0 = (fl_ln * efc_frictionloss * (-0.5 * rf - ctx.Jaref)).sum() + (
+                    fl_lp * efc_frictionloss * (-0.5 * rf + ctx.Jaref)
+                ).sum()
+                qf1 = (fl_ln * (-efc_frictionloss * jv)).sum() + (fl_lp * (efc_frictionloss * jv)).sum()
+                floss_adjust = torch.stack([qf0, qf1, torch.tensor(0.0, dtype=quad.dtype, device=quad.device)])
+                active = active & ~fl_ln & ~fl_lp
+
             quad_active = quad * active.unsqueeze(1)
-            quad_total = quad_gauss + torch.sum(quad_active, axis=0)
+            quad_total = quad_gauss + torch.sum(quad_active, axis=0) + floss_adjust
 
             cost = alpha * alpha * quad_total[2] + alpha * quad_total[1] + quad_total[0]
             deriv_0 = 2 * alpha * quad_total[2] + quad_total[1]
