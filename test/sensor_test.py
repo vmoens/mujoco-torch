@@ -126,6 +126,37 @@ _FRAMEPOS_XML = """
 """
 
 
+_ACTUATOR_FRC_XML = """
+<mujoco>
+  <option timestep="0.005"/>
+  <worldbody>
+    <geom type="plane" size="3 3 0.01" margin="1"/>
+    <body name="left" pos="-0.5 0 1">
+      <joint name="h1" type="hinge" axis="0 1 0"/>
+      <geom type="sphere" size="0.1" mass="1"/>
+    </body>
+    <body name="right" pos="0.5 0 1">
+      <joint name="h2" type="hinge" axis="0 1 0"/>
+      <geom type="sphere" size="0.1" mass="1"/>
+    </body>
+  </worldbody>
+  <tendon>
+    <fixed name="t1">
+      <joint joint="h2" coef="1"/>
+    </fixed>
+  </tendon>
+  <actuator>
+    <motor name="m1" joint="h1" gear="10"/>
+    <motor name="mt" tendon="t1" gear="2"/>
+  </actuator>
+  <sensor>
+    <actuatorfrc actuator="m1"/>
+    <tendonactuatorfrc tendon="t1"/>
+  </sensor>
+</mujoco>
+"""
+
+
 def _run_forward(m, d, mx, dx):
     """Run MuJoCo and MJX forward, return (mj_data, mjx_data)."""
     mujoco.mj_forward(m, d)
@@ -331,6 +362,25 @@ class SensorTest(parameterized.TestCase):
         self.assertEqual(len(mx.sensor_groups_pos_py), 0)
         self.assertEqual(len(mx.sensor_groups_vel_py), 0)
         self.assertEqual(len(mx.sensor_groups_acc_py), 0)
+
+    def test_actuator_frc_sensors(self):
+        """ACTUATORFRC and TENDONACTFRC return non-zero values matching MuJoCo."""
+        m = mujoco.MjModel.from_xml_string(_ACTUATOR_FRC_XML)
+        d = mujoco.MjData(m)
+        mx = mujoco_torch.device_put(m)
+
+        d.ctrl[:] = np.array([1.0, 0.3])
+        qpos = torch.tensor(d.qpos.copy())
+        qvel = torch.tensor(d.qvel.copy())
+        dx = mujoco_torch.device_put(d)
+        dx = dx.replace(qpos=qpos, qvel=qvel)
+
+        d, dx = _run_forward(m, d, mx, dx)
+
+        mj_sensor = d.sensordata[: mx.nsensordata]
+        mx_sensor = dx.sensordata.detach().numpy()
+        np.testing.assert_allclose(mx_sensor, mj_sensor, atol=1e-3, rtol=1e-3)
+        assert np.all(np.abs(mx_sensor) > 0), f"actuator force sensors returned all zeros: {mx_sensor}"
 
     def test_sensor_groups_precomputed(self):
         """Pre-computed groups contain expected sensor types."""

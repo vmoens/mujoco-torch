@@ -215,7 +215,7 @@ def _actuation(m: Model, d: Data) -> Data:
     actfrcrange = actfrcrange[m.dof_jntid_t]
     qfrc_actuator = torch.clamp(qfrc_actuator, actfrcrange[:, 0], actfrcrange[:, 1])
 
-    d.update_(act_dot=act_dot.contiguous(), qfrc_actuator=qfrc_actuator.contiguous())
+    d.update_(act_dot=act_dot.contiguous(), qfrc_actuator=qfrc_actuator.contiguous(), actuator_force=force.contiguous())
     return d
 
 
