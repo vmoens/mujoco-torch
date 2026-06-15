@@ -513,6 +513,44 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
                     value.jnt_dofadr[objid_np, None] + np.arange(3)[None],
                     dtype=torch.long,
                 )
+            elif st_int in (SType.FRAMELINVEL, SType.FRAMEANGVEL):
+                objtype_np = value.sensor_objtype[idx]
+                reftype_np = value.sensor_reftype[idx]
+                refid_np = value.sensor_refid[idx]
+
+                _bodyid_src = {
+                    int(OType.UNKNOWN): np.arange(1),
+                    int(OType.BODY): np.arange(value.nbody),
+                    int(OType.XBODY): np.arange(value.nbody),
+                    int(OType.GEOM): value.geom_bodyid,
+                    int(OType.SITE): value.site_bodyid,
+                    int(OType.CAMERA): value.cam_bodyid,
+                }
+
+                ot_rt_groups = []
+                for ot_val, rt_val in sorted(set(zip(objtype_np, reftype_np))):
+                    idxt = (objtype_np == ot_val) & (reftype_np == rt_val)
+                    sub_objid = objid_np[idxt]
+                    sub_refid = refid_np[idxt]
+
+                    obj_bodyid_np = _bodyid_src[int(ot_val)][sub_objid]
+                    ref_bodyid_np = _bodyid_src[int(rt_val)][sub_refid]
+
+                    sub: dict = {
+                        "ot": int(ot_val),
+                        "rt": int(rt_val),
+                        "objid": torch.tensor(sub_objid, dtype=torch.long),
+                        "refid": torch.tensor(sub_refid, dtype=torch.long),
+                        "cutoff": torch.tensor(cutoff_np[idxt], dtype=torch.float64),
+                        "adr": torch.tensor(adr_np[idxt], dtype=torch.long),
+                        "obj_bodyid": torch.tensor(obj_bodyid_np, dtype=torch.long),
+                        "ref_bodyid": torch.tensor(ref_bodyid_np, dtype=torch.long),
+                        "obj_rootid": torch.tensor(value.body_rootid[obj_bodyid_np], dtype=torch.long),
+                        "ref_rootid": torch.tensor(value.body_rootid[ref_bodyid_np], dtype=torch.long),
+                    }
+                    ot_rt_groups.append(sub)
+
+                group["ot_rt_groups"] = tuple(ot_rt_groups)
 
             # -- acceleration stage extras --
             elif st_int in (SType.ACCELEROMETER, SType.FORCE, SType.TORQUE):

@@ -45,6 +45,8 @@ _SUPPORTED_SENSOR_TYPES = {
     int(ST.BALLANGVEL),
     int(ST.SUBTREELINVEL),
     int(ST.SUBTREEANGMOM),
+    int(ST.FRAMELINVEL),
+    int(ST.FRAMEANGVEL),
     int(ST.ACCELEROMETER),
     int(ST.FORCE),
     int(ST.TORQUE),
@@ -157,6 +159,42 @@ _ACTUATOR_FRC_XML = """
 """
 
 
+_FRAMEVEL_XML = """
+<mujoco>
+  <option timestep="0.005"/>
+  <worldbody>
+    <body name="b1" pos="0 0 1">
+      <joint name="j1" type="hinge" axis="0 1 0"/>
+      <geom name="g1" type="sphere" size="0.1" mass="1" contype="0" conaffinity="0"/>
+      <site name="s1" pos="0.1 0 0"/>
+      <body name="b2" pos="0.5 0 0">
+        <joint name="j2" type="hinge" axis="0 1 0"/>
+        <geom name="g2" type="sphere" size="0.1" mass="1" contype="0" conaffinity="0"/>
+        <site name="s_ref" pos="0 0.1 0"/>
+      </body>
+    </body>
+  </worldbody>
+  <sensor>
+    <!-- site obj: no ref / site ref -->
+    <framelinvel objtype="site" objname="s1"/>
+    <framelinvel objtype="site" objname="s1" reftype="site" refname="s_ref"/>
+    <frameangvel objtype="site" objname="s1"/>
+    <frameangvel objtype="site" objname="s1" reftype="site" refname="s_ref"/>
+    <!-- body obj: no ref / body ref -->
+    <framelinvel objtype="body" objname="b1"/>
+    <framelinvel objtype="body" objname="b1" reftype="body" refname="b2"/>
+    <frameangvel objtype="body" objname="b2"/>
+    <frameangvel objtype="body" objname="b2" reftype="body" refname="b1"/>
+    <!-- geom obj: no ref / cross-type ref -->
+    <framelinvel objtype="geom" objname="g1"/>
+    <framelinvel objtype="geom" objname="g1" reftype="site" refname="s_ref"/>
+    <frameangvel objtype="geom" objname="g2"/>
+    <frameangvel objtype="geom" objname="g2" reftype="site" refname="s1"/>
+  </sensor>
+</mujoco>
+"""
+
+
 def _run_forward(m, d, mx, dx):
     """Run MuJoCo and MJX forward, return (mj_data, mjx_data)."""
     mujoco.mj_forward(m, d)
@@ -210,6 +248,29 @@ class SensorTest(parameterized.TestCase):
             atol=1e-3,
             rtol=1e-3,
             err_msg="framepos/axis sensordata mismatch",
+        )
+
+    def test_sensor_framevel(self):
+        """FRAMELINVEL/FRAMEANGVEL sensors match MuJoCo."""
+        m = mujoco.MjModel.from_xml_string(_FRAMEVEL_XML)
+        d = mujoco.MjData(m)
+        mx = mujoco_torch.device_put(m)
+
+        d.qvel[:] = np.array([1.5, 1.0])
+        qpos = torch.tensor(d.qpos.copy())
+        qvel = torch.tensor(d.qvel.copy())
+        dx = mujoco_torch.device_put(d)
+        dx = dx.replace(qpos=qpos, qvel=qvel)
+
+        d, dx = _run_forward(m, d, mx, dx)
+
+        mask = _supported_mask(m)
+        np.testing.assert_allclose(
+            dx.sensordata.detach().numpy()[mask],
+            d.sensordata[: mx.nsensordata][mask],
+            atol=1e-3,
+            rtol=1e-3,
+            err_msg="framevel sensordata mismatch",
         )
 
     @parameterized.parameters(f for f in test_util.TEST_FILES if f not in ("equality.xml",))

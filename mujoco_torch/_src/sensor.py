@@ -249,6 +249,68 @@ def sensor_vel(m: Model, d: Data) -> Data:
         elif sensor_type == SensorType.SUBTREEANGMOM:
             sensor = d.subtree_angmom[objid]
             adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
+        elif sensor_type in {SensorType.FRAMELINVEL, SensorType.FRAMEANGVEL}:
+            _dtype = d.qpos.dtype
+            objtype_data_vel = {
+                ObjType.UNKNOWN: (
+                    torch.zeros(1, 3, dtype=_dtype, device=_dev),
+                    torch.eye(3, dtype=_dtype, device=_dev).unsqueeze(0),
+                ),
+                ObjType.BODY: (d.xipos, d.ximat),
+                ObjType.XBODY: (d.xpos, d.xmat),
+                ObjType.GEOM: (d.geom_xpos, d.geom_xmat),
+                ObjType.SITE: (d.site_xpos, d.site_xmat),
+                ObjType.CAMERA: (d.cam_xpos, d.cam_xmat),
+            }
+
+            for sub in group["ot_rt_groups"]:
+                ot, rt = sub["ot"], sub["rt"]
+                sub_objid = sub["objid"]
+                sub_refid = sub["refid"]
+                sub_cutoff = sub["cutoff"]
+                obj_bodyid = sub["obj_bodyid"]
+                ref_bodyid = sub["ref_bodyid"]
+                obj_rootid = sub["obj_rootid"]
+                ref_rootid = sub["ref_rootid"]
+
+                xpos_obj, _ = objtype_data_vel[ot]
+                xpos_ref, xmat_ref = objtype_data_vel[rt]
+                xpos_o = xpos_obj[sub_objid]
+                xpos_r = xpos_ref[sub_refid]
+                xmat_r = xmat_ref[sub_refid]
+
+                cvel_obj = d.cvel[obj_bodyid]
+                cvel_ref = d.cvel[ref_bodyid]
+                offset_obj = xpos_o - d.subtree_com[obj_rootid]
+                offset_ref = xpos_r - d.subtree_com[ref_rootid]
+
+                cangvel = cvel_obj[:, :3]
+                cangvelref = cvel_ref[:, :3]
+
+                if sensor_type == SensorType.FRAMELINVEL:
+                    clinvel = cvel_obj[:, 3:]
+                    clinvelref = cvel_ref[:, 3:]
+                    xlinvel = clinvel - math.cross(offset_obj, cangvel)
+                    xlinvelref = clinvelref - math.cross(offset_ref, cangvelref)
+                    rvec = xpos_o - xpos_r
+                    rel_vel = xlinvel - xlinvelref + math.cross(rvec, cangvelref)
+                    sensor = torch.where(
+                        (sub_refid > -1)[:, None],
+                        torch.vmap(lambda mat, vec: mat.T @ vec)(xmat_r, rel_vel),
+                        xlinvel,
+                    )
+                elif sensor_type == SensorType.FRAMEANGVEL:
+                    rel_vel = cangvel - cangvelref
+                    sensor = torch.where(
+                        (sub_refid > -1)[:, None],
+                        torch.vmap(lambda mat, vec: mat.T @ vec)(xmat_r, rel_vel),
+                        cangvel,
+                    )
+
+                adrt = sub["adr"][:, None] + torch.arange(3, device=_dev)
+                sensors.append(_apply_cutoff(sensor, sub_cutoff, data_type).reshape(-1))
+                adrs.append(adrt.reshape(-1))
+            continue
         else:
             continue
 
