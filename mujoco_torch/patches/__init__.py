@@ -86,3 +86,44 @@ def fix_tensordict_unbatched() -> None:
     _ub._HAS_WRAPPER_SUBCLASS_FIX = True
     tensordict.UnbatchedTensor = new_cls
     log.info("Activated wrapper-subclass UnbatchedTensor (tensordict._unbatched guard overridden)")
+
+
+def fix_unbatched_tensor_vmap() -> None:
+    """Keep ``UnbatchedTensor`` payloads unbatched across ``torch.vmap``.
+
+    TensorDict implements vmap support by asking every TensorCollection field
+    to add/remove a vmap batch dimension.  ``UnbatchedTensor`` fields should
+    only update their TensorDict-facing ``batch_size`` metadata there: their
+    wrapped payload is intentionally shared across the batch and must not be
+    converted to a BatchedTensor.
+    """
+    import tensordict
+
+    cls = tensordict.UnbatchedTensor
+
+    def _add_batch_dim(self, *, in_dim: int, vmap_level: int):
+        batch_size = list(self.batch_size)
+        if in_dim < 0:
+            in_dim %= len(batch_size)
+        out = self.copy()
+        out.batch_size = batch_size[:in_dim] + batch_size[in_dim + 1 :]
+        return out
+
+    def _maybe_remove_batch_dim(
+        self,
+        funcname=None,  # noqa: ANN001
+        *,
+        vmap_level: int,
+        batch_size: int,
+        out_dim: int,
+    ):
+        current_batch_size = list(self.batch_size)
+        if out_dim < 0:
+            out_dim %= len(current_batch_size) + 1
+        current_batch_size.insert(out_dim, batch_size)
+        out = self.copy()
+        out.batch_size = current_batch_size
+        return out
+
+    cls._add_batch_dim = _add_batch_dim
+    cls._maybe_remove_batch_dim = _maybe_remove_batch_dim

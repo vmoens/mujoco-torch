@@ -21,6 +21,7 @@
 # patched MetaConverter and selects the right UnbatchedTensor implementation.
 from mujoco_torch.patches import apply as _apply_patches
 from mujoco_torch.patches import fix_tensordict_unbatched as _fix_ut
+from mujoco_torch.patches import fix_unbatched_tensor_vmap as _fix_ut_vmap
 
 _apply_patches()
 # Force tensordict to pick the wrapper-subclass UnbatchedTensor *before* any
@@ -31,8 +32,10 @@ _apply_patches()
 # identical names but different type ids — which trips Dynamo's type_id
 # guard on call 2 of compile(vmap(step)) and forces a recompile.
 _fix_ut()
+_fix_ut_vmap()
 del _apply_patches
 del _fix_ut
+del _fix_ut_vmap
 
 # pylint:disable=g-importing-member
 

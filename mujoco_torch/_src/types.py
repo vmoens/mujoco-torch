@@ -1169,12 +1169,13 @@ class Data(MjTensorClass):
     # solver statistics:
     solver_niter: torch.Tensor
     # sizes (variable in MJ, constant in MJX).
-    # Stored as 0-d int32 tensors so that torch.vmap can batch/unbatch them.
+    # Stored as UnbatchedTensor so stack/cat/index can track env/model batch
+    # dimensions while keeping the wrapped scalar payload model-constant.
     ne: torch.Tensor
     nf: torch.Tensor
     nl: torch.Tensor
-    nefc: torch.Tensor
-    ncon: torch.Tensor
+    nefc: UnbatchedTensor
+    ncon: UnbatchedTensor
     # global properties:
     time: torch.Tensor
     # state:

@@ -103,6 +103,27 @@ class DeviceTest(parameterized.TestCase):
         device.device_get_into(d, dx)
         _assert_eq(self, dx, d)
 
+    def test_unbatched_counts_keep_batch_metadata_under_vmap(self):
+        """ncon/nefc stay UnbatchedTensor while tracking env batch metadata."""
+        m = test_util.load_test_file("ant.xml")
+        mx = device.device_put(m)
+        batch_size = 3
+        d_batch = torch.stack([mujoco_torch.make_data(mx) for _ in range(batch_size)], dim=0)
+
+        self.assertIsInstance(d_batch.ncon, UnbatchedTensor)
+        self.assertIsInstance(d_batch.nefc, UnbatchedTensor)
+        self.assertEqual(d_batch.ncon.batch_size, torch.Size([batch_size]))
+        self.assertEqual(d_batch.nefc.batch_size, torch.Size([batch_size]))
+
+        out = torch.vmap(lambda d: d)(d_batch)
+
+        self.assertIsInstance(out.ncon, UnbatchedTensor)
+        self.assertIsInstance(out.nefc, UnbatchedTensor)
+        self.assertEqual(out.ncon.batch_size, torch.Size([batch_size]))
+        self.assertEqual(out.nefc.batch_size, torch.Size([batch_size]))
+        self.assertEqual(out.ncon.data.shape, torch.Size([]))
+        self.assertEqual(out.nefc.data.shape, torch.Size([]))
+
     @parameterized.parameters(set(test_util.TEST_FILES) - {"convex.xml"})
     def testdevice_get_batched(self, fname):
         """Test getting MjData from a device."""

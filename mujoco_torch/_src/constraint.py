@@ -18,6 +18,7 @@ import mujoco
 
 # pylint: enable=g-importing-member
 import torch
+from tensordict import UnbatchedTensor
 
 from mujoco_torch._src import collision_driver, math, support
 from mujoco_torch._src.diff_config import DiffConfig, get_diff_config
@@ -612,7 +613,7 @@ def make_constraint(m: Model, d: Data) -> Data:
         # toggle disable flags between calls) see a fresh zero buffer.
         if torch.compiler.is_compiling():
             d.update_(
-                nefc=torch.full((), reported_nefc, dtype=torch.int32, device=_dev),
+                nefc=UnbatchedTensor(data=torch.full((), reported_nefc, dtype=torch.int32, device=_dev)),
             )
         else:
             dtype = d.qpos.dtype
@@ -622,7 +623,7 @@ def make_constraint(m: Model, d: Data) -> Data:
                 efc_D=z,
                 efc_aref=z,
                 efc_frictionloss=z,
-                nefc=torch.full((), reported_nefc, dtype=torch.int32, device=_dev),
+                nefc=UnbatchedTensor(data=torch.full((), reported_nefc, dtype=torch.int32, device=_dev)),
             )
         return d
 
@@ -751,7 +752,7 @@ def make_constraint(m: Model, d: Data) -> Data:
         efc_J=efc_J,
         efc_D=efc_D,
         efc_aref=efc_aref,
-        nefc=torch.full((), reported_nefc, dtype=torch.int32, device=r.device),
+        nefc=UnbatchedTensor(data=torch.full((), reported_nefc, dtype=torch.int32, device=r.device)),
     )
     # Only _instantiate_friction produces nonzero frictionloss — every other
     # constraint type uses torch.zeros_like.  Under compile, when there are
