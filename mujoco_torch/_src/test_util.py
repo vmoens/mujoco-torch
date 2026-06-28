@@ -20,6 +20,7 @@ from xml.etree import ElementTree as ET
 import mujoco
 import numpy as np
 from etils import epath
+from pyvers import implement_for
 
 TEST_FILES: list[str] = [
     "ant.xml",
@@ -328,8 +329,28 @@ def create_mjcf(
     return ET.tostring(mjcf).decode("utf-8")
 
 
+@implement_for("mujoco", from_version="3.3.0", to_version="3.4.0")
+def _load_test_model_from_path(path: epath.Path) -> mujoco.MjModel:
+    """Loads bundled test XMLs after removing unsupported MuJoCo 3.3 flags."""
+    xml = path.read_text()
+    if "sleep=" not in xml:
+        return mujoco.MjModel.from_xml_path(path.as_posix())
+
+    mjcf = ET.fromstring(xml)
+    modified = False
+    for flag in mjcf.iter("flag"):
+        modified = flag.attrib.pop("sleep", None) is not None or modified
+    if modified:
+        return mujoco.MjModel.from_xml_string(ET.tostring(mjcf, encoding="unicode"))
+    return mujoco.MjModel.from_xml_path(path.as_posix())
+
+
+@implement_for("mujoco", from_version="3.4.0")
+def _load_test_model_from_path(path: epath.Path) -> mujoco.MjModel:  # noqa: F811
+    return mujoco.MjModel.from_xml_path(path.as_posix())
+
+
 def load_test_file(name: str) -> mujoco.MjModel:
     """Loads a mujoco.MjModel based on the file name."""
     path = epath.resource_path("mujoco_torch") / "test_data" / name
-    m = mujoco.MjModel.from_xml_path(path.as_posix())
-    return m
+    return _load_test_model_from_path(path)

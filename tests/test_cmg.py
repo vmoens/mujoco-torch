@@ -57,9 +57,9 @@ def test_pyramid_4cmg_geometry_shapes_and_orthogonality():
     assert r0.shape == torch.Size([3, 4])
     # Each rotor reference must be orthogonal to its gimbal axis.
     dot = (g * r0).sum(0)
-    torch.testing.assert_close(dot, torch.zeros(4), atol=1e-6, rtol=0)
+    torch.testing.assert_close(dot, torch.zeros_like(dot), atol=1e-6, rtol=0)
     # Gimbal axes have unit norm (within rounding of the math).
-    torch.testing.assert_close(g.norm(dim=0), torch.ones(4), atol=1e-6, rtol=0)
+    torch.testing.assert_close(g.norm(dim=0), torch.ones_like(dot), atol=1e-6, rtol=0)
 
 
 def test_orthogonal_6cmg_geometry_shapes_and_orthogonality():
@@ -67,7 +67,7 @@ def test_orthogonal_6cmg_geometry_shapes_and_orthogonality():
     assert g.shape == torch.Size([3, 6])
     assert r0.shape == torch.Size([3, 6])
     dot = (g * r0).sum(0)
-    torch.testing.assert_close(dot, torch.zeros(6), atol=1e-6, rtol=0)
+    torch.testing.assert_close(dot, torch.zeros_like(dot), atol=1e-6, rtol=0)
 
 
 def test_cmg_jacobian_shape_unbatched():

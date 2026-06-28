@@ -11,8 +11,9 @@ authors = [{ name = "vmoens" }]
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.1",
-    "mujoco>=3.0",
+    "mujoco>=3.3",
     "numpy",
+    "pyvers>=0.2.2",
     "tensordict>=0.11",
     "absl-py",
     "etils",
@@ -24,6 +25,9 @@ dependencies = [
 zoo = ["torchrl>=0.6"]
 test = ["pytest", "pytest-benchmark"]
 benchmark = ["pytest", "pytest-benchmark", "pytest-xdist"]
+
+[dependency-groups]
+dev = ["ruff"]
 
 [project.urls]
 Homepage = "https://github.com/vmoens/mujoco-torch"

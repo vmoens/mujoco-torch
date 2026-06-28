@@ -275,6 +275,8 @@ def _take(obj: Y, idx) -> Y:
 
 def _as_numpy(val):
     """Convert to numpy, handling UnbatchedTensor and regular tensors."""
+    if isinstance(val, UnbatchedTensor):
+        return val.data.cpu().numpy()
     if isinstance(val, torch.Tensor):
         return val.cpu().numpy()
     return val
@@ -349,6 +351,10 @@ def _to_safe(val):
 
 def _validate_and_convert_subset(subset):
     """Validate that a per-group subset has identical rows, then convert."""
+    if isinstance(subset, UnbatchedTensor):
+        subset = subset.data
+    if getattr(subset, "ndim", 0) == 0:
+        return _to_safe(subset)
     if isinstance(subset, torch.Tensor):
         if subset.shape[0] > 0 and not torch.all(subset == subset[0]):
             raise RuntimeError(f"static arg elements do not match: {subset}")
@@ -503,7 +509,7 @@ def _check_input(m: Model, args: Any, in_types: str) -> None:
         "c": m.ncam,
     }
     for idx, (arg, typ) in enumerate(zip(args, in_types)):
-        arg_len = len(arg)
+        arg_len = len(arg.data) if isinstance(arg, UnbatchedTensor) else len(arg)
         if arg_len != size[typ]:
             raise IndexError(
                 f'f argument "{idx}" with type "{typ}" has length "{arg_len}"'

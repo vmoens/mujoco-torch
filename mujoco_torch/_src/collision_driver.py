@@ -25,7 +25,6 @@ import numpy as np
 
 # from torch import numpy as torch
 import torch
-from tensordict import UnbatchedTensor
 
 from mujoco_torch._src import collision_types
 from mujoco_torch._src import mesh as mesh_module
@@ -808,7 +807,7 @@ def collision(m: Model, d: Data) -> Data:
         dev = d.qpos.device
         d.update_(
             contact=Contact.zero(device=dev),
-            ncon=UnbatchedTensor(data=torch.zeros((), dtype=torch.int32, device=dev)),
+            ncon=torch.zeros((), dtype=torch.int32, device=dev),
         )
         return d
 
@@ -835,7 +834,7 @@ def collision(m: Model, d: Data) -> Data:
         contact = contact.replace(efc_address=(ns + offsets).to(torch.int64))
         d.update_(
             contact=contact,
-            ncon=UnbatchedTensor(data=torch.full((), ncon_, dtype=torch.int32, device=contact.dist.device)),
+            ncon=torch.full((), ncon_, dtype=torch.int32, device=contact.dist.device),
         )
         return d
 
@@ -870,6 +869,6 @@ def collision(m: Model, d: Data) -> Data:
 
     d.update_(
         contact=new_contact,
-        ncon=UnbatchedTensor(data=torch.full((), ncon_, dtype=torch.int32, device=contact.dist.device)),
+        ncon=torch.full((), ncon_, dtype=torch.int32, device=contact.dist.device),
     )
     return d

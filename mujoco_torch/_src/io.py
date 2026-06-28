@@ -17,7 +17,6 @@
 import mujoco
 import numpy as np
 import torch
-from tensordict import UnbatchedTensor
 
 from mujoco_torch._src import constraint, device, support
 from mujoco_torch._src import math as _math
@@ -193,16 +192,12 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
         "efc_type": torch.zeros(nefc, dtype=torch.int32),
     }
 
-    # nefc/ncon are Model-derived scalars that do not vary per env.  Wrap as
-    # UnbatchedTensor so .expand(B).clone() keeps the broadcast semantics and
-    # vmap doesn't emit stride-0 outputs that would trigger a Dynamo recompile
-    # on the second step call.
     d = Data(
         ne=torch.tensor(ne, dtype=torch.int32),
         nf=torch.tensor(nf, dtype=torch.int32),
         nl=torch.tensor(nl, dtype=torch.int32),
-        nefc=UnbatchedTensor(data=torch.tensor(nefc, dtype=torch.int32)),
-        ncon=UnbatchedTensor(data=torch.tensor(ncon, dtype=torch.int32)),
+        nefc=torch.tensor(nefc, dtype=torch.int32),
+        ncon=torch.tensor(ncon, dtype=torch.int32),
         contact=contact,
         **public_fields,
         **zero_impl,
