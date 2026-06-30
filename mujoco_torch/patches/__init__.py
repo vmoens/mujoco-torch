@@ -93,13 +93,12 @@ def fix_tensordict_unbatched() -> None:
 
 
 def fix_unbatched_tensor_vmap() -> None:
-    """Keep ``UnbatchedTensor`` payloads unbatched across ``torch.vmap``.
+    """Keep ``UnbatchedTensor`` payloads unbatched across stack/vmap.
 
-    TensorDict implements vmap support by asking every TensorCollection field
-    to add/remove a vmap batch dimension.  ``UnbatchedTensor`` fields should
-    only update their TensorDict-facing ``batch_size`` metadata there: their
-    wrapped payload is intentionally shared across the batch and must not be
-    converted to a BatchedTensor.
+    TensorDict main includes the upstream fix for this behavior
+    (pytorch/tensordict#1730).  Older/stable TensorDict releases can still be
+    missing some or all of the same metadata handling, so patch only when the
+    installed ``UnbatchedTensor`` does not already preserve stack metadata.
     """
     import warnings
 
@@ -107,6 +106,9 @@ def fix_unbatched_tensor_vmap() -> None:
     import torch
 
     cls = tensordict.UnbatchedTensor
+
+    if _has_unbatched_stack_metadata(cls, torch):
+        return
 
     if not hasattr(cls, "batch_size"):
 
@@ -182,3 +184,15 @@ def fix_unbatched_tensor_vmap() -> None:
     cls._add_batch_dim = _add_batch_dim
     cls._maybe_remove_batch_dim = _maybe_remove_batch_dim
     cls._stack_non_tensor = classmethod(_stack_non_tensor)
+
+
+def _has_unbatched_stack_metadata(cls, torch) -> bool:
+    """Return True when TensorDict already has pytorch/tensordict#1730."""
+    if not (issubclass(cls, torch.Tensor) and hasattr(cls, "batch_size") and hasattr(cls, "_with_batch_size")):
+        return False
+    try:
+        value = cls(torch.zeros((), dtype=torch.int32))
+        stacked = cls._stack_non_tensor([value, value], dim=0)
+    except Exception:
+        return False
+    return getattr(stacked, "batch_size", None) == torch.Size([2]) and stacked.shape == torch.Size([])
