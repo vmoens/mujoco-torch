@@ -513,11 +513,14 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
         ctx = _update_constraint(ctx)
         ctx = _update_gradient(ctx)
 
-        # polak-ribiere:
-        beta = (ctx.grad * (ctx.Mgrad - prev_Mgrad)).sum(-1)
-        beta = beta / torch.clamp_min((prev_grad * prev_Mgrad).sum(-1), mujoco.mjMINVAL)
-        beta = torch.clamp_min(beta, 0)
-        search = -ctx.Mgrad + beta * ctx.search
+        if solver_type == SolverType.NEWTON:
+            search = -ctx.Mgrad
+        else:
+            # polak-ribiere:
+            beta = (ctx.grad * (ctx.Mgrad - prev_Mgrad)).sum(-1)
+            beta = beta / torch.clamp_min((prev_grad * prev_Mgrad).sum(-1), mujoco.mjMINVAL)
+            beta = torch.clamp_min(beta, 0)
+            search = -ctx.Mgrad + beta * ctx.search
         return (ctx._replace(search=search, solver_niter=ctx.solver_niter + 1),)
 
     # warmstart:

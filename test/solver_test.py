@@ -22,6 +22,7 @@ from etils import epath
 
 import mujoco_torch
 from mujoco_torch._src import solver as solver_lib
+from mujoco_torch._src.types import SolverType
 
 
 def _assert_attr_eq(a, b, attr, step, fname, atol=1e-2, rtol=1e-2):
@@ -105,6 +106,68 @@ class SolverTest(parameterized.TestCase):
             np.testing.assert_allclose(dx.efc_force, [expected_force])
             np.testing.assert_allclose(dx.qfrc_constraint, [expected_force])
             np.testing.assert_allclose(dx.qacc, [smooth_force + expected_force])
+
+    def test_newton(self):
+        """Test that Newton solver search direction matches Mujoco C implementation.
+
+        Warmstart is disabled and a fixed (low) iteration count is used, so the
+        solver is forced to iterate and the Newton search direction matters (after many
+        iterations, the solution is expected to be similar across solver types).
+        """
+        _XML = """
+        <mujoco>
+          <option solver="Newton" iterations="2" ls_iterations="6" tolerance="1e-10">
+            <flag warmstart="disable"/>
+          </option>
+          <worldbody>
+            <light pos="0 0 3"/>
+            <geom type="plane" size="5 5 0.01" contype="1" conaffinity="1"/>
+            <body name="b1" pos="-0.15 0 0.1">
+              <joint name="free1" type="free"/>
+              <geom name="g1" type="sphere" size="0.2" mass="1"
+                    contype="1" conaffinity="1"/>
+            </body>
+            <body name="b2" pos="0.15 0 0.1">
+              <joint name="free2" type="free"/>
+              <geom name="g2" type="sphere" size="0.2" mass="1"
+                    contype="1" conaffinity="1"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """
+        m = mujoco.MjModel.from_xml_string(_XML)
+        d = mujoco.MjData(m)
+        mx = mujoco_torch.device_put(m)
+
+        self.assertEqual(mx.opt.solver, SolverType.NEWTON)
+
+        np.random.seed(0)
+        d.qvel = 0.1 * np.random.randn(m.nv)
+
+        for i in range(25):
+            dx = mujoco_torch.device_put(d)
+
+            mujoco.mj_step(m, d)
+            dx = mujoco_torch.forward(mx, dx, fixed_iterations=True)
+
+            _assert_attr_eq(
+                d,
+                dx,
+                "qacc",
+                i,
+                "newton_contact",
+                atol=1e-6,
+                rtol=1e-6,
+            )
+            _assert_attr_eq(
+                d,
+                dx,
+                "qfrc_constraint",
+                i,
+                "newton_contact",
+                atol=1e-6,
+                rtol=1e-6,
+            )
 
     @parameterized.parameters(enumerate(("ant.xml", "frictionloss_dof.xml")))
     def test_cg(self, seed, fname):
