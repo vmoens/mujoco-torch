@@ -57,6 +57,10 @@ def fix_tensordict_unbatched() -> None:
     """
     import tensordict
     import tensordict._unbatched as _ub
+    import torch
+
+    if issubclass(_ub.UnbatchedTensor, torch.Tensor):
+        return
 
     # Older tensordict versions expose this guard; newer versions have the fix
     # unconditionally and no longer carry the flag.  Treat absence as "fix
@@ -97,17 +101,40 @@ def fix_unbatched_tensor_vmap() -> None:
     wrapped payload is intentionally shared across the batch and must not be
     converted to a BatchedTensor.
     """
+    import warnings
+
     import tensordict
+    import torch
 
     cls = tensordict.UnbatchedTensor
 
+    if not hasattr(cls, "batch_size"):
+
+        def _get_batch_size(self):
+            return getattr(self, "_batch_size", torch.Size())
+
+        def _set_batch_size(self, batch_size):
+            self._batch_size = torch.Size(batch_size)
+
+        cls.batch_size = property(_get_batch_size, _set_batch_size)
+
+    def _with_batch_size(self, batch_size):
+        if hasattr(self, "_with_batch_size"):
+            return self._with_batch_size(batch_size)
+        if hasattr(self, "copy"):
+            out = self.copy()
+        elif hasattr(self, "_data"):
+            out = type(self)(self._data)
+        else:
+            out = self.clone()
+        out.batch_size = batch_size
+        return out
+
     def _add_batch_dim(self, *, in_dim: int, vmap_level: int):
         batch_size = list(self.batch_size)
-        if in_dim < 0:
+        if in_dim < 0 and batch_size:
             in_dim %= len(batch_size)
-        out = self.copy()
-        out.batch_size = batch_size[:in_dim] + batch_size[in_dim + 1 :]
-        return out
+        return _with_batch_size(self, batch_size[:in_dim] + batch_size[in_dim + 1 :])
 
     def _maybe_remove_batch_dim(
         self,
@@ -115,15 +142,43 @@ def fix_unbatched_tensor_vmap() -> None:
         *,
         vmap_level: int,
         batch_size: int,
-        out_dim: int,
+        out_dim: int | None,
     ):
+        if out_dim is None:
+            return self
         current_batch_size = list(self.batch_size)
         if out_dim < 0:
             out_dim %= len(current_batch_size) + 1
         current_batch_size.insert(out_dim, batch_size)
-        out = self.copy()
-        out.batch_size = current_batch_size
-        return out
+        return _with_batch_size(self, current_batch_size)
+
+    def _stack_non_tensor(cls_, list_of_non_tensor, dim: int = 0, raise_if_non_unique=False):
+        first = list_of_non_tensor[0]
+
+        def _ptr(value):
+            if hasattr(value, "data_ptr"):
+                return value.data_ptr()
+            data = getattr(value, "data", None)
+            if hasattr(data, "data_ptr"):
+                return data.data_ptr()
+            return None
+
+        ptr = _ptr(first)
+        if ptr is not None and any(_ptr(other) != ptr for other in list_of_non_tensor[1:]):
+            warnings.warn(
+                "Stacking UnbatchedTensors with different data storage. "
+                "Only the first element's data will be kept. "
+                "UnbatchedTensor is shape-invariant; if you need different data "
+                "per batch element, consider using a regular tensor.",
+                stacklevel=2,
+            )
+
+        batch_size = list(first.batch_size)
+        if dim < 0:
+            dim %= len(batch_size) + 1
+        batch_size.insert(dim, len(list_of_non_tensor))
+        return _with_batch_size(first, batch_size)
 
     cls._add_batch_dim = _add_batch_dim
     cls._maybe_remove_batch_dim = _maybe_remove_batch_dim
+    cls._stack_non_tensor = classmethod(_stack_non_tensor)

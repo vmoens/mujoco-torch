@@ -2,8 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
   pull_request:
+    branches: [main, "release/**"]
   schedule:
     # Daily at 05:00 UTC to catch new MuJoCo/MJX compatibility issues.
     - cron: "0 5 * * *"
@@ -59,8 +60,20 @@ jobs:
           else
             pip install "jax[cpu]" "mujoco==${MUJOCO_VERSION}.*" "mujoco-mjx==${MUJOCO_VERSION}.*"
           fi
-      - name: Install tensordict from main
-        run: pip install git+https://github.com/pytorch/tensordict.git@main
+      - name: Install TensorDict
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if [[ "${REF_NAME}" == release/* || "${BASE_REF}" == release/* || "${HEAD_REF}" == release/* ]]; then
+            echo "Installing latest stable TensorDict from PyPI for release branch"
+            pip install --upgrade tensordict
+          else
+            echo "Installing TensorDict from GitHub main"
+            pip install --upgrade "tensordict @ git+https://github.com/pytorch/tensordict.git@main"
+          fi
       - name: Install mujoco-torch with test deps
         run: pip install -e ".[test,zoo]"
       - name: Report dependency versions
