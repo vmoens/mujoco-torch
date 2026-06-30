@@ -20,63 +20,113 @@ import enum
 import mujoco
 import numpy as np
 import torch
+from pyvers import implement_for
 from tensordict import UnbatchedTensor
 
 from mujoco_torch._src.dataclasses import MjTensorClass  # pylint: disable=g-importing-member
 
 
-class DisableBit(enum.IntFlag):
-    """Disable default feature bitflags.
-
-    Attributes:
-      CONSTRAINT:   entire constraint solver
-      EQUALITY:     equality constraints
-      FRICTIONLOSS: joint and tendon frictionloss constraints
-      LIMIT:        joint and tendon limit constraints
-      CONTACT:      contact constraints
-      SPRING:       passive spring forces
-      DAMPER:       passive damper forces
-      GRAVITY:      gravitational forces
-      CLAMPCTRL:    clamp control to specified range
-      WARMSTART:    warmstart constraint solver
-      ACTUATION:    apply actuation forces
-      REFSAFE:      integrator safety: make ref[0]>=2*timestep
-      SENSOR:       sensors
-      EULERDAMP:    Euler damping
-      FILTERPARENT: filter parent
-    """
-
-    CONSTRAINT = mujoco.mjtDisableBit.mjDSBL_CONSTRAINT
-    EQUALITY = mujoco.mjtDisableBit.mjDSBL_EQUALITY
-    FRICTIONLOSS = mujoco.mjtDisableBit.mjDSBL_FRICTIONLOSS
-    LIMIT = mujoco.mjtDisableBit.mjDSBL_LIMIT
-    CONTACT = mujoco.mjtDisableBit.mjDSBL_CONTACT
-    SPRING = mujoco.mjtDisableBit.mjDSBL_SPRING
-    DAMPER = mujoco.mjtDisableBit.mjDSBL_DAMPER
-    GRAVITY = mujoco.mjtDisableBit.mjDSBL_GRAVITY
-    CLAMPCTRL = mujoco.mjtDisableBit.mjDSBL_CLAMPCTRL
-    WARMSTART = mujoco.mjtDisableBit.mjDSBL_WARMSTART
-    ACTUATION = mujoco.mjtDisableBit.mjDSBL_ACTUATION
-    REFSAFE = mujoco.mjtDisableBit.mjDSBL_REFSAFE
-    SENSOR = mujoco.mjtDisableBit.mjDSBL_SENSOR
-    EULERDAMP = mujoco.mjtDisableBit.mjDSBL_EULERDAMP
-    FILTERPARENT = mujoco.mjtDisableBit.mjDSBL_FILTERPARENT
-    # unsupported: MIDPHASE
+def _enum_member(enum_type, member_name: str) -> int:
+    return int(getattr(enum_type, member_name))
 
 
-class EnableBit(enum.IntFlag):
-    """Enable optional feature bitflags.
+def _base_disable_bit_members() -> dict[str, int]:
+    return {
+        "CONSTRAINT": _enum_member(mujoco.mjtDisableBit, "mjDSBL_CONSTRAINT"),
+        "EQUALITY": _enum_member(mujoco.mjtDisableBit, "mjDSBL_EQUALITY"),
+        "FRICTIONLOSS": _enum_member(mujoco.mjtDisableBit, "mjDSBL_FRICTIONLOSS"),
+        "LIMIT": _enum_member(mujoco.mjtDisableBit, "mjDSBL_LIMIT"),
+        "CONTACT": _enum_member(mujoco.mjtDisableBit, "mjDSBL_CONTACT"),
+        "GRAVITY": _enum_member(mujoco.mjtDisableBit, "mjDSBL_GRAVITY"),
+        "CLAMPCTRL": _enum_member(mujoco.mjtDisableBit, "mjDSBL_CLAMPCTRL"),
+        "WARMSTART": _enum_member(mujoco.mjtDisableBit, "mjDSBL_WARMSTART"),
+        "ACTUATION": _enum_member(mujoco.mjtDisableBit, "mjDSBL_ACTUATION"),
+        "REFSAFE": _enum_member(mujoco.mjtDisableBit, "mjDSBL_REFSAFE"),
+        "SENSOR": _enum_member(mujoco.mjtDisableBit, "mjDSBL_SENSOR"),
+        "EULERDAMP": _enum_member(mujoco.mjtDisableBit, "mjDSBL_EULERDAMP"),
+        "FILTERPARENT": _enum_member(mujoco.mjtDisableBit, "mjDSBL_FILTERPARENT"),
+    }
 
-    Attributes:
-      INVDISCRETE: discrete-time inverse dynamics
-      MULTICCD: multi-point CCD
-      SLEEP: enable sleep
-    """
 
-    INVDISCRETE = mujoco.mjtEnableBit.mjENBL_INVDISCRETE
-    MULTICCD = mujoco.mjtEnableBit.mjENBL_MULTICCD
-    SLEEP = mujoco.mjtEnableBit.mjENBL_SLEEP
-    # unsupported: OVERRIDE, ENERGY, FWDINV, ISLAND
+@implement_for("mujoco")
+def _disable_bit_members() -> dict[str, int]:
+    raise ModuleNotFoundError("Supported MuJoCo version has not been found.")
+
+
+@_disable_bit_members.register(from_version="3.3.0", to_version="3.3.6")
+def _() -> dict[str, int]:
+    members = _base_disable_bit_members()
+    passive = _enum_member(mujoco.mjtDisableBit, "mjDSBL_PASSIVE")
+    members.update(
+        {
+            "SPRING": passive,
+            "DAMPER": passive,
+        }
+    )
+    return members
+
+
+@_disable_bit_members.register(from_version="3.3.6", to_version="3.8.0")
+def _() -> dict[str, int]:
+    members = _base_disable_bit_members()
+    members.update(
+        {
+            "SPRING": _enum_member(mujoco.mjtDisableBit, "mjDSBL_SPRING"),
+            "DAMPER": _enum_member(mujoco.mjtDisableBit, "mjDSBL_DAMPER"),
+        }
+    )
+    return members
+
+
+@_disable_bit_members.register(from_version="3.8.0")
+def _() -> dict[str, int]:
+    members = _base_disable_bit_members()
+    members.update(
+        {
+            "SPRING": _enum_member(mujoco.mjtDisableBit, "mjDSBL_SPRING"),
+            "DAMPER": _enum_member(mujoco.mjtDisableBit, "mjDSBL_DAMPER"),
+            "MULTICCD": _enum_member(mujoco.mjtDisableBit, "mjDSBL_MULTICCD"),
+        }
+    )
+    return members
+
+
+DisableBit = enum.IntFlag("DisableBit", _disable_bit_members(), module=__name__)
+DisableBit.__doc__ = """Disable default feature bitflags."""
+
+
+@implement_for("mujoco")
+def _enable_bit_members() -> dict[str, int]:
+    raise ModuleNotFoundError("Supported MuJoCo version has not been found.")
+
+
+@_enable_bit_members.register(from_version="3.3.0", to_version="3.4.0")
+def _() -> dict[str, int]:
+    return {
+        "INVDISCRETE": _enum_member(mujoco.mjtEnableBit, "mjENBL_INVDISCRETE"),
+        "MULTICCD": _enum_member(mujoco.mjtEnableBit, "mjENBL_MULTICCD"),
+    }
+
+
+@_enable_bit_members.register(from_version="3.4.0", to_version="3.8.0")
+def _() -> dict[str, int]:
+    return {
+        "INVDISCRETE": _enum_member(mujoco.mjtEnableBit, "mjENBL_INVDISCRETE"),
+        "MULTICCD": _enum_member(mujoco.mjtEnableBit, "mjENBL_MULTICCD"),
+        "SLEEP": _enum_member(mujoco.mjtEnableBit, "mjENBL_SLEEP"),
+    }
+
+
+@_enable_bit_members.register(from_version="3.8.0")
+def _() -> dict[str, int]:
+    return {
+        "INVDISCRETE": _enum_member(mujoco.mjtEnableBit, "mjENBL_INVDISCRETE"),
+        "SLEEP": _enum_member(mujoco.mjtEnableBit, "mjENBL_SLEEP"),
+    }
+
+
+EnableBit = enum.IntFlag("EnableBit", _enable_bit_members(), module=__name__)
+EnableBit.__doc__ = """Enable optional feature bitflags."""
 
 
 class JointType(enum.IntEnum):
@@ -342,43 +392,74 @@ class CamLightType(enum.IntEnum):
     TARGETBODYCOM = mujoco.mjtCamLight.mjCAMLIGHT_TARGETBODYCOM
 
 
-class SensorType(enum.IntEnum):
-    """Type of sensor."""
+def _base_sensor_type_members() -> dict[str, int]:
+    return {
+        "MAGNETOMETER": _enum_member(mujoco.mjtSensor, "mjSENS_MAGNETOMETER"),
+        "CAMPROJECTION": _enum_member(mujoco.mjtSensor, "mjSENS_CAMPROJECTION"),
+        "RANGEFINDER": _enum_member(mujoco.mjtSensor, "mjSENS_RANGEFINDER"),
+        "JOINTPOS": _enum_member(mujoco.mjtSensor, "mjSENS_JOINTPOS"),
+        "TENDONPOS": _enum_member(mujoco.mjtSensor, "mjSENS_TENDONPOS"),
+        "ACTUATORPOS": _enum_member(mujoco.mjtSensor, "mjSENS_ACTUATORPOS"),
+        "BALLQUAT": _enum_member(mujoco.mjtSensor, "mjSENS_BALLQUAT"),
+        "FRAMEPOS": _enum_member(mujoco.mjtSensor, "mjSENS_FRAMEPOS"),
+        "FRAMEXAXIS": _enum_member(mujoco.mjtSensor, "mjSENS_FRAMEXAXIS"),
+        "FRAMEYAXIS": _enum_member(mujoco.mjtSensor, "mjSENS_FRAMEYAXIS"),
+        "FRAMEZAXIS": _enum_member(mujoco.mjtSensor, "mjSENS_FRAMEZAXIS"),
+        "FRAMEQUAT": _enum_member(mujoco.mjtSensor, "mjSENS_FRAMEQUAT"),
+        "SUBTREECOM": _enum_member(mujoco.mjtSensor, "mjSENS_SUBTREECOM"),
+        "CLOCK": _enum_member(mujoco.mjtSensor, "mjSENS_CLOCK"),
+        "VELOCIMETER": _enum_member(mujoco.mjtSensor, "mjSENS_VELOCIMETER"),
+        "GYRO": _enum_member(mujoco.mjtSensor, "mjSENS_GYRO"),
+        "JOINTVEL": _enum_member(mujoco.mjtSensor, "mjSENS_JOINTVEL"),
+        "TENDONVEL": _enum_member(mujoco.mjtSensor, "mjSENS_TENDONVEL"),
+        "ACTUATORVEL": _enum_member(mujoco.mjtSensor, "mjSENS_ACTUATORVEL"),
+        "BALLANGVEL": _enum_member(mujoco.mjtSensor, "mjSENS_BALLANGVEL"),
+        "FRAMELINVEL": _enum_member(mujoco.mjtSensor, "mjSENS_FRAMELINVEL"),
+        "FRAMEANGVEL": _enum_member(mujoco.mjtSensor, "mjSENS_FRAMEANGVEL"),
+        "SUBTREELINVEL": _enum_member(mujoco.mjtSensor, "mjSENS_SUBTREELINVEL"),
+        "SUBTREEANGMOM": _enum_member(mujoco.mjtSensor, "mjSENS_SUBTREEANGMOM"),
+        "TOUCH": _enum_member(mujoco.mjtSensor, "mjSENS_TOUCH"),
+        "ACCELEROMETER": _enum_member(mujoco.mjtSensor, "mjSENS_ACCELEROMETER"),
+        "FORCE": _enum_member(mujoco.mjtSensor, "mjSENS_FORCE"),
+        "TORQUE": _enum_member(mujoco.mjtSensor, "mjSENS_TORQUE"),
+        "ACTUATORFRC": _enum_member(mujoco.mjtSensor, "mjSENS_ACTUATORFRC"),
+        "JOINTACTFRC": _enum_member(mujoco.mjtSensor, "mjSENS_JOINTACTFRC"),
+        "FRAMELINACC": _enum_member(mujoco.mjtSensor, "mjSENS_FRAMELINACC"),
+        "FRAMEANGACC": _enum_member(mujoco.mjtSensor, "mjSENS_FRAMEANGACC"),
+    }
 
-    MAGNETOMETER = mujoco.mjtSensor.mjSENS_MAGNETOMETER
-    CAMPROJECTION = mujoco.mjtSensor.mjSENS_CAMPROJECTION
-    RANGEFINDER = mujoco.mjtSensor.mjSENS_RANGEFINDER
-    JOINTPOS = mujoco.mjtSensor.mjSENS_JOINTPOS
-    TENDONPOS = mujoco.mjtSensor.mjSENS_TENDONPOS
-    ACTUATORPOS = mujoco.mjtSensor.mjSENS_ACTUATORPOS
-    BALLQUAT = mujoco.mjtSensor.mjSENS_BALLQUAT
-    FRAMEPOS = mujoco.mjtSensor.mjSENS_FRAMEPOS
-    FRAMEXAXIS = mujoco.mjtSensor.mjSENS_FRAMEXAXIS
-    FRAMEYAXIS = mujoco.mjtSensor.mjSENS_FRAMEYAXIS
-    FRAMEZAXIS = mujoco.mjtSensor.mjSENS_FRAMEZAXIS
-    FRAMEQUAT = mujoco.mjtSensor.mjSENS_FRAMEQUAT
-    SUBTREECOM = mujoco.mjtSensor.mjSENS_SUBTREECOM
-    CLOCK = mujoco.mjtSensor.mjSENS_CLOCK
-    VELOCIMETER = mujoco.mjtSensor.mjSENS_VELOCIMETER
-    GYRO = mujoco.mjtSensor.mjSENS_GYRO
-    JOINTVEL = mujoco.mjtSensor.mjSENS_JOINTVEL
-    TENDONVEL = mujoco.mjtSensor.mjSENS_TENDONVEL
-    ACTUATORVEL = mujoco.mjtSensor.mjSENS_ACTUATORVEL
-    BALLANGVEL = mujoco.mjtSensor.mjSENS_BALLANGVEL
-    FRAMELINVEL = mujoco.mjtSensor.mjSENS_FRAMELINVEL
-    FRAMEANGVEL = mujoco.mjtSensor.mjSENS_FRAMEANGVEL
-    SUBTREELINVEL = mujoco.mjtSensor.mjSENS_SUBTREELINVEL
-    SUBTREEANGMOM = mujoco.mjtSensor.mjSENS_SUBTREEANGMOM
-    TOUCH = mujoco.mjtSensor.mjSENS_TOUCH
-    CONTACT = mujoco.mjtSensor.mjSENS_CONTACT
-    ACCELEROMETER = mujoco.mjtSensor.mjSENS_ACCELEROMETER
-    FORCE = mujoco.mjtSensor.mjSENS_FORCE
-    TORQUE = mujoco.mjtSensor.mjSENS_TORQUE
-    ACTUATORFRC = mujoco.mjtSensor.mjSENS_ACTUATORFRC
-    JOINTACTFRC = mujoco.mjtSensor.mjSENS_JOINTACTFRC
-    TENDONACTFRC = mujoco.mjtSensor.mjSENS_TENDONACTFRC
-    FRAMELINACC = mujoco.mjtSensor.mjSENS_FRAMELINACC
-    FRAMEANGACC = mujoco.mjtSensor.mjSENS_FRAMEANGACC
+
+@implement_for("mujoco")
+def _sensor_type_members() -> dict[str, int]:
+    raise ModuleNotFoundError("Supported MuJoCo version has not been found.")
+
+
+@_sensor_type_members.register(from_version="3.3.0", to_version="3.3.1")
+def _() -> dict[str, int]:
+    return _base_sensor_type_members()
+
+
+@_sensor_type_members.register(from_version="3.3.1", to_version="3.3.5")
+def _() -> dict[str, int]:
+    members = _base_sensor_type_members()
+    members["TENDONACTFRC"] = _enum_member(mujoco.mjtSensor, "mjSENS_TENDONACTFRC")
+    return members
+
+
+@_sensor_type_members.register(from_version="3.3.5")
+def _() -> dict[str, int]:
+    members = _base_sensor_type_members()
+    members.update(
+        {
+            "CONTACT": _enum_member(mujoco.mjtSensor, "mjSENS_CONTACT"),
+            "TENDONACTFRC": _enum_member(mujoco.mjtSensor, "mjSENS_TENDONACTFRC"),
+        }
+    )
+    return members
+
+
+SensorType = enum.IntEnum("SensorType", _sensor_type_members(), module=__name__)
+SensorType.__doc__ = """Type of sensor."""
 
 
 class ObjType(enum.IntEnum):
@@ -1088,12 +1169,13 @@ class Data(MjTensorClass):
     # solver statistics:
     solver_niter: torch.Tensor
     # sizes (variable in MJ, constant in MJX).
-    # Stored as 0-d int32 tensors so that torch.vmap can batch/unbatch them.
+    # Stored as UnbatchedTensor so stack/cat/index can track env/model batch
+    # dimensions while keeping the wrapped scalar payload model-constant.
     ne: torch.Tensor
     nf: torch.Tensor
     nl: torch.Tensor
-    nefc: torch.Tensor
-    ncon: torch.Tensor
+    nefc: UnbatchedTensor
+    ncon: UnbatchedTensor
     # global properties:
     time: torch.Tensor
     # state:

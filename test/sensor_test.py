@@ -52,8 +52,9 @@ _SUPPORTED_SENSOR_TYPES = {
     int(ST.TORQUE),
     int(ST.ACTUATORFRC),
     int(ST.JOINTACTFRC),
-    int(ST.TENDONACTFRC),
 }
+if hasattr(ST, "TENDONACTFRC"):
+    _SUPPORTED_SENSOR_TYPES.add(int(ST.TENDONACTFRC))
 
 
 def _supported_mask(m):
@@ -426,6 +427,8 @@ class SensorTest(parameterized.TestCase):
 
     def test_actuator_frc_sensors(self):
         """ACTUATORFRC and TENDONACTFRC return non-zero values matching MuJoCo."""
+        if not hasattr(ST, "TENDONACTFRC"):
+            self.skipTest("MuJoCo version does not expose tendon actuator force sensors")
         m = mujoco.MjModel.from_xml_string(_ACTUATOR_FRC_XML)
         d = mujoco.MjData(m)
         mx = mujoco_torch.device_put(m)

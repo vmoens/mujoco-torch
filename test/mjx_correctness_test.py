@@ -14,11 +14,15 @@
 # ==============================================================================
 """Numerical correctness tests comparing mujoco-torch against MJX (JAX)."""
 
+import inspect
+from functools import wraps
+
 import mujoco
 import numpy as np
 import pytest
 import torch
 from mujoco import mjx
+from pyvers import implement_for
 
 import mujoco_torch
 from mujoco_torch._src import test_util
@@ -31,6 +35,36 @@ SEED = 42
 
 SIMPLE_MODEL = "pendula.xml"
 COMPLEX_MODEL = "ant.xml"
+
+
+@implement_for("mujoco", from_version="3.3.0", to_version="3.7.0")
+def _patch_mjx_jax_clip():
+    """Allow older MJX releases to run with newer JAX clip keyword names."""
+    import jax.numpy as jnp
+
+    if "a_min" in inspect.signature(jnp.clip).parameters:
+        return
+
+    clip = jnp.clip
+
+    @wraps(clip)
+    def _clip(arr=None, /, min=None, max=None, *, a_min=None, a_max=None):
+        if a_min is not None:
+            if min is not None:
+                raise TypeError("clip received both 'min' and 'a_min'")
+            min = a_min
+        if a_max is not None:
+            if max is not None:
+                raise TypeError("clip received both 'max' and 'a_max'")
+            max = a_max
+        return clip(arr, min, max)
+
+    jnp.clip = _clip
+
+
+@implement_for("mujoco", from_version="3.7.0")
+def _patch_mjx_jax_clip():  # noqa: F811
+    pass
 
 
 def _run_mujoco_c(m_mj, qvel_kick, nsteps, ctrl_seq=None, disable_constraint=False):
@@ -63,6 +97,7 @@ def _run_mjx(m_mj, qvel_kick, nsteps, ctrl_seq=None, disable_constraint=False):
     import jax
 
     jax.config.update("jax_enable_x64", True)
+    _patch_mjx_jax_clip()
 
     if disable_constraint:
         m_mj = m_mj.__copy__()
@@ -91,6 +126,16 @@ def _run_mjx(m_mj, qvel_kick, nsteps, ctrl_seq=None, disable_constraint=False):
             }
         )
     return results
+
+
+@implement_for("mujoco", from_version="3.3.0", to_version="3.3.5")
+def _run_vmap_reference(m_mj, qvel_kick, nsteps, ctrl_seq=None, disable_constraint=False):
+    return _run_mujoco_c(m_mj, qvel_kick, nsteps, ctrl_seq=ctrl_seq, disable_constraint=disable_constraint)
+
+
+@implement_for("mujoco", from_version="3.3.5")
+def _run_vmap_reference(m_mj, qvel_kick, nsteps, ctrl_seq=None, disable_constraint=False):  # noqa: F811
+    return _run_mjx(m_mj, qvel_kick, nsteps, ctrl_seq=ctrl_seq, disable_constraint=disable_constraint)
 
 
 def _run_torch_single(m_mj, qvel_kick, nsteps, ctrl_seq=None, disable_constraint=False):
@@ -206,7 +251,7 @@ class TestMJXCorrectnessVmap:
         rng = np.random.RandomState(SEED)
         qvel_kick = rng.randn(m_mj.nv) * 0.05
 
-        mjx_results = _run_mjx(m_mj, qvel_kick, NSTEPS, disable_constraint=True)
+        mjx_results = _run_vmap_reference(m_mj, qvel_kick, NSTEPS, disable_constraint=True)
         torch_results = _run_torch_vmap(m_mj, qvel_kick, NSTEPS, disable_constraint=True)
         _compare_trajectories(mjx_results, torch_results, COMPLEX_MODEL, atol=1e-5)
 
@@ -215,7 +260,7 @@ class TestMJXCorrectnessVmap:
         rng = np.random.RandomState(SEED)
         qvel_kick = rng.randn(m_mj.nv) * 0.05
 
-        mjx_results = _run_mjx(m_mj, qvel_kick, NSTEPS, disable_constraint=True)
+        mjx_results = _run_vmap_reference(m_mj, qvel_kick, NSTEPS, disable_constraint=True)
         torch_results = _run_torch_vmap(m_mj, qvel_kick, NSTEPS, disable_constraint=True)
         _compare_trajectories(mjx_results, torch_results, "humanoid.xml", atol=1e-5)
 

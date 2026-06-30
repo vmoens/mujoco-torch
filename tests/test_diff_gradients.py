@@ -56,10 +56,10 @@ def _fd_grad(fn, x, eps=1e-6):
 
 def test_sphere_sphere_smooth_gradcheck():
     """gradcheck on _sphere_sphere with smooth collisions."""
-    pos1 = torch.randn(3, requires_grad=True)
-    pos2 = torch.randn(3, requires_grad=True)
-    r1 = torch.tensor(0.1)
-    r2 = torch.tensor(0.1)
+    pos1 = torch.randn(3, dtype=torch.float64, requires_grad=True)
+    pos2 = torch.randn(3, dtype=torch.float64, requires_grad=True)
+    r1 = torch.tensor(0.1, dtype=torch.float64)
+    r2 = torch.tensor(0.1, dtype=torch.float64)
 
     with mujoco_torch.differentiable_mode(smooth_collisions=True):
 
@@ -76,14 +76,14 @@ def test_plane_capsule_smooth_gradcheck():
     """gradcheck on plane_capsule with smooth collisions."""
     plane_pos = torch.zeros(3, dtype=torch.float64)
     plane_mat = torch.eye(3, dtype=torch.float64)
-    cap_pos = torch.tensor([0.0, 0.0, 0.3], requires_grad=True)
+    cap_pos = torch.tensor([0.0, 0.0, 0.3], dtype=torch.float64, requires_grad=True)
     cap_mat = torch.eye(3, dtype=torch.float64)
-    cap_size = torch.tensor([0.05, 0.1, 0.0])
+    cap_size = torch.tensor([0.05, 0.1, 0.0], dtype=torch.float64)
 
     plane = GeomInfo(
         pos=plane_pos,
         mat=plane_mat,
-        geom_size=torch.tensor([5.0, 5.0, 0.1]),
+        geom_size=torch.tensor([5.0, 5.0, 0.1], dtype=torch.float64),
         vert=None,
         face=None,
         facenorm=None,

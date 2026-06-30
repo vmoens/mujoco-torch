@@ -52,6 +52,10 @@ def rodrigues_rotate(axis: torch.Tensor, vector: torch.Tensor, theta: torch.Tens
         ``(..., 3, N)`` rotated vectors. The leading ``...`` dims of
         ``theta`` broadcast over the rotation operation.
     """
+    dtype = torch.promote_types(torch.promote_types(axis.dtype, vector.dtype), theta.dtype)
+    axis = axis.to(device=theta.device, dtype=dtype)
+    vector = vector.to(device=theta.device, dtype=dtype)
+    theta = theta.to(dtype=dtype)
     cos_t = torch.cos(theta).unsqueeze(-2)
     sin_t = torch.sin(theta).unsqueeze(-2)
     axis_dot_vec = (axis * vector).sum(dim=0)

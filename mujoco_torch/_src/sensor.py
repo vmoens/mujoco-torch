@@ -16,12 +16,26 @@
 
 import mujoco
 import torch
+from pyvers import implement_for
 
 from mujoco_torch._src import math, ray, smooth
-from mujoco_torch._src.types import Data, Model, ObjType, SensorType
+from mujoco_torch._src.types import Data, DisableBit, Model, ObjType, SensorType
 
 _DATATYPE_REAL = int(mujoco.mjtDataType.mjDATATYPE_REAL)
 _DATATYPE_POSITIVE = int(mujoco.mjtDataType.mjDATATYPE_POSITIVE)
+
+
+@implement_for("mujoco", from_version="3.3.0", to_version="3.3.7")
+def _accelerometer_gravity_term(m: Model, rot: torch.Tensor) -> torch.Tensor:
+    if m.opt.disableflags & DisableBit.GRAVITY:
+        return torch.zeros((rot.shape[0], 3), dtype=rot.dtype, device=rot.device)
+    gravity = m.opt.gravity.to(dtype=rot.dtype, device=rot.device)
+    return torch.vmap(lambda mat: mat.T @ -gravity)(rot)
+
+
+@implement_for("mujoco", from_version="3.3.7")
+def _accelerometer_gravity_term(m: Model, rot: torch.Tensor) -> torch.Tensor:  # noqa: F811
+    return torch.zeros((rot.shape[0], 3), dtype=rot.dtype, device=rot.device)
 
 
 def _apply_cutoff(sensor: torch.Tensor, cutoff: torch.Tensor, data_type: int) -> torch.Tensor:
@@ -373,6 +387,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
                 dif = d.site_xpos[objid] - d.subtree_com[group["rootid"]]
 
                 sensor = torch.vmap(_accelerometer)(cvel, cacc, dif, rot)
+                sensor = sensor + _accelerometer_gravity_term(m, rot)
             else:
                 continue
             adr = (adr[:, None] + torch.arange(3, device=_dev)).reshape(-1)
@@ -404,7 +419,7 @@ def sensor_acc(m: Model, d: Data) -> Data:
             sensor = d.actuator_force[objid]
         elif sensor_type == SensorType.JOINTACTFRC:
             sensor = d.qfrc_actuator[group["dofadr"]]
-        elif sensor_type == SensorType.TENDONACTFRC:
+        elif hasattr(SensorType, "TENDONACTFRC") and sensor_type == SensorType.TENDONACTFRC:
             force_mask = group["force_mask"].to(dtype=d.actuator_force.dtype)
             sensor = force_mask @ d.actuator_force
         else:

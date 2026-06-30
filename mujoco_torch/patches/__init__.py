@@ -57,6 +57,10 @@ def fix_tensordict_unbatched() -> None:
     """
     import tensordict
     import tensordict._unbatched as _ub
+    import torch
+
+    if issubclass(_ub.UnbatchedTensor, torch.Tensor):
+        return
 
     # Older tensordict versions expose this guard; newer versions have the fix
     # unconditionally and no longer carry the flag.  Treat absence as "fix

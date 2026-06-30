@@ -520,8 +520,8 @@ class TopKContactTest(absltest.TestCase):
         dx_all = collision_jit_fn(mx_all, dx.clone())
         dx_top_k = collision_jit_fn(mx_top_k, dx.clone())
 
-        self.assertEqual(dx_all.ncon, 3)
-        self.assertEqual(dx_top_k.ncon, 2)
+        self.assertEqual(dx_all.ncon.data.item(), 3)
+        self.assertEqual(dx_top_k.ncon.data.item(), 2)
 
 
 def _collide_hfield(mjcf, hfield_data_value=0.5):

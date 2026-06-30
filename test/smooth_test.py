@@ -22,6 +22,7 @@ import numpy as np
 # from torch import numpy as torch
 import torch
 from absl.testing import absltest, parameterized
+from pyvers import implement_for
 
 import mujoco_torch
 from mujoco_torch._src import support, test_util
@@ -39,6 +40,20 @@ def _assert_attr_eq(a, b, attr, step, fname, atol=5e-4, rtol=5e-4):
     err_msg = f"mismatch: {attr} at step {step} in {fname}"
     a, b = getattr(a, attr), getattr(b, attr)
     np.testing.assert_allclose(a, b, err_msg=err_msg, atol=atol, rtol=rtol)
+
+
+@implement_for("mujoco", from_version="3.3.0", to_version="3.10.0")
+def _mj_full_m(m, d):
+    out = np.zeros((m.nv, m.nv))
+    mujoco.mj_fullM(m, out, d.qM)
+    return out
+
+
+@implement_for("mujoco", from_version="3.10.0")
+def _mj_full_m(m, d):  # noqa: F811
+    out = np.zeros((m.nv, m.nv))
+    mujoco.mj_fullM(m, d, out)
+    return out
 
 
 class SmoothTest(parameterized.TestCase):
@@ -105,8 +120,7 @@ class SmoothTest(parameterized.TestCase):
             _assert_attr_eq(d, dx, "crb", i, fname)
             # qM: mujoco stores sparse, our code may store dense
             if not support.is_sparse(mx):
-                mj_full_m = np.zeros((m.nv, m.nv))
-                mujoco.mj_fullM(m, mj_full_m, d.qM)
+                mj_full_m = _mj_full_m(m, d)
                 np.testing.assert_allclose(
                     mj_full_m,
                     dx.qM,

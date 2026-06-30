@@ -135,7 +135,12 @@ def _spring_damper(m: Model, d: Data) -> torch.Tensor:
         frc_damper = torch.zeros(max(m.ntendon, 0), dtype=d.qpos.dtype, device=d.qpos.device)
 
     if m.ntendon:
-        qfrc = qfrc + d.ten_J.T @ (frc_spring + frc_damper)
+        ten_J = d.ten_J
+        if ten_J.ndim == 1:
+            ten_J_dense = torch.zeros((m.ntendon, m.nv), dtype=ten_J.dtype, device=ten_J.device)
+            ten_J_dense[m.tendon_adr_moment_jnt.data, m.tendon_dofadr_moment_jnt.data] = ten_J
+            ten_J = ten_J_dense
+        qfrc = qfrc + ten_J.T @ (frc_spring + frc_damper)
 
     return qfrc
 

@@ -2,12 +2,45 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
   pull_request:
+    branches: [main, "release/**"]
+  schedule:
+    # Daily at 05:00 UTC to catch new MuJoCo/MJX compatibility issues.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+  define-matrix:
+    name: Select MuJoCo matrix
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        shell: bash
+        run: |
+          pr_matrix='{"include":[{"mujoco-version":"3.3"},{"mujoco-version":"current"}]}'
+          full_matrix='{"include":[{"mujoco-version":"3.3"},{"mujoco-version":"3.4"},{"mujoco-version":"3.5"},{"mujoco-version":"3.6"},{"mujoco-version":"3.7"},{"mujoco-version":"3.8"},{"mujoco-version":"3.9"},{"mujoco-version":"3.10"},{"mujoco-version":"current"}]}'
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "matrix=${pr_matrix}" >> "${GITHUB_OUTPUT}"
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "matrix=${full_matrix}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "matrix=${pr_matrix}" >> "${GITHUB_OUTPUT}"
+          fi
+
+  test:
+    name: MuJoCo ${{ matrix.mujoco-version }}
+    needs: define-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.define-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -17,14 +50,44 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Install CPU-only PyTorch
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - name: Install JAX (CPU) and MJX
-        # jax>=0.5 removed jnp.clip(a_min=, a_max=), which mujoco-mjx 3.5 still uses
-        # (see mujoco/mjx/_src/collision_driver.py). Pin to the 0.4.x series until
-        # mujoco-mjx updates.
-        run: pip install "jax[cpu]<0.5" "mujoco>=3.0,<3.6" "mujoco-mjx>=3.0,<3.6"
-      - name: Install tensordict from main
-        run: pip install git+https://github.com/pytorch/tensordict.git@main
+      - name: Install JAX (CPU), MuJoCo, and MJX
+        env:
+          MUJOCO_VERSION: ${{ matrix.mujoco-version }}
+        shell: bash
+        run: |
+          if [[ "${MUJOCO_VERSION}" == "current" ]]; then
+            pip install "jax[cpu]" mujoco mujoco-mjx
+          else
+            pip install "jax[cpu]" "mujoco==${MUJOCO_VERSION}.*" "mujoco-mjx==${MUJOCO_VERSION}.*"
+          fi
+      - name: Install TensorDict
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if [[ "${REF_NAME}" == release/* || "${BASE_REF}" == release/* || "${HEAD_REF}" == release/* ]]; then
+            echo "Installing latest stable TensorDict from PyPI for release branch"
+            pip install --upgrade tensordict
+          else
+            echo "Installing TensorDict from GitHub main"
+            pip install --upgrade "tensordict @ git+https://github.com/pytorch/tensordict.git@main"
+          fi
       - name: Install mujoco-torch with test deps
-        run: pip install -e ".[test]"
+        run: pip install -e ".[test,zoo]"
+      - name: Report dependency versions
+        run: |
+          python - <<'PY'
+          import importlib.metadata as metadata
+          import mujoco
+          import torch
+          import tensordict
+
+          print(f"torch: {torch.__version__}")
+          print(f"tensordict: {tensordict.__version__}")
+          print(f"mujoco: {mujoco.__version__}")
+          print(f"mujoco-mjx: {metadata.version('mujoco-mjx')}")
+          PY
       - name: Run tests (including MJX correctness)
-        run: pytest test/ -x -v
+        run: pytest test tests -m "not integration" -x -v

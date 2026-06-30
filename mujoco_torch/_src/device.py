@@ -69,13 +69,8 @@ _TYPE_MAP = {
 }
 
 _TRANSFORMS = {
-    # MuJoCo exposes these as Python ints; force int32 so the torch tensors
-    # match what ``make_data`` / ``make_constraint`` / ``collision`` produce.
-    # Without this, ``_device_put_torch`` would land on torch's default int64
-    # and the first compiled ``step`` call retraces once on a dtype guard when
-    # ``make_constraint`` overwrites ``nefc`` as int32.
-    # Wrapped in UnbatchedTensor so .expand(B).clone() keeps the broadcast
-    # semantics through tensordict and vmap doesn't emit stride-0 outputs.
+    # MuJoCo exposes these as Python ints.  Store them as unbatched int32
+    # scalars because they are model-derived and do not vary per environment.
     (types.Data, "nefc"): lambda x: UnbatchedTensor(data=torch.tensor(int(x), dtype=torch.int32)),
     (types.Data, "ncon"): lambda x: UnbatchedTensor(data=torch.tensor(int(x), dtype=torch.int32)),
     (types.Data, "ximat"): lambda x: x.reshape(x.shape[:-1] + (3, 3)),
@@ -203,6 +198,15 @@ torch.device_put = _device_put_torch
 
 
 _model_cache_id_counter = 0
+
+
+_MISSING_MODEL_FIELD_DEFAULTS = {
+    "light_type": lambda value: value.light_directional.astype(np.int32),
+    "sensor_intprm": lambda value: np.zeros((value.nsensor, 3), dtype=np.int32),
+    "tendon_actfrclimited": lambda value: np.zeros(value.ntendon, dtype=np.uint8),
+    "tendon_actfrcrange": lambda value: np.zeros((value.ntendon, 2), dtype=np.float64),
+    "tendon_armature": lambda value: np.zeros(value.ntendon, dtype=np.float64),
+}
 
 
 def _compute_condim_counts(value: mujoco.MjModel) -> tuple[int, int, int, int]:
@@ -565,7 +569,7 @@ def _compute_sensor_groups(value: mujoco.MjModel) -> dict[str, tuple]:
                     value.jnt_dofadr[objid_np],
                     dtype=torch.long,
                 )
-            elif st_int == SType.TENDONACTFRC:
+            elif hasattr(SType, "TENDONACTFRC") and st_int == SType.TENDONACTFRC:
                 force_mask = np.stack(
                     [
                         (value.actuator_trntype == int(types.TrnType.TENDON)) & (value.actuator_trnid[:, 0] == tid)
@@ -1047,7 +1051,13 @@ def device_put(value, *, dtype: torch.dtype | None = None):
             continue
 
         source_name = _FIELD_SOURCE_MAP.get((clz, f.name), f.name)
-        field_value = getattr(value, source_name)
+        try:
+            field_value = getattr(value, source_name)
+        except AttributeError:
+            if isinstance(value, mujoco.MjModel) and source_name in _MISSING_MODEL_FIELD_DEFAULTS:
+                field_value = _MISSING_MODEL_FIELD_DEFAULTS[source_name](value)
+            else:
+                raise
         if (clz, f.name) in _TRANSFORMS:
             field_value = _TRANSFORMS[(clz, f.name)](field_value)
 
@@ -1171,6 +1181,9 @@ def device_get_into(result, value):
             if type(field_value) in _TYPE_MAP.values():
                 device_get_into(getattr(result, result_name), field_value)
                 continue
+
+            if isinstance(field_value, UnbatchedTensor):
+                field_value = field_value.data
 
             # Convert torch tensors to numpy for MuJoCo compatibility
             if isinstance(field_value, torch.Tensor):

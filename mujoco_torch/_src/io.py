@@ -193,10 +193,6 @@ def make_data(m: Model | mujoco.MjModel) -> Data:
         "efc_type": torch.zeros(nefc, dtype=torch.int32),
     }
 
-    # nefc/ncon are Model-derived scalars that do not vary per env.  Wrap as
-    # UnbatchedTensor so .expand(B).clone() keeps the broadcast semantics and
-    # vmap doesn't emit stride-0 outputs that would trigger a Dynamo recompile
-    # on the second step call.
     d = Data(
         ne=torch.tensor(ne, dtype=torch.int32),
         nf=torch.tensor(nf, dtype=torch.int32),

@@ -24,12 +24,21 @@ import numpy as np
 # from torch import numpy as torch
 import torch
 from absl.testing import absltest, parameterized
+from tensordict import UnbatchedTensor
 
 import mujoco_torch
 from mujoco_torch._src import device, test_util, types
 
 # pylint: disable=g-importing-member
 from mujoco_torch._src.dataclasses import MjTensorClass
+
+
+def _unwrap_value(value):
+    if isinstance(value, UnbatchedTensor):
+        value = value.data
+    if isinstance(value, torch.Tensor) and value.ndim == 0:
+        value = value.item()
+    return value
 
 
 def _assert_eq(testcase, a, b, attr=None, name=None):
@@ -39,7 +48,14 @@ def _assert_eq(testcase, a, b, attr=None, name=None):
     if attr:
         # Mujoco uses 'dim' for contact dimension; we use 'contact_dim'
         b_attr = device._FIELD_TARGET_MAP.get((type(a), attr), attr)
-        a, b = getattr(a, attr), getattr(b, b_attr)
+        a = getattr(a, attr)
+        try:
+            b = getattr(b, b_attr)
+        except AttributeError:
+            if isinstance(b, mujoco.MjModel) and b_attr in device._MISSING_MODEL_FIELD_DEFAULTS:
+                b = device._MISSING_MODEL_FIELD_DEFAULTS[b_attr](b)
+            else:
+                raise
 
     if isinstance(a, MjTensorClass):
         for field in dataclasses.fields(a):
@@ -49,6 +65,9 @@ def _assert_eq(testcase, a, b, attr=None, name=None):
     typ = {"Model": types.Model, "Data": types.Data, "Contact": types.Contact}.get(name)
     if (typ, attr) in device._TRANSFORMS:
         b = device._TRANSFORMS[(typ, attr)](b)
+
+    a = _unwrap_value(a)
+    b = _unwrap_value(b)
 
     err_msg = f"mismatch: {attr} in {name}"
     if not hasattr(b, "shape") or not b.shape:
@@ -83,6 +102,27 @@ class DeviceTest(parameterized.TestCase):
         d = mujoco.MjData(m)
         device.device_get_into(d, dx)
         _assert_eq(self, dx, d)
+
+    def test_unbatched_counts_keep_batch_metadata_under_vmap(self):
+        """ncon/nefc stay UnbatchedTensor while tracking env batch metadata."""
+        m = test_util.load_test_file("ant.xml")
+        mx = device.device_put(m)
+        batch_size = 3
+        d_batch = torch.stack([mujoco_torch.make_data(mx) for _ in range(batch_size)], dim=0)
+
+        self.assertIsInstance(d_batch.ncon, UnbatchedTensor)
+        self.assertIsInstance(d_batch.nefc, UnbatchedTensor)
+        self.assertEqual(d_batch.ncon.batch_size, torch.Size([batch_size]))
+        self.assertEqual(d_batch.nefc.batch_size, torch.Size([batch_size]))
+
+        out = torch.vmap(lambda d: d)(d_batch)
+
+        self.assertIsInstance(out.ncon, UnbatchedTensor)
+        self.assertIsInstance(out.nefc, UnbatchedTensor)
+        self.assertEqual(out.ncon.batch_size, torch.Size([batch_size]))
+        self.assertEqual(out.nefc.batch_size, torch.Size([batch_size]))
+        self.assertEqual(out.ncon.data.shape, torch.Size([]))
+        self.assertEqual(out.nefc.data.shape, torch.Size([]))
 
     @parameterized.parameters(set(test_util.TEST_FILES) - {"convex.xml"})
     def testdevice_get_batched(self, fname):
