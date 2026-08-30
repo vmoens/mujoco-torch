@@ -14,8 +14,6 @@
 # ==============================================================================
 """Core non-smooth constraint functions."""
 
-from typing import NamedTuple
-
 import mujoco
 
 # pylint: enable=g-importing-member
@@ -52,10 +50,11 @@ def _vmap_index(tensor: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
 # pylint: disable=g-importing-member
 from torch.utils._pytree import tree_map
 
-from mujoco_torch._src.types import ConeType, Data, Model
+from mujoco_torch._src.dataclasses import MjTensorClass
+from mujoco_torch._src.types import ConeType, Contact, Data, Model
 
 
-class _Efc(NamedTuple):
+class _Efc(MjTensorClass):
     """Support data for creating constraint matrices."""
 
     J: torch.Tensor
@@ -153,6 +152,7 @@ def _instantiate_equality_connect(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
     )
 
 
@@ -208,6 +208,7 @@ def _instantiate_equality_weld(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
     )
 
 
@@ -246,6 +247,7 @@ def _instantiate_friction(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
+        batch_size=[size],
     )
 
 
@@ -293,6 +295,7 @@ def _instantiate_equality_joint(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
     )
 
 
@@ -328,6 +331,7 @@ def _instantiate_limit_ball(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
     )
 
 
@@ -364,6 +368,7 @@ def _instantiate_limit_slide_hinge(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
     )
 
 
@@ -396,6 +401,7 @@ def _instantiate_limit_tendon(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
     )
 
 
@@ -408,17 +414,17 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc:
     ncon_fl = m.condim_counts_py[0]
 
     @torch.vmap
-    def fn(dist, includemargin, geom1, geom2, pos, frame):
-        dist = dist - includemargin
-        g1 = geom1.long().unsqueeze(0)
-        g2 = geom2.long().unsqueeze(0)
+    def fn(c: Contact):
+        dist = c.dist - c.includemargin
+        g1 = c.geom1.long().unsqueeze(0)
+        g2 = c.geom2.long().unsqueeze(0)
         body1 = m.geom_bodyid_t.gather(0, g1).squeeze(0)
         body2 = m.geom_bodyid_t.gather(0, g2).squeeze(0)
-        diff = support.jac_dif_pair(m, d, pos, body1, body2)
+        diff = support.jac_dif_pair(m, d, c.pos, body1, body2)
         invweight0 = m.body_invweight0[:, 0]
         t = invweight0.gather(0, body1.unsqueeze(0)).squeeze(0) + invweight0.gather(0, body2.unsqueeze(0)).squeeze(0)
 
-        j = (frame @ diff.T)[0]
+        j = (c.frame @ diff.T)[0]
 
         active = dist < cfg.cfd_width if cfg.cfd else dist < 0
         return j * active, dist * active, t
@@ -428,14 +434,7 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc:
         contact = contact.clone(recurse=False)
         contact.auto_batch_size_()
     contact = contact[:ncon_fl]
-    j, pos, invweight = fn(
-        contact.dist,
-        contact.includemargin,
-        contact.geom1,
-        contact.geom2,
-        contact.pos,
-        contact.frame,
-    )
+    j, pos, invweight = fn(contact)
     solref = contact.solref
     solimp = contact.solimp
     frictionloss = torch.zeros_like(pos)
@@ -448,6 +447,7 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
     )
 
 
@@ -461,36 +461,36 @@ def _instantiate_contact_pyramidal(m: Model, d: Data, condim: int, start_idx: in
     n_edges = (condim - 1) * 2
 
     @torch.vmap
-    def fn(dist, includemargin, geom1, geom2, pos, frame, friction, solref, solimp):
-        dist = dist - includemargin
-        g1 = geom1.long().unsqueeze(0)
-        g2 = geom2.long().unsqueeze(0)
+    def fn(c: Contact):
+        dist = c.dist - c.includemargin
+        g1 = c.geom1.long().unsqueeze(0)
+        g2 = c.geom2.long().unsqueeze(0)
         body1 = m.geom_bodyid_t.gather(0, g1).squeeze(0)
         body2 = m.geom_bodyid_t.gather(0, g2).squeeze(0)
 
-        jacp2, jacr2 = support.jac(m, d, pos, body2)
-        jacp1, jacr1 = support.jac(m, d, pos, body1)
-        diff = frame @ (jacp2 - jacp1).T
+        jacp2, jacr2 = support.jac(m, d, c.pos, body2)
+        jacp1, jacr1 = support.jac(m, d, c.pos, body1)
+        diff = c.frame @ (jacp2 - jacp1).T
         if condim > 3:
-            diff = torch.cat((diff, frame @ (jacr2 - jacr1).T), dim=0)
+            diff = torch.cat((diff, c.frame @ (jacr2 - jacr1).T), dim=0)
 
         invweight0 = m.body_invweight0[:, 0]
         t = invweight0.gather(0, body1.unsqueeze(0)).squeeze(0) + invweight0.gather(0, body2.unsqueeze(0)).squeeze(0)
 
-        fri = friction[: condim - 1].repeat_interleave(2)
+        fri = c.friction[: condim - 1].repeat_interleave(2)
         fri = fri * _PYRAMID_SIGNS[condim].get(fri.dtype, fri.device)
         j = diff[0] + diff[1:condim].repeat_interleave(2, dim=0) * fri.unsqueeze(1)
 
         # MuJoCo C uses mu = friction[0] for all pyramid-edge invweights,
         # regardless of per-direction coefficients (mj_constraint.c).
-        mu = friction[0]
+        mu = c.friction[0]
         invweight = (t + mu * mu * t) * 2 * mu * mu / m.opt.impratio
 
         active = dist < cfg.cfd_width if cfg.cfd else dist < 0
         j = j * active
         pos = dist.unsqueeze(0).expand(n_edges) * active
-        solref = torch.tile(solref, (n_edges, 1))
-        solimp = torch.tile(solimp, (n_edges, 1))
+        solref = torch.tile(c.solref, (n_edges, 1))
+        solimp = torch.tile(c.solimp, (n_edges, 1))
         invweight = invweight.expand(n_edges)
 
         return j, invweight, pos, solref, solimp
@@ -500,17 +500,7 @@ def _instantiate_contact_pyramidal(m: Model, d: Data, condim: int, start_idx: in
         contact = contact.clone(recurse=False)
         contact.auto_batch_size_()
     contact = contact[start_idx : start_idx + count]
-    res = fn(
-        contact.dist,
-        contact.includemargin,
-        contact.geom1,
-        contact.geom2,
-        contact.pos,
-        contact.frame,
-        contact.friction,
-        contact.solref,
-        contact.solimp,
-    )
+    res = fn(contact)
     j, invweight, pos, solref, solimp = torch.utils._pytree.tree_map(lambda x: x.reshape(-1, *x.shape[2:]), res)
     frictionloss = torch.zeros_like(pos)
 
@@ -522,6 +512,7 @@ def _instantiate_contact_pyramidal(m: Model, d: Data, condim: int, start_idx: in
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
     )
 
 
@@ -533,27 +524,27 @@ def _instantiate_contact_elliptic(m: Model, d: Data, condim: int, start_idx: int
     cfg = get_diff_config()
 
     @torch.vmap
-    def fn(dist, includemargin, geom1, geom2, pos, frame, friction, solref, solimp, solreffriction):
-        dist = dist - includemargin
-        g1 = geom1.long().unsqueeze(0)
-        g2 = geom2.long().unsqueeze(0)
+    def fn(c: Contact):
+        dist = c.dist - c.includemargin
+        g1 = c.geom1.long().unsqueeze(0)
+        g2 = c.geom2.long().unsqueeze(0)
         body1 = m.geom_bodyid_t.gather(0, g1).squeeze(0)
         body2 = m.geom_bodyid_t.gather(0, g2).squeeze(0)
 
-        jacp2, jacr2 = support.jac(m, d, pos, body2)
-        jacp1, jacr1 = support.jac(m, d, pos, body1)
-        j = frame @ (jacp2 - jacp1).T
+        jacp2, jacr2 = support.jac(m, d, c.pos, body2)
+        jacp1, jacr1 = support.jac(m, d, c.pos, body1)
+        j = c.frame @ (jacp2 - jacp1).T
         if condim > 3:
-            j = torch.cat((j, (frame @ (jacr2 - jacr1).T)[: condim - 3]), dim=0)
+            j = torch.cat((j, (c.frame @ (jacr2 - jacr1).T)[: condim - 3]), dim=0)
 
         invweight0 = m.body_invweight0[:, 0]
         t = invweight0.gather(0, body1.unsqueeze(0)).squeeze(0) + invweight0.gather(0, body2.unsqueeze(0)).squeeze(0)
 
-        solreffriction = solreffriction + solref * ~solreffriction.any()
+        solreffriction = c.solreffriction + c.solref * ~c.solreffriction.any()
         solreffriction = solreffriction.unsqueeze(0).expand(condim - 1, -1)
-        solref = torch.cat((solref.unsqueeze(0), solreffriction), dim=0)
+        solref = torch.cat((c.solref.unsqueeze(0), solreffriction), dim=0)
 
-        fri = torch.square(friction[0]) / torch.square(friction[1 : condim - 1])
+        fri = torch.square(c.friction[0]) / torch.square(c.friction[1 : condim - 1])
         iw_normal = t.unsqueeze(0)
         iw_friction = (t / m.opt.impratio).unsqueeze(0)
         invweight = torch.cat((iw_normal, iw_friction, iw_friction * fri))
@@ -561,7 +552,7 @@ def _instantiate_contact_elliptic(m: Model, d: Data, condim: int, start_idx: int
         pos_aref = torch.zeros(condim, dtype=dist.dtype, device=dist.device)
         pos_aref = pos_aref.scatter(0, torch.zeros(1, dtype=torch.long, device=dist.device), dist.unsqueeze(0))
 
-        solimp = solimp.unsqueeze(0).expand(condim, -1)
+        solimp = c.solimp.unsqueeze(0).expand(condim, -1)
 
         active = dist < cfg.cfd_width if cfg.cfd else dist < 0
         j = j * active
@@ -574,18 +565,7 @@ def _instantiate_contact_elliptic(m: Model, d: Data, condim: int, start_idx: int
         contact = contact.clone(recurse=False)
         contact.auto_batch_size_()
     contact = contact[start_idx : start_idx + count]
-    res = fn(
-        contact.dist,
-        contact.includemargin,
-        contact.geom1,
-        contact.geom2,
-        contact.pos,
-        contact.frame,
-        contact.friction,
-        contact.solref,
-        contact.solimp,
-        contact.solreffriction,
-    )
+    res = fn(contact)
     j, invweight, pos, pos_norm, solref, solimp = torch.utils._pytree.tree_map(
         lambda x: x.reshape(-1, *x.shape[2:]), res
     )
@@ -599,6 +579,7 @@ def _instantiate_contact_elliptic(m: Model, d: Data, condim: int, start_idx: int
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
+        batch_size=[j.shape[0]],
     )
 
 
@@ -696,7 +677,7 @@ def make_constraint(m: Model, d: Data) -> Data:
         padded_nefc = nefc if torch.compiler.is_compiling() else 0
         return _set_constraint_tensors(padded_nefc)
 
-    efc = _Efc(*(torch.cat([getattr(item, field) for item in efcs]) for field in _Efc._fields))
+    efc = torch.cat(list(efcs))
     refsafe = precomp["refsafe"]
 
     @torch.vmap
