@@ -144,6 +144,7 @@ _DERIVED = mesh.DERIVED.union(
         (types.Model, "cache_id"),
         # Pre-cached tensor versions of numpy model fields
         (types.Model, "body_rootid_t"),
+        (types.Model, "body_dof_chain_t"),
         (types.Model, "dof_bodyid_t"),
         (types.Model, "dof_Madr_t"),
         (types.Model, "dof_tri_row_t"),
@@ -709,6 +710,21 @@ def _model_derived(value: mujoco.MjModel) -> dict[str, Any]:
     # Pre-cached tensor versions of numpy model fields.
     # These are regular tensors on CPU; .to(device) on the Model moves them.
     result["body_rootid_t"] = torch.as_tensor(np.array(value.body_rootid), dtype=torch.long)
+    body_dof_chains = []
+    for body_id in range(value.nbody):
+        dof_chain = []
+        ancestor_id = body_id
+        while ancestor_id > 0:
+            dof_adr = int(value.body_dofadr[ancestor_id])
+            dof_num = int(value.body_dofnum[ancestor_id])
+            dof_chain.extend(range(dof_adr, dof_adr + dof_num))
+            ancestor_id = int(value.body_parentid[ancestor_id])
+        body_dof_chains.append(dof_chain)
+    max_dof_chain = max((len(chain) for chain in body_dof_chains), default=0)
+    body_dof_chain = np.full((value.nbody, max_dof_chain), -1, dtype=np.int64)
+    for body_id, dof_chain in enumerate(body_dof_chains):
+        body_dof_chain[body_id, : len(dof_chain)] = dof_chain
+    result["body_dof_chain_t"] = torch.as_tensor(body_dof_chain)
     result["dof_bodyid_t"] = torch.as_tensor(np.array(value.dof_bodyid), dtype=torch.long)
     result["dof_Madr_t"] = torch.as_tensor(np.array(value.dof_Madr), dtype=torch.long)
     result["dof_tri_row_t"] = torch.as_tensor(result["dof_tri_row"], dtype=torch.long)

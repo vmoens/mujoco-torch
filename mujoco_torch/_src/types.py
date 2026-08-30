@@ -875,6 +875,7 @@ class Model(MjTensorClass):
     cache_id: int
     # Pre-cached tensor versions of numpy model fields (auto-moved by .to())
     body_rootid_t: torch.Tensor
+    body_dof_chain_t: torch.Tensor
     dof_bodyid_t: torch.Tensor
     dof_Madr_t: torch.Tensor
     dof_tri_row_t: torch.Tensor
