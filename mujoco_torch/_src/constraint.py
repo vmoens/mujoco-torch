@@ -14,6 +14,8 @@
 # ==============================================================================
 """Core non-smooth constraint functions."""
 
+from typing import NamedTuple
+
 import mujoco
 
 # pylint: enable=g-importing-member
@@ -50,11 +52,10 @@ def _vmap_index(tensor: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
 # pylint: disable=g-importing-member
 from torch.utils._pytree import tree_map
 
-from mujoco_torch._src.dataclasses import MjTensorClass
 from mujoco_torch._src.types import ConeType, Contact, Data, Model
 
 
-class _Efc(MjTensorClass):
+class _Efc(NamedTuple):
     """Support data for creating constraint matrices."""
 
     J: torch.Tensor
@@ -152,7 +153,6 @@ def _instantiate_equality_connect(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
-        batch_size=[j.shape[0]],
     )
 
 
@@ -208,7 +208,6 @@ def _instantiate_equality_weld(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
-        batch_size=[j.shape[0]],
     )
 
 
@@ -247,7 +246,6 @@ def _instantiate_friction(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
-        batch_size=[size],
     )
 
 
@@ -295,7 +293,6 @@ def _instantiate_equality_joint(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
-        batch_size=[j.shape[0]],
     )
 
 
@@ -331,7 +328,6 @@ def _instantiate_limit_ball(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
-        batch_size=[j.shape[0]],
     )
 
 
@@ -368,7 +364,6 @@ def _instantiate_limit_slide_hinge(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
-        batch_size=[j.shape[0]],
     )
 
 
@@ -401,7 +396,6 @@ def _instantiate_limit_tendon(m: Model, d: Data, precomp: dict) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
-        batch_size=[j.shape[0]],
     )
 
 
@@ -447,7 +441,6 @@ def _instantiate_contact_frictionless(m: Model, d: Data) -> _Efc:
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
-        batch_size=[j.shape[0]],
     )
 
 
@@ -512,7 +505,6 @@ def _instantiate_contact_pyramidal(m: Model, d: Data, condim: int, start_idx: in
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
-        batch_size=[j.shape[0]],
     )
 
 
@@ -579,7 +571,6 @@ def _instantiate_contact_elliptic(m: Model, d: Data, condim: int, start_idx: int
         solref=solref,
         solimp=solimp,
         frictionloss=frictionloss,
-        batch_size=[j.shape[0]],
     )
 
 
@@ -677,7 +668,7 @@ def make_constraint(m: Model, d: Data) -> Data:
         padded_nefc = nefc if torch.compiler.is_compiling() else 0
         return _set_constraint_tensors(padded_nefc)
 
-    efc = torch.cat(list(efcs))
+    efc = _Efc(*(torch.cat([getattr(item, field) for item in efcs]) for field in _Efc._fields))
     refsafe = precomp["refsafe"]
 
     @torch.vmap
