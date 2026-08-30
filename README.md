@@ -107,8 +107,7 @@ dx = mujoco_torch.step(mx, dx)
 
 # Batched simulation with vmap
 batch_size = 4096
-envs = [mujoco_torch.device_put(mujoco.MjData(m_mj)).to("cuda")
-        for _ in range(batch_size)]
+envs = [mujoco_torch.device_put(mujoco.MjData(m_mj)).to("cuda") for _ in range(batch_size)]
 d_batch = torch.stack(envs)
 vmap_step = torch.vmap(lambda d: mujoco_torch.step(mx, d))
 d_batch = vmap_step(d_batch)
