@@ -46,7 +46,7 @@ addopts = "-m 'not integration'"
 
 [tool.ruff]
 line-length = 120
-exclude = ["output_code_*.py"]
+exclude = ["*.md", "output_code_*.py"]
 
 [tool.ruff.lint]
 select = [
