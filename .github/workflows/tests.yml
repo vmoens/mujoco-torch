@@ -24,7 +24,7 @@ jobs:
         shell: bash
         run: |
           pr_matrix='{"include":[{"mujoco-version":"3.3"},{"mujoco-version":"current"}]}'
-          full_matrix='{"include":[{"mujoco-version":"3.3"},{"mujoco-version":"3.4"},{"mujoco-version":"3.5"},{"mujoco-version":"3.6"},{"mujoco-version":"3.7"},{"mujoco-version":"3.8"},{"mujoco-version":"3.9"},{"mujoco-version":"3.10"},{"mujoco-version":"current"}]}'
+          full_matrix='{"include":[{"mujoco-version":"3.3"},{"mujoco-version":"3.4"},{"mujoco-version":"3.5"},{"mujoco-version":"3.6"},{"mujoco-version":"3.7"},{"mujoco-version":"3.8"},{"mujoco-version":"3.9"},{"mujoco-version":"3.10"},{"mujoco-version":"3.11"},{"mujoco-version":"3.12"},{"mujoco-version":"current"}]}'
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             echo "matrix=${pr_matrix}" >> "${GITHUB_OUTPUT}"

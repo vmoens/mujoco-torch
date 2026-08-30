@@ -31,7 +31,7 @@ pip install -e .
 
 - Python >= 3.10
 - PyTorch (see [compatibility notes](#pytorch--tensordict-compatibility) below)
-- MuJoCo >= 3.0
+- MuJoCo >= 3.3, including the latest release (no upper version pin)
 - tensordict — **must be built from source or use nightlies from 2026-03-16 or
   later** (the latest stable release will not work; see
   [compatibility notes](#pytorch--tensordict-compatibility) below)
