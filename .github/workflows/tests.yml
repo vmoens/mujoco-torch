@@ -69,6 +69,7 @@ jobs:
         run: |
           if [[ "${REF_NAME}" == release/* || "${BASE_REF}" == release/* || "${HEAD_REF}" == release/* ]]; then
             echo "Using stable TensorDict and TorchRL from PyPI for release branch"
+            pip install --upgrade "tensordict>=0.14.0" "torchrl>=0.14.0"
           else
             echo "Installing TensorDict and TorchRL from GitHub main"
             pip install --upgrade \
