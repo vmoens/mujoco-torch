@@ -24,7 +24,7 @@ jobs:
         shell: bash
         run: |
           pr_matrix='{"include":[{"mujoco-version":"3.3"},{"mujoco-version":"current"}]}'
-          full_matrix='{"include":[{"mujoco-version":"3.3"},{"mujoco-version":"3.4"},{"mujoco-version":"3.5"},{"mujoco-version":"3.6"},{"mujoco-version":"3.7"},{"mujoco-version":"3.8"},{"mujoco-version":"3.9"},{"mujoco-version":"3.10"},{"mujoco-version":"current"}]}'
+          full_matrix='{"include":[{"mujoco-version":"3.3"},{"mujoco-version":"3.4"},{"mujoco-version":"3.5"},{"mujoco-version":"3.6"},{"mujoco-version":"3.7"},{"mujoco-version":"3.8"},{"mujoco-version":"3.9"},{"mujoco-version":"3.10"},{"mujoco-version":"3.11"},{"mujoco-version":"3.12"},{"mujoco-version":"current"}]}'
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             echo "matrix=${pr_matrix}" >> "${GITHUB_OUTPUT}"
@@ -60,7 +60,7 @@ jobs:
           else
             pip install "jax[cpu]" "mujoco==${MUJOCO_VERSION}.*" "mujoco-mjx==${MUJOCO_VERSION}.*"
           fi
-      - name: Install TensorDict
+      - name: Install PyTorch ecosystem dependencies
         env:
           BASE_REF: ${{ github.base_ref }}
           HEAD_REF: ${{ github.head_ref }}
@@ -68,11 +68,13 @@ jobs:
         shell: bash
         run: |
           if [[ "${REF_NAME}" == release/* || "${BASE_REF}" == release/* || "${HEAD_REF}" == release/* ]]; then
-            echo "Installing latest stable TensorDict from PyPI for release branch"
-            pip install --upgrade tensordict
+            echo "Using stable TensorDict and TorchRL from PyPI for release branch"
+            pip install --upgrade "tensordict>=0.14.0" "torchrl>=0.14.0"
           else
-            echo "Installing TensorDict from GitHub main"
-            pip install --upgrade "tensordict @ git+https://github.com/pytorch/tensordict.git@main"
+            echo "Installing TensorDict and TorchRL from GitHub main"
+            pip install --upgrade \
+              "tensordict @ git+https://github.com/pytorch/tensordict.git@main" \
+              "torchrl @ git+https://github.com/pytorch/rl.git@main"
           fi
       - name: Install mujoco-torch with test deps
         run: pip install -e ".[test,zoo]"
@@ -83,9 +85,11 @@ jobs:
           import mujoco
           import torch
           import tensordict
+          import torchrl
 
           print(f"torch: {torch.__version__}")
           print(f"tensordict: {tensordict.__version__}")
+          print(f"torchrl: {torchrl.__version__}")
           print(f"mujoco: {mujoco.__version__}")
           print(f"mujoco-mjx: {metadata.version('mujoco-mjx')}")
           PY

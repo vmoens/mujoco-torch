@@ -9,7 +9,7 @@ On GPU, wrap the vmap step with ``torch.compile`` for further speedups --
 see ``examples/batched_comparison.py``.
 
 Run:
-    pip install torchrl
+    pip install -e ".[zoo]"
     python examples/torchrl_example.py
     python examples/torchrl_example.py --model cheetah
 """

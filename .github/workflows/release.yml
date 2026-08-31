@@ -204,12 +204,22 @@ jobs:
 
       - name: Install wheel and test deps
         run: |
+          pip install --upgrade "tensordict>=0.14.0" "torchrl>=0.14.0"
           pip install dist/*.whl
-          pip install git+https://github.com/pytorch/tensordict.git
           pip install pytest
 
       - name: Smoke test import
-        run: python -c "import mujoco_torch; print('mujoco-torch imported successfully')"
+        run: |
+          python - <<'PY'
+          import tensordict
+          import torchrl
+
+          import mujoco_torch
+
+          print(f"tensordict: {tensordict.__version__}")
+          print(f"torchrl: {torchrl.__version__}")
+          print("mujoco-torch imported successfully")
+          PY
 
   # =============================================================================
   # CREATE GITHUB RELEASE

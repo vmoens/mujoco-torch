@@ -19,6 +19,7 @@ from typing import NamedTuple
 import mujoco
 import torch
 from torch._higher_order_ops.while_loop import while_loop as _torch_while_loop
+from torch._higher_order_ops.while_loop import while_loop_op as _torch_while_loop_op
 
 
 def _inside_functorch() -> bool:
@@ -41,7 +42,7 @@ def while_loop(cond_fn, body_fn, carried_inputs, max_iter=None):
       carried_inputs: initial carry (tuple of tensors / NamedTuples).
       max_iter: unused, kept for backward compatibility.
     """
-    if torch.compiler.is_compiling() or _inside_functorch():
+    if _inside_functorch():
         orig_body_fn = body_fn
 
         def cloning_body(*args):
@@ -51,7 +52,22 @@ def while_loop(cond_fn, body_fn, carried_inputs, max_iter=None):
                 result,
             )
 
-        return _torch_while_loop(cond_fn, cloning_body, carried_inputs)
+        flat_inputs, carried_spec = torch.utils._pytree.tree_flatten(carried_inputs)
+
+        def flat_cond_fn(*flat_args):
+            carried = torch.utils._pytree.tree_unflatten(list(flat_args), carried_spec)
+            return cond_fn(*carried)
+
+        def flat_body_fn(*flat_args):
+            carried = torch.utils._pytree.tree_unflatten(list(flat_args), carried_spec)
+            result = cloning_body(*carried)
+            return tuple(torch.utils._pytree.tree_leaves(result))
+
+        flat_result = _torch_while_loop_op(flat_cond_fn, flat_body_fn, tuple(flat_inputs), tuple())
+        return torch.utils._pytree.tree_unflatten(list(flat_result), carried_spec)
+
+    if torch.compiler.is_compiling():
+        return _torch_while_loop(cond_fn, body_fn, carried_inputs)
 
     val = carried_inputs
     while cond_fn(*val):

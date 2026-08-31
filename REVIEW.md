@@ -94,7 +94,7 @@ Both `bench_phase1.py` and `bench_phase2.py` have identical `clear_compile_cache
 **8. `getattr` with fallback in bench scripts**
 
 ```python
-getattr(torch._inductor.config, "cache_dir", None),
+(getattr(torch._inductor.config, "cache_dir", None),)
 ```
 
 and:
@@ -132,6 +132,7 @@ The diff adds a `_groups_to_device` helper function at the top of `sensor.py` bu
 
 ```python
 from etils import epath
+
 xml = (epath.resource_path("mujoco_torch") / "test_data" / f"{MODEL}.xml").read_text()
 ```
 
