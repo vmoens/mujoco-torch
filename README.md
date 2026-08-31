@@ -70,8 +70,8 @@ The patches cover:
 
 <!-- UPSTREAM_PR_TRACKER_START -->
 - [ ] [#175526 — `while_loop` vmap batching rule](https://github.com/pytorch/pytorch/pull/175526) -- required for `torch.vmap` over the simulation loop
-- [ ] [#175525 — vmap compatibility with non-tensor leaves](https://github.com/pytorch/pytorch/pull/175525) -- closed without merging; allows vmap to handle non-tensor outputs gracefully
-- [ ] [#175852 — vmap extension points for custom container types](https://github.com/pytorch/pytorch/pull/175852) -- closed without merging; enables `UnbatchedTensor` to participate in vmap
+- [x] [#175525 — vmap compatibility with non-tensor leaves](https://github.com/pytorch/pytorch/pull/175525) -- closed without merging; allows vmap to handle non-tensor outputs gracefully
+- [x] [#175852 — vmap extension points for custom container types](https://github.com/pytorch/pytorch/pull/175852) -- closed without merging; enables `UnbatchedTensor` to participate in vmap
 - [x] [#176977 — MetaConverter storage memo for wrapper subclasses](https://github.com/pytorch/pytorch/pull/176977) -- fixes a cross-device error under `torch.compile` for `_make_wrapper_subclass` tensors
 <!-- UPSTREAM_PR_TRACKER_END -->
 
