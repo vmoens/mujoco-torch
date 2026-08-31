@@ -14,7 +14,7 @@ dependencies = [
     "mujoco>=3.3",
     "numpy",
     "pyvers>=0.2.2",
-    "tensordict>=0.11",
+    "tensordict>=0.14.0",
     "absl-py",
     "etils",
     "scipy",
@@ -22,12 +22,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-zoo = ["torchrl>=0.6"]
+zoo = ["torchrl>=0.14.0"]
 test = ["pytest", "pytest-benchmark"]
 benchmark = ["pytest", "pytest-benchmark", "pytest-xdist"]
 
 [dependency-groups]
 dev = ["ruff"]
+
+[tool.uv.sources]
+tensordict = { git = "https://github.com/pytorch/tensordict.git", branch = "main" }
+torchrl = { git = "https://github.com/pytorch/rl.git", branch = "main" }
 
 [project.urls]
 Homepage = "https://github.com/vmoens/mujoco-torch"

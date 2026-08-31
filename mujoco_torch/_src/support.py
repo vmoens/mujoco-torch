@@ -19,7 +19,7 @@ import numpy as np
 import torch
 from torch._C._functorch import _add_batch_dim, _remove_batch_dim, is_batchedtensor, maybe_get_level
 
-from mujoco_torch._src import math, scan
+from mujoco_torch._src import math
 
 # pylint: disable=g-importing-member
 from mujoco_torch._src.types import Data, JacobianType, Model
@@ -137,11 +137,9 @@ def vmap_compatible_index_select(tensor, dim, index):
 
 def jac(m: Model, d: Data, point: torch.Tensor, body_id: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute pair of (NV, 3) Jacobians of global point attached to body."""
-    fn = lambda carry, b: b if carry is None else b + carry
-    device = point.device if isinstance(point, torch.Tensor) else None
-    mask = (torch.arange(m.nbody, device=device) == body_id) * 1
-    mask = scan.body_tree(m, fn, "b", "b", mask, reverse=True)
-    mask = mask[m.dof_bodyid_t] > 0
+    dof_chain = vmap_compatible_index_select(m.body_dof_chain_t, dim=0, index=body_id)
+    dof_ids = torch.arange(m.dof_bodyid_t.shape[0], device=point.device).unsqueeze(-1)
+    mask = (dof_ids == dof_chain).any(-1)
 
     index = vmap_compatible_index_select(m.body_rootid_t, dim=0, index=body_id).long()
 

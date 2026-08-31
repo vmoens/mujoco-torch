@@ -30,32 +30,31 @@ pip install -e .
 ### Requirements
 
 - Python >= 3.10
-- PyTorch (see [compatibility notes](#pytorch--tensordict-compatibility) below)
-- MuJoCo >= 3.0
-- tensordict — **must be built from source or use nightlies from 2026-03-16 or
-  later** (the latest stable release will not work; see
-  [compatibility notes](#pytorch--tensordict-compatibility) below)
+- PyTorch (see [compatibility notes](#pytorch-tensordict--torchrl-compatibility) below)
+- MuJoCo >= 3.3, including the latest release (no upper version pin)
+- TensorDict >= 0.14.0
+- TorchRL >= 0.14.0 for the optional environment zoo
 
-### PyTorch & tensordict compatibility
+### PyTorch, TensorDict & TorchRL compatibility
 
-mujoco-torch is tested against **PyTorch nightly** and **tensordict main**.
-All modes -- eager, `torch.vmap`, and `torch.compile(fullgraph=True)` -- work
-out of the box with these versions.
+mujoco-torch development and CI track **TensorDict main** and **TorchRL main**
+together. Released installations require the 0.14 generation or newer. All
+modes -- eager, `torch.vmap`, and `torch.compile(fullgraph=True)` -- are tested
+with this aligned dependency set.
 
-> **Important:** The latest stable release of tensordict does **not** include the
-> `UnbatchedTensor` wrapper-subclass support that mujoco-torch requires.  You
-> must either install from source or use a **nightly build dated 2026-03-16 or
-> later**.
+Install the released packages with:
 
 ```bash
-# PyTorch nightly (CUDA 13.0 example; adjust the index URL for your CUDA version)
-pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu130
+pip install --upgrade "tensordict>=0.14.0" "torchrl>=0.14.0" "mujoco-torch[zoo]"
+```
 
-# Option 1: tensordict from source
-pip install git+https://github.com/pytorch/tensordict.git
+To reproduce the rolling development configuration, install TensorDict and
+TorchRL from their main branches as a pair:
 
-# Option 2: tensordict nightly (>= 2026-03-16)
-pip install --pre tensordict --index-url https://download.pytorch.org/whl/nightly/cpu
+```bash
+pip install --upgrade \
+  "tensordict @ git+https://github.com/pytorch/tensordict.git@main" \
+  "torchrl @ git+https://github.com/pytorch/rl.git@main"
 ```
 
 #### Monkey patches for upstream PyTorch PRs
@@ -71,8 +70,8 @@ The patches cover:
 
 <!-- UPSTREAM_PR_TRACKER_START -->
 - [ ] [#175526 — `while_loop` vmap batching rule](https://github.com/pytorch/pytorch/pull/175526) -- required for `torch.vmap` over the simulation loop
-- [x] [#175525 — vmap compatibility with non-tensor leaves](https://github.com/pytorch/pytorch/pull/175525) -- allows vmap to handle non-tensor outputs gracefully
-- [x] [#175852 — vmap extension points for custom container types](https://github.com/pytorch/pytorch/pull/175852) -- enables `UnbatchedTensor` to participate in vmap
+- [ ] [#175525 — vmap compatibility with non-tensor leaves](https://github.com/pytorch/pytorch/pull/175525) -- closed without merging; allows vmap to handle non-tensor outputs gracefully
+- [ ] [#175852 — vmap extension points for custom container types](https://github.com/pytorch/pytorch/pull/175852) -- closed without merging; enables `UnbatchedTensor` to participate in vmap
 - [x] [#176977 — MetaConverter storage memo for wrapper subclasses](https://github.com/pytorch/pytorch/pull/176977) -- fixes a cross-device error under `torch.compile` for `_make_wrapper_subclass` tensors
 <!-- UPSTREAM_PR_TRACKER_END -->
 
@@ -107,8 +106,7 @@ dx = mujoco_torch.step(mx, dx)
 
 # Batched simulation with vmap
 batch_size = 4096
-envs = [mujoco_torch.device_put(mujoco.MjData(m_mj)).to("cuda")
-        for _ in range(batch_size)]
+envs = [mujoco_torch.device_put(mujoco.MjData(m_mj)).to("cuda") for _ in range(batch_size)]
 d_batch = torch.stack(envs)
 vmap_step = torch.vmap(lambda d: mujoco_torch.step(mx, d))
 d_batch = vmap_step(d_batch)
