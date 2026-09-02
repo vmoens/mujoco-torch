@@ -21,7 +21,7 @@ from mujoco_torch._src import math, scan, support
 from mujoco_torch._src.math import _CachedConst
 
 # pylint: disable=g-importing-member
-from mujoco_torch._src.types import CamLightType, Data, DisableBit, JointType, Model, TrnType
+from mujoco_torch._src.types import CamLightType, Data, DisableBit, JointType, Model, TrnType, unbatched_payload
 
 # pylint: enable=g-importing-member
 
@@ -479,19 +479,19 @@ def tendon(m: Model, d: Data) -> Data:
         )
         return d
 
-    moment_jnt = m.tendon_moment_jnt.data.to(dtype=d.qpos.dtype)
-    qpos_vals = d.qpos[m.tendon_qposadr_jnt.data]
+    moment_jnt = unbatched_payload(m.tendon_moment_jnt).to(dtype=d.qpos.dtype)
+    qpos_vals = d.qpos[unbatched_payload(m.tendon_qposadr_jnt)]
 
     # tendon length = sum of (coefficient * joint position) per tendon
     ntendon_jnt = m.tendon_ntendon_jnt
     ten_length = torch.zeros(m.ntendon, dtype=d.qpos.dtype, device=d.qpos.device)
     ten_length_jnt = torch.zeros(ntendon_jnt, dtype=d.qpos.dtype, device=d.qpos.device)
-    ten_length_jnt = ten_length_jnt.index_add(0, m.tendon_segment_ids.data, moment_jnt * qpos_vals)
-    ten_length[m.tendon_tendon_id_jnt.data] = ten_length_jnt
+    ten_length_jnt = ten_length_jnt.index_add(0, unbatched_payload(m.tendon_segment_ids), moment_jnt * qpos_vals)
+    ten_length[unbatched_payload(m.tendon_tendon_id_jnt)] = ten_length_jnt
 
     # tendon Jacobian: ten_J[tendon_id, dof_adr] = wrap_prm (coefficient)
     ten_J = torch.zeros((m.ntendon, m.nv), dtype=d.qpos.dtype, device=d.qpos.device)
-    ten_J[m.tendon_adr_moment_jnt.data, m.tendon_dofadr_moment_jnt.data] = moment_jnt
+    ten_J[unbatched_payload(m.tendon_adr_moment_jnt), unbatched_payload(m.tendon_dofadr_moment_jnt)] = moment_jnt
 
     d.update_(ten_length=ten_length, ten_J=ten_J)
     return d

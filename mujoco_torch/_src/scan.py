@@ -24,7 +24,7 @@ from tensordict import UnbatchedTensor
 from torch.utils._pytree import tree_map
 
 from mujoco_torch._src.math import concatenate
-from mujoco_torch._src.types import JointType, Model, TrnType
+from mujoco_torch._src.types import JointType, Model, TrnType, unbatched_payload
 
 Y = TypeVar("Y")
 
@@ -362,8 +362,7 @@ def _to_safe(val):
 
 def _validate_and_convert_subset(subset):
     """Validate that a per-group subset has identical rows, then convert."""
-    if isinstance(subset, UnbatchedTensor):
-        subset = subset.data
+    subset = unbatched_payload(subset)
     if getattr(subset, "ndim", 0) == 0:
         return _to_safe(subset)
     if isinstance(subset, torch.Tensor):
@@ -520,7 +519,7 @@ def _check_input(m: Model, args: Any, in_types: str) -> None:
         "c": m.ncam,
     }
     for idx, (arg, typ) in enumerate(zip(args, in_types)):
-        arg_len = len(arg.data) if isinstance(arg, UnbatchedTensor) else len(arg)
+        arg_len = len(unbatched_payload(arg))
         if arg_len != size[typ]:
             raise IndexError(
                 f'f argument "{idx}" with type "{typ}" has length "{arg_len}"'

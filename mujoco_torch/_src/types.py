@@ -26,6 +26,21 @@ from tensordict import UnbatchedTensor
 from mujoco_torch._src.dataclasses import MjTensorClass  # pylint: disable=g-importing-member
 
 
+def unbatched_payload(x):
+    """Return the plain tensor behind an ``UnbatchedTensor`` (or ``x`` unchanged).
+
+    Model-constant index/type fields are stored as ``UnbatchedTensor`` so that
+    batching operations on ``Model``/``Data`` leave them alone.  Every torch op
+    on such a field returns an ``UnbatchedTensor`` again, including ``.data``,
+    ``torch.tensor(...)`` copies and comparisons (with the wrapper-subclass
+    implementation tensordict selects on torch >= 2.14), so arithmetic that must
+    produce per-environment data has to start from the payload tensor.
+    """
+    if isinstance(x, UnbatchedTensor):
+        return x._base_tensor()
+    return x
+
+
 def _enum_member(enum_type, member_name: str) -> int:
     return int(getattr(enum_type, member_name))
 

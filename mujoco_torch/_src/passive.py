@@ -23,7 +23,7 @@ _EPS12 = _CachedConst(1e-12)
 from mujoco_torch._src import math, scan, support
 
 # pylint: disable=g-importing-member
-from mujoco_torch._src.types import Data, DisableBit, JointType, Model
+from mujoco_torch._src.types import Data, DisableBit, JointType, Model, unbatched_payload
 
 # pylint: enable=g-importing-member
 
@@ -138,7 +138,9 @@ def _spring_damper(m: Model, d: Data) -> torch.Tensor:
         ten_J = d.ten_J
         if ten_J.ndim == 1:
             ten_J_dense = torch.zeros((m.ntendon, m.nv), dtype=ten_J.dtype, device=ten_J.device)
-            ten_J_dense[m.tendon_adr_moment_jnt.data, m.tendon_dofadr_moment_jnt.data] = ten_J
+            ten_J_dense[unbatched_payload(m.tendon_adr_moment_jnt), unbatched_payload(m.tendon_dofadr_moment_jnt)] = (
+                ten_J
+            )
             ten_J = ten_J_dense
         qfrc = qfrc + ten_J.T @ (frc_spring + frc_damper)
 
