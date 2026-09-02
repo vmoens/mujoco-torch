@@ -89,7 +89,7 @@ def small_cholesky(A: torch.Tensor) -> torch.Tensor:
 
     Under torch.compile, loops are unrolled at trace time for the known
     matrix size, producing fusible pointwise ops instead of cuSOLVER dispatch.
-    Falls back to torch.linalg.cholesky for matrices larger than
+    Falls back to torch.linalg.cholesky_ex for matrices larger than
     ``_INLINE_CHOLESKY_MAX_SIZE`` where cuSOLVER is more efficient.
 
     The inline path clamps each diagonal pivot to ``1e-12``, making it robust
@@ -110,7 +110,13 @@ def small_cholesky(A: torch.Tensor) -> torch.Tensor:
         # degenerate physics states.  Fully torch.compile friendly (no control
         # flow, no error handling).
         A = A + 1e-10 * torch.eye(n, dtype=A.dtype, device=A.device)
-        return torch.linalg.cholesky(A)
+        # ``cholesky_ex`` skips ``torch.linalg.cholesky``'s error check
+        # (``aten._linalg_check_errors``).  That check is a side-effectful op:
+        # it forces a device sync in eager mode and, under ``vmap`` inside
+        # ``torch.compile``, its effect token cannot be threaded through the
+        # batched graph, which aborts AOTAutograd.  Failures surface as NaNs
+        # in the factor instead, matching MJX and the inline path above.
+        return torch.linalg.cholesky_ex(A).L
 
     L = [[torch.zeros_like(A[0, 0]) for _ in range(n)] for _ in range(n)]
 

@@ -20,10 +20,6 @@ _PATCHES = [
         "PR #175526 (while_loop vmap batching rule)",
     ),
     (
-        "mujoco_torch.patches._pr175525_175852_vmap",
-        "PR #175525 + #175852 (vmap non-tensor leaves / extension points)",
-    ),
-    (
         "mujoco_torch.patches._pr176977_meta_converter",
         "PR #176977 (MetaConverter storage memo for wrapper subclasses)",
     ),

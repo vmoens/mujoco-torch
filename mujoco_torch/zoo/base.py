@@ -47,7 +47,10 @@ class MujocoTorchEnv(EnvBase):
             the class-level ``FRAME_SKIP`` (1 for the base, higher for
             subclasses).
         compile_kwargs: extra keyword arguments forwarded to ``torch.compile``
-            when ``compile_step`` is enabled.
+            when ``compile_step`` is enabled.  ``fullgraph=True`` is used
+            unless overridden, so that any graph break raises at compile time
+            instead of silently splitting the step into eagerly-glued
+            fragments.
         from_pixels: if ``True``, include rendered pixel observations.
         pixel_only: if ``True``, drop state observations and return only pixels.
             Requires ``from_pixels=True``.
@@ -136,7 +139,7 @@ class MujocoTorchEnv(EnvBase):
 
         _step_fn = lambda d: mujoco_torch.step(self.mx, d)  # noqa: E731
         frame_skip = self.FRAME_SKIP
-        compile_kwargs = compile_kwargs or {}
+        compile_kwargs = {"fullgraph": True, **(compile_kwargs or {})}
         _vmap_step = torch.vmap(_step_fn)
         if num_envs == 1:
 

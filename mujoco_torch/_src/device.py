@@ -1175,10 +1175,10 @@ def device_get_into(result, value):
     else:
         if isinstance(result, mujoco.MjData):
             # nefc/ncon are wrapped as UnbatchedTensor (TensorClass) to
-            # preserve broadcast semantics under vmap; unwrap via .data to
-            # reach the underlying 0-d tensor before calling int().
-            ncon_v = value.ncon.data if isinstance(value.ncon, UnbatchedTensor) else value.ncon
-            nefc_v = value.nefc.data if isinstance(value.nefc, UnbatchedTensor) else value.nefc
+            # preserve broadcast semantics under vmap; unwrap to the
+            # underlying 0-d tensor before calling int().
+            ncon_v = types.unbatched_payload(value.ncon)
+            nefc_v = types.unbatched_payload(value.nefc)
             mujoco._functions._realloc_con_efc(  # pylint: disable=protected-access
                 result, ncon=int(ncon_v), nefc=int(nefc_v)
             )
@@ -1198,8 +1198,7 @@ def device_get_into(result, value):
                 device_get_into(getattr(result, result_name), field_value)
                 continue
 
-            if isinstance(field_value, UnbatchedTensor):
-                field_value = field_value.data
+            field_value = types.unbatched_payload(field_value)
 
             # Convert torch tensors to numpy for MuJoCo compatibility
             if isinstance(field_value, torch.Tensor):
