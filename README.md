@@ -248,6 +248,17 @@ measured with `torch.cuda.synchronize()` / `jax.block_until_ready()` bracketing.
 Steps/s = `batch_size × nsteps / elapsed_time`.  Measured on a single NVIDIA
 H200, dtype=float64.
 
+For a device-agnostic comparison (CPU laptop or CUDA) of compiled mujoco-torch
+against MJX and MuJoCo C, including memory and compile time, use
+`examples/bench_backends.py` (results for a MacBook are recorded in
+[PERFORMANCE.md](PERFORMANCE.md)):
+
+```bash
+python examples/bench_backends.py --env humanoid --backend torch mjx eager mujoco_c \
+    --mode default tuned --batch_sizes 16 128 1024 --device cuda --out bench.jsonl
+python examples/bench_backends.py --table bench.jsonl
+```
+
 To reproduce a single (env, mode, backend) run:
 
 ```bash
