@@ -73,19 +73,19 @@ JAX 0.11.1 / mujoco-mjx 3.12 on the XLA CPU backend.  The model is the MicroDuck
 between passes, MJX up to ~1.7× (XLA's thread pool on the hybrid cores), so
 differences under ~15 % are noise.
 
-| Configuration | B=16 | B=128 | B=1 024 |
-|---|--:|--:|--:|
-| MuJoCo C (sequential, B=1) | 91 836 | | |
-| mujoco-torch vmap (eager) | 267 | 773 | 1 394 |
-| mujoco-torch compile | 880 | 4 488 | 11 187 |
-| mujoco-torch compile (max-autotune-no-cudagraphs) | 1 072 | 4 593 | 11 778 |
-| mujoco-torch compile (tuned) | 963 | 4 510 | 11 687 |
-| MJX (JAX jit+vmap) | 3 125 | 6 155 | 8 610 |
+| Configuration | B=1 | B=16 | B=128 | B=1 024 |
+|---|--:|--:|--:|--:|
+| MuJoCo C (sequential) | 91 836 | | | |
+| mujoco-torch vmap (eager) | | 267 | 773 | 1 394 |
+| mujoco-torch compile | | 880 | 4 488 | 11 187 |
+| mujoco-torch compile (max-autotune-no-cudagraphs) | | 1 072 | 4 593 | 11 778 |
+| mujoco-torch compile (tuned) | | 963 | 4 510 | 11 687 |
+| MJX (JAX jit+vmap) | | 3 125 | 6 155 | 8 610 |
 
-Peak process RSS in MB (includes compile): eager 927 / 1 179 / 1 707; compiled
-~1 515 / ~1 820 / ~2 220 for every Inductor mode; MJX 1 500 / 2 102 / 2 480.
-First-call compile: 57–72 s for every torch mode and batch size (each batch
-size is a new compile); MJX 1–4 s.
+The original run collected RSS in a shared process, so those memory figures are
+omitted.  The benchmark now isolates each configuration in a fresh subprocess.
+First-call compile was 57–72 s for every torch mode and batch size (each batch
+size is a new compile); MJX was 1–4 s.
 
 Reading: compile gives 4–11× over eager on CPU.  MJX leads by 3.5× at B=16 and
 1.4× at B=128; the compiled torch step overtakes it around B=1 024.  Profiling
