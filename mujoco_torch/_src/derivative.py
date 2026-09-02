@@ -16,7 +16,7 @@
 
 import torch
 
-from mujoco_torch._src.types import BiasType, Data, DisableBit, DynType, GainType, Model
+from mujoco_torch._src.types import BiasType, Data, DisableBit, DynType, GainType, Model, unbatched_payload
 
 
 def deriv_smooth_vel(m: Model, d: Data) -> torch.Tensor | None:
@@ -27,24 +27,12 @@ def deriv_smooth_vel(m: Model, d: Data) -> torch.Tensor | None:
     if not (m.opt.disableflags & DisableBit.ACTUATION):
         device = m.actuator_biasprm.device
         dtype = m.actuator_biasprm.dtype
-        affine_bias = torch.tensor(
-            m.actuator_biastype == BiasType.AFFINE,
-            device=device,
-            dtype=dtype,
-        )
+        affine_bias = (unbatched_payload(m.actuator_biastype) == BiasType.AFFINE).to(device=device, dtype=dtype)
         bias_vel = m.actuator_biasprm[:, 2] * affine_bias
-        affine_gain = torch.tensor(
-            m.actuator_gaintype == GainType.AFFINE,
-            device=device,
-            dtype=dtype,
-        )
+        affine_gain = (unbatched_payload(m.actuator_gaintype) == GainType.AFFINE).to(device=device, dtype=dtype)
         gain_vel = m.actuator_gainprm[:, 2] * affine_gain
         ctrl = d.ctrl.clone()
-        dyn_mask = torch.tensor(
-            m.actuator_dyntype != DynType.NONE,
-            device=d.ctrl.device,
-            dtype=torch.bool,
-        )
+        dyn_mask = (unbatched_payload(m.actuator_dyntype) != DynType.NONE).to(device=d.ctrl.device, dtype=torch.bool)
         ctrl = torch.where(dyn_mask, d.act, ctrl)
         vel = bias_vel + gain_vel * ctrl
         actuator_moment = d.actuator_moment
