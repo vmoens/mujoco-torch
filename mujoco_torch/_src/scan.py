@@ -313,6 +313,17 @@ def _q_jointid(m: Model) -> np.ndarray:
     return np.concatenate(q_jointid)
 
 
+def _py_key(key) -> tuple:
+    """Convert a grouping key of numpy scalars into a tuple of Python scalars.
+
+    Grouping keys are used as dict keys at runtime inside ``flat`` and
+    ``body_tree``.  Dynamo cannot hash numpy scalars (it treats them as 0-d
+    ndarrays), so the keys must be plain Python ``int``/``bool`` values for
+    ``torch.compile(fullgraph=True)`` to trace the dict lookups.
+    """
+    return tuple(k.item() if isinstance(k, np.generic) else k for k in key)
+
+
 def _index(haystack, needle):
     """Returns indexes in haystack for elements in needle."""
     idx = np.argsort(haystack)
@@ -545,7 +556,7 @@ def _build_flat_cache(m, in_types, out_types, group_by):
 
     def key_j(type_ids):
         if any(t in "jqv" for t in in_types + out_types):
-            return tuple(jnt_type_np[type_ids["j"]])
+            return _py_key(jnt_type_np[type_ids["j"]])
         return ()
 
     def type_ids_j(m, i):
@@ -558,13 +569,15 @@ def _build_flat_cache(m, in_types, out_types, group_by):
 
     def key_u(type_ids):
         ids_u, ids_j = type_ids["u"], type_ids["j"]
-        return (
-            act_biastype_np[ids_u],
-            act_gaintype_np[ids_u],
-            act_dyntype_np[ids_u],
-            m.actuator_trntype[ids_u],
-            jnt_type_np[ids_j],
-            m.actuator_trnid[ids_u, 1] == -1,
+        return _py_key(
+            (
+                act_biastype_np[ids_u],
+                act_gaintype_np[ids_u],
+                act_dyntype_np[ids_u],
+                m.actuator_trntype[ids_u],
+                jnt_type_np[ids_j],
+                m.actuator_trnid[ids_u, 1] == -1,
+            )
         )
 
     def type_ids_u(m, i):
@@ -582,7 +595,7 @@ def _build_flat_cache(m, in_types, out_types, group_by):
         return typ_ids
 
     def key_c(type_ids):
-        return m.cam_mode[type_ids["c"]], m.cam_targetbodyid[type_ids["c"]] >= 0
+        return _py_key((m.cam_mode[type_ids["c"]], m.cam_targetbodyid[type_ids["c"]] >= 0))
 
     def type_ids_c(unused_m, i):
         return {"c": i}
@@ -767,13 +780,13 @@ def _build_body_tree_cache(m, in_types, out_types, reverse):
             parent_id = m.body_parentid[body_id]
         depths[body_id] = 1 + depths[parent_id]
 
-        key = (depths[body_id],)
+        key = (int(depths[body_id]),)
         for i, t in enumerate(out_types + in_types):
             id_ = parent_id if i < len(out_types) else body_id
             if t == "b":
                 continue
             elif t == "j":
-                key += tuple(jnt_type_np[np.nonzero(m.jnt_bodyid == id_)[0]])
+                key += _py_key(jnt_type_np[np.nonzero(m.jnt_bodyid == id_)[0]])
             elif t == "v":
                 key += (len(np.nonzero(m.dof_bodyid == id_)[0]),)
             elif t == "q":
