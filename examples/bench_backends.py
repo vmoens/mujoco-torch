@@ -9,7 +9,8 @@ Methodology (matches the README tables): the first call compiles / JITs and is
 timed separately; ``--warmup`` steps follow; then a timed block whose length
 adapts to ``--budget`` seconds (10 to 1000 steps).  steps/s = batch_size x
 nsteps / elapsed, bracketed by ``torch.cuda.synchronize`` /
-``jax.block_until_ready``.
+``jax.block_until_ready``.  Each configuration runs in a fresh subprocess so
+its peak process RSS is independent of configurations that ran before it.
 
 Examples::
 
@@ -27,9 +28,11 @@ Examples::
 from __future__ import annotations
 
 import argparse
+import functools as ft
 import json
 import os
 import resource
+import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -58,8 +61,8 @@ LABELS = {
 # ---------------------------------------------------------------------------
 
 
-def _microduck_scene(root: Path, timestep: float) -> str:
-    """Return an XML path for MicroDuck's ``scene_walk.xml`` with box collision proxies.
+def _microduck_scene(root: Path, timestep: float) -> tuple[str, TemporaryDirectory]:
+    """Return a temporary MicroDuck scene and its lifetime owner.
 
     Mirrors the TorchRL MicroDuck example: the collision meshes (two ~10 000-edge
     soles) are replaced with ``fitaabb`` boxes because accelerated backends expand
@@ -97,11 +100,11 @@ def _microduck_scene(root: Path, timestep: float) -> str:
         d = compiler.get(attr)
         if d is not None and not Path(d).is_absolute():
             compiler.set(attr, str((robot.parent / d).resolve()))
-    tmp = Path(TemporaryDirectory(prefix="mjt-microduck-").name)
-    tmp.mkdir()
+    tmp_dir = TemporaryDirectory(prefix="mjt-microduck-")
+    tmp = Path(tmp_dir.name)
     robot_tree.write(tmp / robot.name, encoding="unicode")
     scene_tree.write(tmp / scene.name, encoding="unicode")
-    return str(tmp / scene.name)
+    return str(tmp / scene.name), tmp_dir
 
 
 def load_model(args):
@@ -110,8 +113,11 @@ def load_model(args):
     if args.env == "microduck":
         if args.microduck_root is None:
             raise SystemExit("--env microduck requires --microduck-root pointing at a microduck_rl checkout")
-        scene = _microduck_scene(Path(args.microduck_root).expanduser(), args.microduck_timestep)
-        return mujoco.MjModel.from_xml_path(scene)
+        scene, tmp_dir = _microduck_scene(Path(args.microduck_root).expanduser(), args.microduck_timestep)
+        try:
+            return mujoco.MjModel.from_xml_path(scene)
+        finally:
+            tmp_dir.cleanup()
     if args.env.endswith(".xml") and Path(args.env).is_file():
         return mujoco.MjModel.from_xml_path(args.env)
     from mujoco_torch._src import test_util
@@ -172,7 +178,7 @@ def run_torch(args, batch_size, mode, compiled):
 
     device = torch.device(args.device)
     cuda = device.type == "cuda"
-    sync = torch.cuda.synchronize if cuda else (lambda: None)
+    sync = ft.partial(torch.cuda.synchronize, device) if cuda else (lambda: None)
     if args.threads:
         torch.set_num_threads(args.threads)
     torch._dynamo.reset()
@@ -204,7 +210,7 @@ def run_torch(args, batch_size, mode, compiled):
     vmap_step = torch.vmap(lambda d: mujoco_torch.step(mx, d, **step_kwargs))
     fn = torch.compile(vmap_step, **compile_kwargs) if compiled else vmap_step
     if cuda:
-        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.reset_peak_memory_stats(device)
     t0 = time.perf_counter()
     d = fn(d)
     sync()
@@ -230,8 +236,20 @@ def run_torch(args, batch_size, mode, compiled):
         torch_threads=torch.get_num_threads(),
     )
     if cuda:
-        row["peak_cuda_mb"] = torch.cuda.max_memory_allocated() / 2**20
+        row["peak_cuda_mb"] = torch.cuda.max_memory_allocated(device) / 2**20
     emit(args, row)
+
+
+def _select_jax_device(jax, requested: str):
+    platform, separator, index = requested.partition(":")
+    platform = {"cuda": "gpu"}.get(platform, platform)
+    if platform not in {"cpu", "gpu"}:
+        raise ValueError(f"unsupported JAX device {requested!r}; expected cpu, cuda, or cuda:<index>")
+    devices = jax.devices(platform)
+    device_index = int(index) if separator else 0
+    if not 0 <= device_index < len(devices):
+        raise ValueError(f"JAX device {requested!r} is unavailable; found {len(devices)} {platform} device(s)")
+    return devices[device_index]
 
 
 def run_mjx(args, batch_size):
@@ -241,18 +259,20 @@ def run_mjx(args, batch_size):
     from mujoco import mjx
 
     jax.config.update("jax_enable_x64", True)
+    device = _select_jax_device(jax, args.device)
     m_mj = load_model(args)
-    mx = mjx.put_model(m_mj)
+    mx = jax.device_put(mjx.put_model(m_mj), device)
     step_fn = jax.jit(jax.vmap(mjx.step, in_axes=(None, 0)))
     rng = np.random.RandomState(SEED)
-    dx1 = mjx.put_data(m_mj, mujoco.MjData(m_mj))
+    dx1 = jax.device_put(mjx.put_data(m_mj, mujoco.MjData(m_mj)), device)
 
     def tile(x):
         if not hasattr(x, "ndim"):
             return x
         return jnp.broadcast_to(x, (batch_size,)) if x.ndim == 0 else jnp.tile(x, (batch_size,) + (1,) * x.ndim)
 
-    d = jax.tree.map(tile, dx1).replace(qvel=jnp.array(0.01 * rng.randn(batch_size, m_mj.nv)))
+    with jax.default_device(device):
+        d = jax.tree.map(tile, dx1).replace(qvel=jnp.array(0.01 * rng.randn(batch_size, m_mj.nv)))
     t0 = time.perf_counter()
     d = step_fn(mx, d)
     jax.block_until_ready(d.qpos)
@@ -276,7 +296,7 @@ def run_mjx(args, batch_size):
         run_s=elapsed,
         steps_per_s=batch_size * nsteps / elapsed,
         jax=jax.__version__,
-        jax_device=str(jax.devices()[0]),
+        jax_device=str(device),
     )
     emit(args, row)
 
@@ -327,8 +347,8 @@ def render_table(path: str) -> None:
                 return (i, lbl)
         return (len(order), lbl)
 
-    for env in sorted({r["env"] for r in rows}):
-        er = [r for r in rows if r["env"] == env]
+    for env, device in sorted({(r["env"], r.get("device", "?")) for r in rows}):
+        er = [r for r in rows if r["env"] == env and r.get("device", "?") == device]
         bs = sorted({r["batch_size"] for r in er})
         hdr = "| Configuration | " + " | ".join(f"B={b:,}" for b in bs) + " |\n|---|" + "--:|" * len(bs)
         for title, field, fmt in (
@@ -340,13 +360,75 @@ def render_table(path: str) -> None:
             table = defaultdict(dict)
             for r in er:
                 if r.get(field) is not None:
-                    table[label(r)][r["batch_size"]] = r[field]
+                    lbl = label(r)
+                    batch_size = r["batch_size"]
+                    if batch_size in table[lbl]:
+                        raise ValueError(
+                            f"duplicate {field} cell for env={env!r}, device={device!r}, "
+                            f"configuration={lbl!r}, batch_size={batch_size}"
+                        )
+                    table[lbl][batch_size] = r[field]
             if not table:
                 continue
-            print(f"\n### {env} — {title} (device={er[0].get('device', '?')})\n\n{hdr}")
+            print(f"\n### {env} — {title} (device={device})\n\n{hdr}")
             for lbl in sorted(table, key=key):
                 cells = [fmt.format(table[lbl][b]) if b in table[lbl] else "—" for b in bs]
                 print(f"| {lbl} | " + " | ".join(cells) + " |")
+
+
+def _configurations(args):
+    for backend in args.backend:
+        if backend == "mujoco_c":
+            yield backend, 1, "default"
+        elif backend in {"mjx", "eager"}:
+            for batch_size in args.batch_sizes:
+                yield backend, batch_size, "default"
+        else:
+            for batch_size in args.batch_sizes:
+                for mode in args.mode:
+                    yield backend, batch_size, mode
+
+
+def _run_configuration(args, backend, batch_size, mode):
+    if backend == "mujoco_c":
+        run_mujoco_c(args, batch_size)
+    elif backend == "mjx":
+        run_mjx(args, batch_size)
+    elif backend == "eager":
+        run_torch(args, batch_size, "default", compiled=False)
+    else:
+        run_torch(args, batch_size, mode, compiled=True)
+
+
+def _run_in_subprocess(args, backend, batch_size, mode):
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--_worker",
+        "--env",
+        args.env,
+        "--backend",
+        backend,
+        "--mode",
+        mode,
+        "--batch_sizes",
+        str(batch_size),
+        "--device",
+        args.device,
+        "--threads",
+        str(args.threads),
+        "--budget",
+        str(args.budget),
+        "--warmup",
+        str(args.warmup),
+        "--microduck-timestep",
+        str(args.microduck_timestep),
+    ]
+    if args.microduck_root:
+        command.extend(("--microduck-root", args.microduck_root))
+    if args.out:
+        command.extend(("--out", args.out))
+    subprocess.run(command, check=True)
 
 
 def main():
@@ -363,23 +445,20 @@ def main():
     p.add_argument("--budget", type=float, default=10.0, help="seconds of timed steps per configuration")
     p.add_argument("--warmup", type=int, default=20)
     p.add_argument("--out", help="append JSONL rows to this file")
+    p.add_argument("--_worker", action="store_true", help=argparse.SUPPRESS)
     args = p.parse_args()
     if args.table:
         render_table(args.table)
         return
     os.environ.setdefault("TORCHINDUCTOR_FX_GRAPH_CACHE", "1")
-    for backend in args.backend:
-        if backend == "mujoco_c":
-            run_mujoco_c(args, 1)
-            continue
-        for b in args.batch_sizes:
-            if backend == "mjx":
-                run_mjx(args, b)
-            elif backend == "eager":
-                run_torch(args, b, "default", compiled=False)
-            else:
-                for mode in args.mode:
-                    run_torch(args, b, mode, compiled=True)
+    configurations = list(_configurations(args))
+    if args._worker:
+        if len(configurations) != 1:
+            raise ValueError("benchmark worker requires exactly one configuration")
+        _run_configuration(args, *configurations[0])
+        return
+    for configuration in configurations:
+        _run_in_subprocess(args, *configuration)
 
 
 if __name__ == "__main__":
