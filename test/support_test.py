@@ -22,7 +22,7 @@ import torch
 from absl.testing import absltest, parameterized
 
 import mujoco_torch
-from mujoco_torch._src import support, test_util
+from mujoco_torch._src import smooth, support, test_util
 
 
 class SupportTest(parameterized.TestCase):
@@ -74,6 +74,43 @@ class SupportTest(parameterized.TestCase):
             )
 
         np.testing.assert_almost_equal(qfrc, qfrc_expected, 6)
+
+    def test_full_m_sparse_matches_mujoco_under_vmap(self):
+        """full_m rebuilds the dense mass matrix of a sparse model, also under vmap.
+
+        Twelve free bodies give 72 degrees of freedom, above the threshold at
+        which ``jacobian="auto"`` stores the mass matrix sparse. The reference
+        is MuJoCo C's mass matrix applied to the basis vectors.
+        """
+        m = mujoco.MjModel.from_xml_string(test_util.free_spheres_xml(12))
+        self.assertTrue(support.is_sparse(m))
+        mx = mujoco_torch.device_put(m)
+
+        rng = np.random.RandomState(0)
+        datas, expected = [], []
+        for _ in range(3):
+            d = mujoco.MjData(m)
+            d.qpos[:] = m.qpos0 + 0.1 * rng.randn(m.nq)
+            mujoco.mj_forward(m, d)
+            full = np.zeros((m.nv, m.nv))
+            column = np.zeros(m.nv)
+            for k in range(m.nv):
+                mujoco.mj_mulM(m, d, column, np.eye(m.nv)[k])
+                full[:, k] = column
+            expected.append(full)
+            # The torch side gets the pose only: crb fills qM in the sparse
+            # layout full_m reads, and without the C constraint arrays (whose
+            # size differs with the contacts of each pose) the envs stack.
+            pose = mujoco.MjData(m)
+            pose.qpos[:] = d.qpos
+            dx = mujoco_torch.device_put(pose)
+            dx = smooth.crb(mx, smooth.com_pos(mx, smooth.kinematics(mx, dx)))
+            datas.append(dx)
+
+        np.testing.assert_allclose(support.full_m(mx, datas[0]), expected[0], atol=1e-6)
+
+        batched = torch.vmap(lambda d: support.full_m(mx, d))(torch.stack(datas, dim=0))
+        np.testing.assert_allclose(batched, np.stack(expected), atol=1e-6)
 
 
 if __name__ == "__main__":

@@ -354,3 +354,31 @@ def load_test_file(name: str) -> mujoco.MjModel:
     """Loads a mujoco.MjModel based on the file name."""
     path = epath.resource_path("mujoco_torch") / "test_data" / name
     return _load_test_model_from_path(path)
+
+
+def free_spheres_xml(count: int, *, solver: str | None = None) -> str:
+    """MJCF of ``count`` free spheres resting on a plane, six degrees of freedom each.
+
+    Large ``count`` values give models whose mass matrix is stored sparse
+    (``jacobian="auto"`` switches at 60 degrees of freedom). With ``solver``,
+    warm starts are disabled and the iteration counts kept low so that the
+    solver's search direction matters, as in the Newton solver tests.
+    """
+    option = ""
+    if solver is not None:
+        option = f"""
+      <option solver="{solver}" iterations="2" ls_iterations="6" tolerance="1e-10">
+        <flag warmstart="disable"/>
+      </option>"""
+    bodies = "\n".join(
+        f'<body pos="{0.5 * i} 0 0.1"><joint type="free"/><geom type="sphere" size="0.05" mass="0.5"/></body>'
+        for i in range(count)
+    )
+    return f"""
+    <mujoco>{option}
+      <worldbody>
+        <geom type="plane" size="20 5 0.01"/>
+        {bodies}
+      </worldbody>
+    </mujoco>
+    """
