@@ -48,6 +48,8 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
+      - name: Install uv
+        run: pip install uv
       - name: Install CPU-only PyTorch
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Install JAX (CPU), MuJoCo, and MJX
@@ -72,12 +74,20 @@ jobs:
             pip install --upgrade "tensordict>=0.14.0" "torchrl>=0.14.0"
           else
             echo "Installing TensorDict and TorchRL from GitHub main"
-            pip install --upgrade \
+            # TorchRL main pins the latest TensorDict patch release, which a
+            # TensorDict main build (0.X.0+g<sha>) does not satisfy. The override
+            # replaces every tensordict requirement in the dependency graph with
+            # the git source, so neither this step nor the mujoco-torch install
+            # below fails to resolve or swaps it for a PyPI wheel. It is exported
+            # to the later steps through UV_OVERRIDE.
+            printf 'tensordict @ git+https://github.com/pytorch/tensordict.git@main\n' > "${RUNNER_TEMP}/uv-overrides.txt"
+            echo "UV_OVERRIDE=${RUNNER_TEMP}/uv-overrides.txt" >> "${GITHUB_ENV}"
+            UV_OVERRIDE="${RUNNER_TEMP}/uv-overrides.txt" uv pip install --python "$(command -v python)" --upgrade \
               "tensordict @ git+https://github.com/pytorch/tensordict.git@main" \
               "torchrl @ git+https://github.com/pytorch/rl.git@main"
           fi
       - name: Install mujoco-torch with test deps
-        run: pip install -e ".[test,zoo]"
+        run: uv pip install --python "$(command -v python)" -e ".[test,zoo]"
       - name: Report dependency versions
         run: |
           python - <<'PY'
