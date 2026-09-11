@@ -245,11 +245,9 @@ def _make_dense_m(m: Model, d: Data) -> torch.Tensor:
     if not support.is_sparse(m):
         return d.qM.clone()
 
-    # Sparse path: use precomputed index arrays.
-    mat = torch.zeros((m.nv, m.nv), dtype=d.qM.dtype, device=d.qM.device)
-    mat[(m.sparse_i_t, m.sparse_j_t)] = d.qM[m.sparse_madr_t]
-    mat = torch.diag(d.qM[m.dof_Madr_t]) + mat + mat.T
-    return mat
+    # Sparse path: full_m builds a new tensor out of place, so it is safe under
+    # vmap and does not alias the carry tensors of the solver loop.
+    return support.full_m(m, d)
 
 
 # ============================================================================
@@ -271,8 +269,10 @@ def solve(m: Model, d: Data, fixed_iterations: bool = False) -> Data:
 
     # ---- Pre-extract all model constants (become Dynamo compile-time consts) ---
     nv = int(m.nv)
-    use_dense = nv < 100
     solver_type = m.opt.solver
+    # CG only needs M @ v, which the sparse closure provides for large models.
+    # Newton assembles the Hessian from the dense M whatever the size.
+    use_dense = nv < 100 or solver_type == SolverType.NEWTON
     tolerance = float(m.opt.tolerance)
     iterations = int(m.opt.iterations)
     ls_tolerance = float(m.opt.ls_tolerance)

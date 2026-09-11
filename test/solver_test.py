@@ -22,6 +22,7 @@ from etils import epath
 
 import mujoco_torch
 from mujoco_torch._src import solver as solver_lib
+from mujoco_torch._src import test_util
 from mujoco_torch._src.types import SolverType
 
 
@@ -71,6 +72,42 @@ class Solver64Test(parameterized.TestCase):
             self.assertLessEqual(dx.solver_niter[0], d.solver_niter[0])
             _assert_attr_eq(d, dx, "qfrc_constraint", i, fname)
             _assert_attr_eq(d, dx, "qacc", i, fname)
+
+    @parameterized.parameters(12, 20)
+    def test_newton_dense_mass_matrix_of_sparse_model(self, count):
+        """Newton matches MuJoCo C when the mass matrix is stored sparse.
+
+        Free spheres on a plane: 12 give 72 degrees of freedom (sparse storage,
+        dense solver path), 20 give 120 (sparse storage, and the sparse matrix
+        multiply that CG would use). Newton needs the dense matrix in both
+        cases, batched as well as unbatched.
+        """
+        m = mujoco.MjModel.from_xml_string(test_util.free_spheres_xml(count, solver="Newton"))
+        mx = mujoco_torch.device_put(m)
+        self.assertEqual(mx.opt.solver, SolverType.NEWTON)
+        self.assertGreaterEqual(mx.nv, 60)
+
+        rng = np.random.RandomState(0)
+        d = mujoco.MjData(m)
+        d.qvel[:] = 0.1 * rng.randn(m.nv)
+        for i in range(10):
+            dx = mujoco_torch.device_put(d)
+            mujoco.mj_step(m, d)
+            dx = mujoco_torch.forward(mx, dx, fixed_iterations=True)
+            _assert_attr_eq(d, dx, "qacc", i, "newton_spheres", atol=1e-6, rtol=1e-6)
+            _assert_attr_eq(d, dx, "qfrc_constraint", i, "newton_spheres", atol=1e-6, rtol=1e-6)
+
+        # Batched: vmap(step) agrees with stepping each env on its own.
+        envs = []
+        for _ in range(2):
+            d = mujoco.MjData(m)
+            d.qvel[:] = 0.1 * rng.randn(m.nv)
+            envs.append(mujoco_torch.device_put(d))
+        sequential = [mujoco_torch.step(mx, dx) for dx in envs]
+        batched = torch.vmap(lambda dx: mujoco_torch.step(mx, dx))(torch.stack(envs, dim=0))
+        for i, dx in enumerate(sequential):
+            np.testing.assert_allclose(batched.qacc[i], dx.qacc, atol=1e-9)
+            np.testing.assert_allclose(batched.qpos[i], dx.qpos, atol=1e-9)
 
 
 class SolverTest(parameterized.TestCase):

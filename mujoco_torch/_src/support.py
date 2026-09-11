@@ -89,8 +89,10 @@ def full_m(m: Model, d: Data) -> torch.Tensor:
     i = m.dof_tri_row_t
     j = m.dof_tri_col_t
 
+    # Out of place: under vmap the zeros are not batched while qM is, and an
+    # in-place index_put_ into an unbatched tensor is rejected.
     mat = torch.zeros((m.nv, m.nv), dtype=d.qM.dtype, device=d.qM.device)
-    mat[(i, j)] = d.qM
+    mat = mat.index_put((i, j), d.qM)
     mat = mat + torch.triu(mat, 1).T
 
     return mat
