@@ -20,6 +20,8 @@ import torch
 from absl.testing import absltest
 
 import mujoco_torch
+from mujoco_torch._src import test_util
+from mujoco_torch._src.render import _generate_rays
 
 _RENDER_XML = """
 <mujoco>
@@ -350,6 +352,46 @@ class RenderTest(absltest.TestCase):
             np.testing.assert_allclose(miss_rgb[:, 0].numpy(), bg[0], atol=1e-5)
             np.testing.assert_allclose(miss_rgb[:, 1].numpy(), bg[1], atol=1e-5)
             np.testing.assert_allclose(miss_rgb[:, 2].numpy(), bg[2], atol=1e-5)
+
+    def test_mesh_faces_index_their_own_vertices(self):
+        """Meshes after the first one land where MuJoCo's ray caster puts them.
+
+        MuJoCo stores face indices relative to each mesh's own vertices.
+        convex.xml carries three meshes with different vertex counts, so an
+        offset applied to the faces of the later meshes would either move
+        their triangles or index out of range.
+        """
+        m_mj = test_util.load_test_file("convex.xml")
+        d_mj = mujoco.MjData(m_mj)
+        mujoco.mj_forward(m_mj, d_mj)
+
+        mx = mujoco_torch.device_put(m_mj)
+        dx = mujoco_torch.device_put(d_mj)
+
+        width = height = 48
+        _, depth, seg = mujoco_torch.render(mx, dx, camera_id=0, width=width, height=height)
+        depth, seg = depth.numpy(), seg.numpy()
+
+        mesh_geoms = [g for g in range(m_mj.ngeom) if m_mj.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH]
+        seen = [g for g in mesh_geoms if (seg == g).any()]
+        self.assertGreaterEqual(len(seen), 2)
+        vertex_counts = {int(m_mj.mesh_vertnum[m_mj.geom_dataid[g]]) for g in seen}
+        self.assertGreater(len(vertex_counts), 1)
+
+        origins, dirs = _generate_rays(
+            torch.as_tensor(d_mj.cam_xpos[0]),
+            torch.as_tensor(d_mj.cam_xmat[0].reshape(3, 3)),
+            float(m_mj.cam_fovy[0]),
+            width,
+            height,
+        )
+        origins, dirs = origins.numpy(), dirs.numpy()
+        geomid = np.zeros(1, dtype=np.int32)
+        for g in seen:
+            for y, x in zip(*np.nonzero(seg == g)):
+                dist = mujoco.mj_ray(m_mj, d_mj, origins[y, x], dirs[y, x], None, 1, -1, geomid)
+                self.assertEqual(int(geomid[0]), g)
+                self.assertAlmostEqual(dist, float(depth[y, x]), places=6)
 
 
 if __name__ == "__main__":

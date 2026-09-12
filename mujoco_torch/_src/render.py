@@ -96,10 +96,8 @@ def precompute_render_data(m: Model) -> dict:
             v_end = int(vertadr[data_id + 1]) if data_id + 1 < n_meshes else nvert_total
             faces = mesh_face[f_start:f_end]
             verts = mesh_vert[v_start:v_end]
-            # faces index into the local vertex array; offset to global
-            local_verts = verts[faces - faces.min()]  # (nface, 3, 3)
-            # Actually, faces index into the mesh-local vertex range
-            local_verts = verts[faces - v_start]
+            # MuJoCo stores face indices relative to the mesh's own vertices.
+            local_verts = verts[faces]  # (nface, 3, 3)
             mesh_tri_verts_list.append(local_verts.astype(np.float64))
             mesh_tri_geom_ids_list.append(np.full(faces.shape[0], gid, dtype=np.int64))
 
