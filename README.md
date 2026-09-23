@@ -69,7 +69,7 @@ deactivate as PyTorch merges the fixes.
 The patches cover:
 
 <!-- UPSTREAM_PR_TRACKER_START -->
-- [ ] [#175526 — `while_loop` vmap batching rule](https://github.com/pytorch/pytorch/pull/175526) -- required for `torch.vmap` over the simulation loop
+- [x] [#175526 — `while_loop` vmap batching rule](https://github.com/pytorch/pytorch/pull/175526) -- required for `torch.vmap` over the simulation loop
 - [x] [#176977 — MetaConverter storage memo for wrapper subclasses](https://github.com/pytorch/pytorch/pull/176977) -- fixes a cross-device error under `torch.compile` for `_make_wrapper_subclass` tensors
 <!-- UPSTREAM_PR_TRACKER_END -->
 
